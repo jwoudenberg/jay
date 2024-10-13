@@ -13,8 +13,8 @@ main = \{} ->
         |> Site.copy!
 
     Site.files ["blog.html", "about.html"]
-        |> Site.replaceHtml "posts-listing" (\_, _ -> renderPostsListing posts)
         |> Site.wrapHtml applyLayout
+        |> Site.replaceHtml "posts-list" (\_ -> renderPostsListing posts)
         |> Site.copy!
 
 renderPostsListing : Pages Html { title : Str } -> Site.Widget

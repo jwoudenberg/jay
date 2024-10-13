@@ -10,7 +10,23 @@ module [
     replaceHtml,
 ]
 
-Pages := {}
+Pages a := [
+    Files (List Path),
+    FilesIn Path,
+    SiteData
+        {
+            files : Dict Path Html,
+            transformation : Html -> Html,
+            metadata : Dict Path (List U8),
+        },
+]
+
+Html := Stream
+        [
+            Raw Handle,
+            StartTag { name : Str, attributes : List (Str, Str) },
+            EndTag name,
+        ]
 
 Path : Str
 
@@ -29,10 +45,21 @@ fromMarkdown : Pages Markdown _ -> Pages Html
 
 wrapHtml : Pages Html, (Html -> Html) -> Pages Html
 
-replaceHtml : Pages Html, Str, (meta, args -> Html) -> Pages Html
+# Replace an HTML element in the passed in pages.
+replaceHtml :
+    Pages Html,
+    Str,
+    ({ meta : meta, attrs : attrs, content : Html } -> Html)
+    -> Pages Html
 
 # Advanced: Used to create pages from nothing, i.e. not from a template
-page : Path, content, meta -> Pages content
+page : Path, Html, meta -> Pages Html
 
 # Advanced: Used to implement functions like 'fromMarkdown'
-toHtml : { extension : Str, render : a -> (Html, meta) }, Pages content -> Pages Html
+toHtml :
+    {
+        extension : Str,
+        parser : List U8 -> (Html, meta),
+    },
+    Pages content
+    -> Pages Html
