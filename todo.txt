@@ -1,0 +1,9 @@
+setup basic zig platform based off https://github.com/lukewilliamboswell/roc-platform-template-zig
+implement `copy`
+implement `fromMarkdown`
+implement `bootstrap`
+implement `wrapHtml`
+implement `replaceHtml`
+watch for source-file changes and rebuild
+watch for roc-file changes and rebuild
+perform partial builds when source file changes
