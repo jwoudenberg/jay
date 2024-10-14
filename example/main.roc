@@ -1,13 +1,13 @@
 #!/usr/bin/env roc
-app [main] { pf: platform "github.com/jwoudenberg/roc-static-site" }
+app [main] { pf: platform "../platform/main.roc" }
 
-import Site
-import Html
+import pf.Site exposing [Pages, Html]
+import pf.Html
 
 main = \{} ->
     Site.copy! (Site.filesIn "static")
 
-    posts = Site.fromMarkdown [] (Site.filesIn "posts")
+    posts = Site.fromMarkdown (Site.filesIn "posts")
 
     Site.wrapHtml posts applyLayout
         |> Site.copy!
@@ -17,7 +17,7 @@ main = \{} ->
         |> Site.replaceHtml "posts-list" (\_ -> renderPostsListing posts)
         |> Site.copy!
 
-renderPostsListing : Pages Html { title : Str } -> Site.Widget
+renderPostsListing : Pages Html -> Html
 renderPostsListing = \posts ->
     itemToHtml = \{ path, title } ->
         Html.li [] [
@@ -28,8 +28,8 @@ renderPostsListing = \posts ->
 
     Html.ul [] items
 
-applyLayout : _, Site.Html -> Site.Html
-applyLayout = \contents ->
+applyLayout : Html, _ -> Html
+applyLayout = \contents, _ ->
     Html.html
         []
         [

@@ -1,5 +1,6 @@
 module [
     Pages,
+    Html,
     bootstrap,
     copy,
     files,
@@ -8,7 +9,15 @@ module [
     fromMarkdown,
     wrapHtml,
     replaceHtml,
+    page,
+    toHtml,
 ]
+
+import Internal
+
+Html : Internal.Html
+
+Markdown := {}
 
 Pages a := [
     Files (List Path),
@@ -20,13 +29,6 @@ Pages a := [
             metadata : Dict Path (List U8),
         },
 ]
-
-Html := Stream
-        [
-            Raw Handle,
-            StartTag { name : Str, attributes : List (Str, Str) },
-            EndTag name,
-        ]
 
 Path : Str
 
@@ -41,9 +43,9 @@ filesIn : Path -> Pages content
 
 meta : Pages _ -> List { path : Path }a
 
-fromMarkdown : Pages Markdown _ -> Pages Html
+fromMarkdown : Pages Markdown -> Pages Html
 
-wrapHtml : Pages Html, (Html -> Html) -> Pages Html
+wrapHtml : Pages Html, (Html, meta -> Html) -> Pages Html
 
 # Replace an HTML element in the passed in pages.
 replaceHtml :
