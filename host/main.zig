@@ -153,10 +153,7 @@ pub fn main() void {
     }
 }
 
-// an example effect to provide to the platform
-// this is where roc will call back into the host
-export fn roc_fx_stdoutLine(msg: *RocStr) callconv(.C) RocResult(void, RocStr) {
+export fn roc_fx_copy(msg: *RocStr) callconv(.C) void {
     const stdout = std.io.getStdOut().writer();
-    stdout.print("{s}\n", .{msg.asSlice()}) catch unreachable;
-    return .{ .payload = .{ .ok = void{} }, .tag = .RocOk };
+    stdout.print("copy {s}\n", .{msg.asSlice()}) catch unreachable;
 }

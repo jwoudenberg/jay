@@ -14,25 +14,27 @@ module [
 ]
 
 import Internal
+import Effect
 
 Html : Internal.Html
 
 Markdown := {}
 
 Pages a := [
-    Files (List Path),
     FilesIn Path,
-    SiteData
-        {
-            files : Dict Path Html,
-            transformation : Html -> Html,
-            metadata : Dict Path (List U8),
-        },
+    # Files (List Path),
+    # SiteData
+    #     {
+    #         files : Dict Path Html,
+    #         transformation : Html -> Html,
+    #         metadata : Dict Path (List U8),
+    #     },
 ]
 
 Path : Str
 
 copy : Pages content -> Task {} []
+copy = \@Pages (FilesIn path) -> Effect.copy path
 
 # Parse directory structure and rewrite main.roc with initial implementation.
 bootstrap : Task {} []
@@ -40,6 +42,7 @@ bootstrap : Task {} []
 files : List Path -> Pages content
 
 filesIn : Path -> Pages content
+filesIn = \path -> @Pages (FilesIn path)
 
 meta : Pages _ -> List { path : Path }a
 
