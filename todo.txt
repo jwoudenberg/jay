@@ -1,4 +1,4 @@
-setup basic zig platform based off https://github.com/lukewilliamboswell/roc-platform-template-zig
+x setup basic zig platform
 implement `copy`
 implement `fromMarkdown`
 implement `bootstrap`

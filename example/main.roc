@@ -1,5 +1,5 @@
 #!/usr/bin/env roc
-app [main] { pf: platform "../platform/main.roc" }
+app [main] { pf: platform "../zig-out/platform/main.roc" }
 
 import pf.Site exposing [Pages, Html]
 import pf.Html
