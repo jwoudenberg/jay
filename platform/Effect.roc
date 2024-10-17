@@ -1,5 +1,7 @@
 hosted Effect
-    exposes [copy]
-    imports []
+    exposes [writePages, readPages]
+    imports [Internal]
 
-copy : Str -> Task {} []
+writePages : Box (List Internal.Pages) -> Task {} {}
+
+readPages : Task (Box (List Internal.Pages)) {}

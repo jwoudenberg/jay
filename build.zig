@@ -1,26 +1,22 @@
 const std = @import("std");
 
-// Although this function looks imperative, note that its job is to
-// declaratively construct a build graph that will be executed by an external
-// runner.
 pub fn build(b: *std.Build) !void {
-    // Standard target options allows the person running `zig build` to choose
-    // what target to build for. Here we do not override the defaults, which
-    // means any target is allowed, and the default is native. Other options
-    // for restricting supported target set are available.
     const target = b.standardTargetOptions(.{});
-
-    // Standard optimization options allow the person running `zig build` to select
-    // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
-    // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
+    // Build a fake application for this platform as a library, so we have an
+    // object exposing the right functions to compile the host against. The
+    // implementation of the fake app will later be replaced with whatever real
+    // Roc application we compile.
     const build_libapp = b.addSystemCommand(&.{"roc"});
     build_libapp.addArgs(&.{ "build", "--lib" });
     build_libapp.addFileArg(b.path("platform/libapp.roc"));
     build_libapp.addArg("--output");
     const libapp = build_libapp.addOutputFileArg("libapp.so");
 
+    // Build the host. We're claiming to build an executable here, but I don't
+    // think that's exactly right as the artifact produced here is not intended
+    // to run on its own.
     const build_dynhost = b.addExecutable(.{
         .name = "jay",
         .root_source_file = b.path("host/main.zig"),
@@ -30,18 +26,21 @@ pub fn build(b: *std.Build) !void {
     build_dynhost.addObjectFile(libapp);
     build_dynhost.linkLibC(); // provides malloc/free/.. used in main.zig
 
+    // Run the Roc surgical linker to tie together our Roc platform and host
+    // into something that can be packed up and used as a platform by others.
     const build_host = b.addSystemCommand(&.{"roc"});
     build_host.addArg("preprocess-host");
     build_host.addFileArg(build_dynhost.getEmittedBin());
     build_host.addFileArg(b.path("platform/main.roc"));
     build_host.addFileArg(libapp);
 
+    // Mark all .roc files as dependencies of the two roc commands above. That
+    // way zig will know to rerun the roc commands when .roc files change.
     var platform_dir = try std.fs.cwd().openDir("platform", .{ .iterate = true });
     defer platform_dir.close();
-    var walker = try platform_dir.walk(b.allocator);
-    defer walker.deinit();
-    while (try walker.next()) |roc_file| {
-        const roc_path = b.path("platform").path(b, roc_file.path);
+    var platform_iter = platform_dir.iterate();
+    while (try platform_iter.next()) |roc_file| {
+        const roc_path = b.path("platform").path(b, roc_file.name);
         build_libapp.addFileInput(roc_path);
         build_host.addFileInput(roc_path);
     }
@@ -54,6 +53,12 @@ pub fn build(b: *std.Build) !void {
     }).step);
     b.getInstallStep().dependOn(&b.addInstallFile(build_dynhost.getEmittedBin(), "platform/dynhost").step);
     b.getInstallStep().dependOn(&b.addInstallFile(libapp, "platform/libapp.so").step);
+
+    // Short-hand for compiling and then running the example application.
+    const run_example = b.addSystemCommand(&.{"./example/simple.roc"});
+    const run_step = b.step("run", "Run the example");
+    run_step.dependOn(b.getInstallStep());
+    run_step.dependOn(&run_example.step);
 
     const exe_unit_tests = b.addTest(.{
         .root_source_file = b.path("host/main.zig"),

@@ -4,7 +4,7 @@ app [main] { pf: platform "../zig-out/platform/main.roc" }
 import pf.Site exposing [Pages, Html]
 import pf.Html
 
-main = \{} ->
+main =
     Site.copy! (Site.filesIn "static")
 
     posts = Site.fromMarkdown (Site.filesIn "posts")

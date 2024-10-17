@@ -1,4 +1,15 @@
-module [Html, node, text]
+module [Pages, Html, node, text]
+
+Pages : [
+    FilesIn Str,
+    Files (List Str),
+    # SiteData
+    #     {
+    #         files : Dict Str Html,
+    #         transformation : Html -> Html,
+    #         metadata : Dict Str (List U8),
+    #     },
+]
 
 Handle := {}
 

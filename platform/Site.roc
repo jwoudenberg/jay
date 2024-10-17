@@ -15,36 +15,29 @@ module [
 
 import Internal
 import Effect
+import Helpers
 
 Html : Internal.Html
 
 Markdown := {}
 
-Pages a := [
-    FilesIn Path,
-    # Files (List Path),
-    # SiteData
-    #     {
-    #         files : Dict Path Html,
-    #         transformation : Html -> Html,
-    #         metadata : Dict Path (List U8),
-    #     },
-]
+Pages a := Internal.Pages
 
-Path : Str
-
-copy : Pages content -> Task {} []
-copy = \@Pages (FilesIn path) -> Effect.copy path
+copy : Pages content -> Task {} *
+copy = \@Pages pages ->
+    stored = Helpers.okOrCrash! (Helpers.storedPages {})
+    Helpers.okOrCrash! (Effect.writePages (Box.box (List.append stored pages)))
 
 # Parse directory structure and rewrite main.roc with initial implementation.
 bootstrap : Task {} []
 
-files : List Path -> Pages content
+files : List Str -> Pages content
+files = \paths -> @Pages (Files paths)
 
-filesIn : Path -> Pages content
+filesIn : Str -> Pages content
 filesIn = \path -> @Pages (FilesIn path)
 
-meta : Pages _ -> List { path : Path }a
+meta : Pages _ -> List { path : Str }a
 
 fromMarkdown : Pages Markdown -> Pages Html
 
@@ -58,7 +51,7 @@ replaceHtml :
     -> Pages Html
 
 # Advanced: Used to create pages from nothing, i.e. not from a template
-page : Path, Html, meta -> Pages Html
+page : Str, Html, meta -> Pages Html
 
 # Advanced: Used to implement functions like 'fromMarkdown'
 toHtml :

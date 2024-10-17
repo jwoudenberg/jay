@@ -1,8 +1,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const str = @import("roc/str.zig");
-const RocStr = str.RocStr;
+const RocStr = @import("roc/str.zig").RocStr;
+const RocList = @import("roc/list.zig").RocList;
 const RocResult = @import("roc/result.zig").RocResult;
+const utils = @import("roc/utils.zig");
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
 const expect = testing.expect;
@@ -14,48 +15,25 @@ extern fn free(c_ptr: [*]align(Align) u8) callconv(.C) void;
 extern fn memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void;
 extern fn memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void;
 
-const DEBUG: bool = false;
-
-export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*anyopaque {
-    if (DEBUG) {
-        const ptr = malloc(size);
-        const stdout = std.io.getStdOut().writer();
-        stdout.print("alloc:   {d} (alignment {d}, size {d})\n", .{ ptr, alignment, size }) catch unreachable;
-        return ptr;
-    } else {
-        return malloc(size);
-    }
+export fn roc_alloc(size: usize, alignment: u32) callconv(.C) *anyopaque {
+    _ = alignment;
+    return malloc(size).?;
 }
 
-export fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*anyopaque {
-    if (DEBUG) {
-        const stdout = std.io.getStdOut().writer();
-        stdout.print("realloc: {d} (alignment {d}, old_size {d})\n", .{ c_ptr, alignment, old_size }) catch unreachable;
-    }
-
-    return realloc(@as([*]align(Align) u8, @alignCast(@ptrCast(c_ptr))), new_size);
+export fn roc_realloc(old_ptr: *anyopaque, new_size: usize, old_size: usize, alignment: u32) callconv(.C) *anyopaque {
+    _ = old_size;
+    _ = alignment;
+    return realloc(@as([*]align(Align) u8, @alignCast(@ptrCast(old_ptr))), new_size).?;
 }
 
 export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
-    if (DEBUG) {
-        const stdout = std.io.getStdOut().writer();
-        stdout.print("dealloc: {d} (alignment {d})\n", .{ c_ptr, alignment }) catch unreachable;
-    }
-
+    _ = alignment;
     free(@as([*]align(Align) u8, @alignCast(@ptrCast(c_ptr))));
 }
 
 export fn roc_panic(msg: *RocStr, tag_id: u32) callconv(.C) void {
     const stderr = std.io.getStdErr().writer();
-    switch (tag_id) {
-        0 => {
-            stderr.print("Roc standard library crashed with message\n\n    {s}\n\nShutting down\n", .{msg.asSlice()}) catch unreachable;
-        },
-        1 => {
-            stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg.asSlice()}) catch unreachable;
-        },
-        else => unreachable,
-    }
+    stderr.print("\n\nRoc crashed with the following error;\nMSG:{s}\nTAG:{d}\n\nShutting down\n", .{ msg.asSlice(), tag_id }) catch unreachable;
     std.process.exit(1);
 }
 
@@ -100,31 +78,9 @@ comptime {
     }
 }
 
-const mem = std.mem;
-const Allocator = mem.Allocator;
-
 extern fn roc__mainForHost_1_exposed_generic(*anyopaque) callconv(.C) void;
 extern fn roc__mainForHost_1_exposed_size() callconv(.C) i64;
-
-extern fn roc__mainForHost_0_caller(flags: *const u8, closure_data: *const u8, output: *RocResult(void, i32)) void;
-
-fn call_the_closure(closure_data_ptr: *const u8) callconv(.C) i32 {
-    var out: RocResult(void, i32) = .{
-        .payload = .{ .ok = void{} },
-        .tag = .RocOk,
-    };
-
-    roc__mainForHost_0_caller(
-        undefined, // TODO do we need the flags?
-        closure_data_ptr,
-        @as(*RocResult(void, i32), @ptrCast(&out)),
-    );
-
-    switch (out.tag) {
-        .RocOk => return 0,
-        .RocErr => return out.payload.err,
-    }
-}
+extern fn roc__mainForHost_0_caller(flags: *anyopaque, closure_data: *anyopaque, output: *RocResult(void, i32)) void;
 
 const Unit = extern struct {};
 
@@ -136,24 +92,43 @@ pub fn main() void {
 
     // call into roc
     const size = @as(usize, @intCast(roc__mainForHost_1_exposed_size()));
-    const captures = roc_alloc(size, @alignOf(u128)).?;
+    const captures = roc_alloc(size, @alignOf(u128));
     defer roc_dealloc(captures, @alignOf(u128));
 
-    roc__mainForHost_1_exposed_generic(captures);
+    var out: RocResult(void, i32) = .{
+        .payload = .{ .ok = void{} },
+        .tag = .RocOk,
+    };
 
-    const exit_code = call_the_closure(@as(*const u8, @ptrCast(captures)));
+    roc__mainForHost_1_exposed_generic(captures);
+    roc__mainForHost_0_caller(undefined, captures, &out);
 
     const nanos = timer.read();
     const seconds = (@as(f64, @floatFromInt(nanos)) / 1_000_000_000.0);
 
-    if (exit_code == 0) {
-        stdout.print("Runtime: {d:.3}ms\n", .{seconds * 1000}) catch unreachable;
-    } else {
-        stderr.print("Exited with code {d}, in {d:.3}ms\n", .{ exit_code, seconds * 1000 }) catch unreachable;
+    switch (out.tag) {
+        .RocOk => {
+            stdout.print("Runtime: {d:.3}ms\n", .{seconds * 1000}) catch unreachable;
+        },
+        .RocErr => {
+            stderr.print("Exited with code {d}, in {d:.3}ms\n", .{ out.payload.err, seconds * 1000 }) catch unreachable;
+        },
     }
 }
 
-export fn roc_fx_copy(msg: *RocStr) callconv(.C) void {
-    const stdout = std.io.getStdOut().writer();
-    stdout.print("copy {s}\n", .{msg.asSlice()}) catch unreachable;
+var stored_pages: ?*anyopaque = null;
+
+export fn roc_fx_writePages(pages: *anyopaque) callconv(.C) RocResult(void, void) {
+    // TODO: fix pages refs leaking.
+    utils.increfDataPtrC(@ptrCast(pages), 1);
+    stored_pages = pages;
+    return .{ .payload = .{ .ok = void{} }, .tag = .RocOk };
+}
+
+export fn roc_fx_readPages() callconv(.C) RocResult(*anyopaque, void) {
+    if (stored_pages) |stored| {
+        return .{ .payload = .{ .ok = stored }, .tag = .RocOk };
+    } else {
+        return .{ .payload = .{ .err = void{} }, .tag = .RocErr };
+    }
 }
