@@ -65,6 +65,7 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
+    exe_unit_tests.linkLibC(); // provides malloc/free/.. used in main.zig
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
 

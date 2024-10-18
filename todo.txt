@@ -1,4 +1,5 @@
 x setup basic zig platform
+get allocators to work
 implement `copy`
 implement `fromMarkdown`
 implement `bootstrap`

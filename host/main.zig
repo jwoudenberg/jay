@@ -1,34 +1,23 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const RocStr = @import("roc/str.zig").RocStr;
-const RocList = @import("roc/list.zig").RocList;
 const RocResult = @import("roc/result.zig").RocResult;
 const utils = @import("roc/utils.zig");
-const testing = std.testing;
-const expectEqual = testing.expectEqual;
-const expect = testing.expect;
-
-const Align = 2 * @alignOf(usize);
-extern fn malloc(size: usize) callconv(.C) ?*align(Align) anyopaque;
-extern fn realloc(c_ptr: [*]align(Align) u8, size: usize) callconv(.C) ?*anyopaque;
-extern fn free(c_ptr: [*]align(Align) u8) callconv(.C) void;
-extern fn memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void;
-extern fn memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void;
 
 export fn roc_alloc(size: usize, alignment: u32) callconv(.C) *anyopaque {
     _ = alignment;
-    return malloc(size).?;
+    return std.c.malloc(size).?;
 }
 
-export fn roc_realloc(old_ptr: *anyopaque, new_size: usize, old_size: usize, alignment: u32) callconv(.C) *anyopaque {
+export fn roc_realloc(old_ptr: *anyopaque, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*anyopaque {
     _ = old_size;
     _ = alignment;
-    return realloc(@as([*]align(Align) u8, @alignCast(@ptrCast(old_ptr))), new_size).?;
+    return std.c.realloc(old_ptr, new_size);
 }
 
 export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
     _ = alignment;
-    free(@as([*]align(Align) u8, @alignCast(@ptrCast(c_ptr))));
+    std.c.free(c_ptr);
 }
 
 export fn roc_panic(msg: *RocStr, tag_id: u32) callconv(.C) void {
@@ -43,27 +32,24 @@ export fn roc_dbg(loc: *RocStr, msg: *RocStr, src: *RocStr) callconv(.C) void {
 }
 
 export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void {
-    return memset(dst, value, size);
+    return @memset(dst[0..size], @intCast(value));
 }
 
-extern fn kill(pid: c_int, sig: c_int) c_int;
-extern fn shm_open(name: *const i8, oflag: c_int, mode: c_uint) c_int;
-extern fn mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int, fd: c_int, offset: c_uint) *anyopaque;
-extern fn getppid() c_int;
-
 fn roc_getppid() callconv(.C) c_int {
-    return getppid();
+    // Only recently added to Zig: https://github.com/ziglang/zig/pull/20866
+    return @bitCast(@as(u32, @truncate(std.os.linux.syscall0(.getppid))));
 }
 
 fn roc_getppid_windows_stub() callconv(.C) c_int {
     return 0;
 }
 
-fn roc_shm_open(name: *const i8, oflag: c_int, mode: c_uint) callconv(.C) c_int {
-    return shm_open(name, oflag, mode);
+fn roc_shm_open(name: [*:0]const u8, oflag: c_int, mode: c_uint) callconv(.C) c_int {
+    return std.c.shm_open(name, oflag, mode);
 }
-fn roc_mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int, fd: c_int, offset: c_uint) callconv(.C) *anyopaque {
-    return mmap(addr, length, prot, flags, fd, offset);
+
+fn roc_mmap(addr: ?*align(std.mem.page_size) anyopaque, length: usize, prot: c_uint, flags: std.c.MAP, fd: c_int, offset: c_int) callconv(.C) *anyopaque {
+    return std.c.mmap(addr, length, prot, flags, fd, offset);
 }
 
 comptime {
@@ -82,13 +68,21 @@ extern fn roc__mainForHost_1_exposed_generic(*anyopaque) callconv(.C) void;
 extern fn roc__mainForHost_1_exposed_size() callconv(.C) i64;
 extern fn roc__mainForHost_0_caller(flags: *anyopaque, closure_data: *anyopaque, output: *RocResult(void, i32)) void;
 
-const Unit = extern struct {};
-
 pub fn main() void {
     const stdout = std.io.getStdOut().writer();
     const stderr = std.io.getStdErr().writer();
+    stdout.print("started!\n", .{}) catch unreachable;
 
-    var timer = std.time.Timer.start() catch unreachable;
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    defer {
+        const deinit_status = gpa.deinit();
+        //fail test; can't try in defer as defer is executed after we return
+        if (deinit_status == .leak) std.testing.expect(false) catch @panic("TEST FAIL");
+    }
+    const foo = allocator.alloc(u8, 10) catch unreachable;
+    defer allocator.free(foo);
+    stdout.print("allocated!\n", .{}) catch unreachable;
 
     // call into roc
     const size = @as(usize, @intCast(roc__mainForHost_1_exposed_size()));
@@ -103,15 +97,12 @@ pub fn main() void {
     roc__mainForHost_1_exposed_generic(captures);
     roc__mainForHost_0_caller(undefined, captures, &out);
 
-    const nanos = timer.read();
-    const seconds = (@as(f64, @floatFromInt(nanos)) / 1_000_000_000.0);
-
     switch (out.tag) {
         .RocOk => {
-            stdout.print("Runtime: {d:.3}ms\n", .{seconds * 1000}) catch unreachable;
+            stdout.print("Bye!\n", .{}) catch unreachable;
         },
         .RocErr => {
-            stderr.print("Exited with code {d}, in {d:.3}ms\n", .{ out.payload.err, seconds * 1000 }) catch unreachable;
+            stderr.print("Exited with code {d}\n", .{out.payload.err}) catch unreachable;
         },
     }
 }
