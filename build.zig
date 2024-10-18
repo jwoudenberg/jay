@@ -26,6 +26,16 @@ pub fn build(b: *std.Build) !void {
     build_dynhost.addObjectFile(libapp);
     build_dynhost.linkLibC(); // provides malloc/free/.. used in main.zig
 
+    // Build the host again, this time as a library for static linking.
+    const build_libhost = b.addStaticLibrary(.{
+        .name = "jay",
+        .root_source_file = b.path("host/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    build_libhost.bundle_compiler_rt = true;
+    build_libhost.linkLibC(); // provides malloc/free/.. used in main.zig
+
     // Run the Roc surgical linker to tie together our Roc platform and host
     // into something that can be packed up and used as a platform by others.
     const build_host = b.addSystemCommand(&.{"roc"});
@@ -52,6 +62,7 @@ pub fn build(b: *std.Build) !void {
         .include_extensions = &.{"roc"},
     }).step);
     b.getInstallStep().dependOn(&b.addInstallFile(build_dynhost.getEmittedBin(), "platform/dynhost").step);
+    b.getInstallStep().dependOn(&b.addInstallFile(build_libhost.getEmittedBin(), "platform/linux-x64.a").step);
     b.getInstallStep().dependOn(&b.addInstallFile(libapp, "platform/libapp.so").step);
 
     // Short-hand for compiling and then running the example application.
