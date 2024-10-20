@@ -21,8 +21,7 @@ export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
 }
 
 export fn roc_panic(msg: *RocStr, tag_id: u32) callconv(.C) void {
-    const stderr = std.io.getStdErr().writer();
-    stderr.print("\n\nRoc crashed with the following error;\nMSG:{s}\nTAG:{d}\n\nShutting down\n", .{ msg.asSlice(), tag_id }) catch unreachable;
+    failPrettily("\n\nRoc crashed with the following error;\nMSG:{s}\nTAG:{d}\n\nShutting down\n", .{ msg.asSlice(), tag_id }) catch {};
     std.process.exit(1);
 }
 
@@ -80,20 +79,16 @@ pub fn main() void {
         const stdout = std.io.getStdOut().writer();
         stdout.print("Bye!\n", .{}) catch unreachable;
     } else |err| {
-        const stderr = std.io.getStdErr().writer();
-        stderr.print("Error {}\n", .{err}) catch unreachable;
-        std.process.exit(1);
+        failCrudely(err);
     }
 }
 
-fn run() error{ OutOfMemory, EmptyArgv, NoProjectPath }!void {
+fn run() !void {
     var args = std.process.args();
     roc_main_path = args.next() orelse return error.EmptyArgv;
     const project_path = std.fs.path.dirname(roc_main_path) orelse return error.NoProjectPath;
     project_dir = std.fs.cwd().openDir(project_path, .{}) catch |err| {
-        const stderr = std.io.getStdErr().writer();
-        stderr.print("Cannot access directory containing {s}: '{}'\n", .{ roc_main_path, err }) catch unreachable;
-        std.process.exit(1);
+        try failPrettily("Cannot access directory containing {s}: '{}'\n", .{ roc_main_path, err });
     };
     defer project_dir.close();
 
@@ -132,18 +127,15 @@ export fn roc_fx_copy(pages: *RocPages) callconv(.C) RocResult(void, void) {
     if (copy(pages)) {
         return .{ .payload = .{ .ok = void{} }, .tag = .RocOk };
     } else |err| {
-        const stderr = std.io.getStdErr().writer();
-        stderr.print("Error {}\n", .{err}) catch unreachable;
-        std.process.exit(1);
+        failCrudely(err);
     }
 }
 
-const CopyError = error{ OutOfMemory, RocListUnexpectedlyEmpty, AccessDenied, SystemResources, Unexpected, InvalidUtf8 };
-fn copy(pages: *RocPages) CopyError!void {
+fn copy(pages: *RocPages) !void {
     switch (pages.tag) {
         .RocFilesIn => {
             const dir_path = pages.payload.filesIn.asSlice();
-            try process_files_in(drop_leading_slash(dir_path));
+            try processFilesIn(dropLeadingSlash(dir_path));
         },
         .RocFiles => {
             const paths_len = pages.payload.files.len();
@@ -154,23 +146,24 @@ fn copy(pages: *RocPages) CopyError!void {
             const elements = pages.payload.files.elements(RocStr) orelse return error.RocListUnexpectedlyEmpty;
             for (elements, 0..paths_len) |roc_str, _| {
                 var path: []const u8 = try allocator.dupe(u8, roc_str.asSlice());
-                path = drop_leading_slash(path);
-                checkPathExists(path);
+                path = dropLeadingSlash(path);
+                try checkFileExists(path);
                 try site_paths.append(path);
             }
         },
     }
 }
 
-fn process_files_in(dir_path: []const u8) !void {
+fn processFilesIn(dir_path: []const u8) !void {
     const source_dir = project_dir.openDir(dir_path, .{ .iterate = true }) catch |err| {
-        const stderr = std.io.getStdErr().writer();
-        stderr.print("Can't read directory '{s}': {}\n", .{ dir_path, err }) catch unreachable;
-        std.process.exit(1);
+        try failPrettily("Can't read directory '{s}': {}\n", .{ dir_path, err });
     };
     var dir_iter = source_dir.iterate();
     while (dir_iter.next()) |opt_entry| {
         if (opt_entry) |entry| {
+            if (entry.kind != .file) {
+                continue;
+            }
             const segments = &[_][]const u8{ dir_path, entry.name };
             const rel_path = try std.fs.path.join(allocator, segments);
             try site_paths.append(rel_path);
@@ -182,7 +175,45 @@ fn process_files_in(dir_path: []const u8) !void {
     }
 }
 
-fn drop_leading_slash(path: []const u8) []const u8 {
+test "processFilesIn: directory with files" {
+    project_dir = std.testing.tmpDir(.{}).dir;
+    try project_dir.makeDir("project");
+
+    try project_dir.writeFile(.{ .sub_path = "project/file.1", .data = &[_]u8{} });
+    try project_dir.writeFile(.{ .sub_path = "project/file.2", .data = &[_]u8{} });
+    try project_dir.makeDir("project/dir"); // directory should not get added.
+
+    try processFilesIn("project");
+
+    try std.testing.expectEqual(2, site_paths.items.len);
+    try std.testing.expectEqualStrings("project/file.1", site_paths.items[0]);
+    try std.testing.expectEqualStrings("project/file.2", site_paths.items[1]);
+}
+
+test "processFilesIn: non-existing directory" {
+    project_dir = std.testing.tmpDir(.{}).dir;
+    try std.testing.expectError(error.PrettyError, processFilesIn("made-up"));
+}
+
+// For use in situations where we want to show a pretty helpful error.
+// 'pretty' is relative, much work to do here to really live up to that.
+fn failPrettily(comptime format: []const u8, args: anytype) !noreturn {
+    const stderr = std.io.getStdErr().writer();
+    try stderr.print(format, args);
+    return error.PrettyError;
+}
+
+// For use in theoretically-possible-but-unlikely scenarios that we don't want
+// to write dedicated error messages for.
+fn failCrudely(err: anyerror) noreturn {
+    // Make sure we only print if we didn't already show a pretty error.
+    if (err != error.PrettyError) {
+        failPrettily("Error: {}", .{err}) catch {};
+    }
+    std.process.exit(1);
+}
+
+fn dropLeadingSlash(path: []const u8) []const u8 {
     if (path.len == 0) {
         return path;
     } else if (std.fs.path.isSep(path[0])) {
@@ -192,10 +223,30 @@ fn drop_leading_slash(path: []const u8) []const u8 {
     }
 }
 
-fn checkPathExists(path: []const u8) void {
-    project_dir.access(path, .{}) catch |err| {
-        const stderr = std.io.getStdErr().writer();
-        stderr.print("Can't read file '{s}': {}\n", .{ path, err }) catch unreachable;
-        std.process.exit(1);
+test "dropLeadingSlash" {
+    try std.testing.expectEqualStrings("", dropLeadingSlash(""));
+    try std.testing.expectEqualStrings("foo/bar", dropLeadingSlash("/foo/bar"));
+    try std.testing.expectEqualStrings("foo/bar", dropLeadingSlash("foo/bar"));
+}
+
+fn checkFileExists(path: []const u8) !void {
+    const stat = project_dir.statFile(path) catch |err| {
+        try failPrettily("Can't read file '{s}': {}\n", .{ path, err });
     };
+    if (stat.kind != .file) {
+        try failPrettily("'{s}' is not a file\n", .{path});
+    }
+}
+
+test "checkFileExists" {
+    const dir = std.testing.tmpDir(.{});
+    project_dir = dir.parent_dir;
+    try dir.dir.writeFile(.{ .sub_path = "file", .data = &[_]u8{} });
+    const file_path_segments = &[_][]const u8{ &dir.sub_path, "file" };
+    const file_path = try std.fs.path.join(std.testing.allocator, file_path_segments);
+    defer std.testing.allocator.free(file_path);
+
+    try checkFileExists(file_path);
+    try std.testing.expectError(error.PrettyError, checkFileExists("made/up/path"));
+    try std.testing.expectError(error.PrettyError, checkFileExists(&dir.sub_path));
 }
