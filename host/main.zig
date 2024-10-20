@@ -71,12 +71,26 @@ extern fn roc__mainForHost_0_caller(flags: *anyopaque, closure_data: *anyopaque,
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const allocator = gpa.allocator();
 
+var roc_main_path: []const u8 = undefined;
+var project_path: []const u8 = undefined;
 var site_paths = std.ArrayList([]const u8).init(allocator);
 
 pub fn main() void {
-    const stdout = std.io.getStdOut().writer();
-    const stderr = std.io.getStdErr().writer();
-    stdout.print("started!\n", .{}) catch unreachable;
+    if (run()) {
+        const stdout = std.io.getStdOut().writer();
+        stdout.print("Bye!\n", .{}) catch unreachable;
+    } else |err| {
+        const stderr = std.io.getStdErr().writer();
+        stderr.print("Error {}\n", .{err}) catch unreachable;
+        std.process.exit(1);
+    }
+}
+
+fn run() error{ OutOfMemory, EmptyArgv, NoProjectPath }!void {
+    // Get the path of the
+    var args = std.process.args();
+    roc_main_path = args.next() orelse return error.EmptyArgv;
+    project_path = std.fs.path.dirname(roc_main_path) orelse return error.NoProjectPath;
 
     // call into roc
     const size = @as(usize, @intCast(roc__mainForHost_1_exposed_size()));
@@ -91,19 +105,8 @@ pub fn main() void {
     roc__mainForHost_1_exposed_generic(captures);
     roc__mainForHost_0_caller(undefined, captures, &out);
 
-    for (site_paths.toOwnedSlice() catch unreachable) |path| {
-        stdout.print("path: {s}\n", .{path}) catch unreachable;
-    }
-
-    switch (out.tag) {
-        .RocOk => {
-            stdout.print("Bye!\n", .{}) catch unreachable;
-            std.process.exit(0);
-        },
-        .RocErr => {
-            stderr.print("Exited with code {d}\n", .{out.payload.err}) catch unreachable;
-            std.process.exit(1);
-        },
+    for (try site_paths.toOwnedSlice()) |path| {
+        std.debug.print("path: {s}\n", .{path});
     }
 }
 
@@ -121,19 +124,30 @@ const RocPagesTag = enum(u8) {
 };
 
 export fn roc_fx_copy(pages: *RocPages) callconv(.C) RocResult(void, void) {
+    if (copy(pages)) {
+        return .{ .payload = .{ .ok = void{} }, .tag = .RocOk };
+    } else |err| {
+        const stderr = std.io.getStdErr().writer();
+        stderr.print("Error {}\n", .{err}) catch unreachable;
+        std.process.exit(1);
+    }
+}
+
+fn copy(pages: *RocPages) error{ OutOfMemory, RocListUnexpectedlyEmpty }!void {
     switch (pages.tag) {
         .RocFilesIn => {
-            const path = allocator.dupe(u8, pages.payload.filesIn.asSlice()) catch unreachable;
-            site_paths.append(path) catch unreachable;
+            const path = try allocator.dupe(u8, pages.payload.filesIn.asSlice());
+            try site_paths.append(path);
         },
         .RocFiles => {
             const paths_len = pages.payload.files.len();
-            for (pages.payload.files.elements(RocStr).?, 0..paths_len) |roc_str, _| {
-                const path = allocator.dupe(u8, roc_str.asSlice()) catch unreachable;
-                site_paths.append(path) catch unreachable;
+            if (paths_len > 0) {
+                const elements = pages.payload.files.elements(RocStr) orelse return error.RocListUnexpectedlyEmpty;
+                for (elements, 0..paths_len) |roc_str, _| {
+                    const path = try allocator.dupe(u8, roc_str.asSlice());
+                    try site_paths.append(path);
+                }
             }
         },
     }
-
-    return .{ .payload = .{ .ok = void{} }, .tag = .RocOk };
 }
