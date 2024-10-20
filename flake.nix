@@ -21,6 +21,7 @@
         pkgs.mkShell {
           packages = [
             roc.packages."x86_64-linux".cli
+            pkgs.entr
             pkgs.zig
             pkgs.zls
           ];
