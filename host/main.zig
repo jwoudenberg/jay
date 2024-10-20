@@ -72,7 +72,7 @@ var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const allocator = gpa.allocator();
 
 var roc_main_path: []const u8 = undefined;
-var project_path: []const u8 = undefined;
+var project_dir: std.fs.Dir = undefined;
 var site_paths = std.ArrayList([]const u8).init(allocator);
 
 pub fn main() void {
@@ -87,10 +87,15 @@ pub fn main() void {
 }
 
 fn run() error{ OutOfMemory, EmptyArgv, NoProjectPath }!void {
-    // Get the path of the
     var args = std.process.args();
     roc_main_path = args.next() orelse return error.EmptyArgv;
-    project_path = std.fs.path.dirname(roc_main_path) orelse return error.NoProjectPath;
+    const project_path = std.fs.path.dirname(roc_main_path) orelse return error.NoProjectPath;
+    project_dir = std.fs.cwd().openDir(project_path, .{}) catch |err| {
+        const stderr = std.io.getStdErr().writer();
+        stderr.print("Cannot access directory containing {s}: '{}'\n", .{ roc_main_path, err }) catch unreachable;
+        std.process.exit(1);
+    };
+    defer project_dir.close();
 
     // call into roc
     const size = @as(usize, @intCast(roc__mainForHost_1_exposed_size()));
@@ -133,21 +138,64 @@ export fn roc_fx_copy(pages: *RocPages) callconv(.C) RocResult(void, void) {
     }
 }
 
-fn copy(pages: *RocPages) error{ OutOfMemory, RocListUnexpectedlyEmpty }!void {
+const CopyError = error{ OutOfMemory, RocListUnexpectedlyEmpty, AccessDenied, SystemResources, Unexpected, InvalidUtf8 };
+fn copy(pages: *RocPages) CopyError!void {
     switch (pages.tag) {
         .RocFilesIn => {
-            const path = try allocator.dupe(u8, pages.payload.filesIn.asSlice());
-            try site_paths.append(path);
+            const dir_path = pages.payload.filesIn.asSlice();
+            try process_files_in(drop_leading_slash(dir_path));
         },
         .RocFiles => {
             const paths_len = pages.payload.files.len();
-            if (paths_len > 0) {
-                const elements = pages.payload.files.elements(RocStr) orelse return error.RocListUnexpectedlyEmpty;
-                for (elements, 0..paths_len) |roc_str, _| {
-                    const path = try allocator.dupe(u8, roc_str.asSlice());
-                    try site_paths.append(path);
-                }
+            if (paths_len == 0) {
+                return;
+            }
+
+            const elements = pages.payload.files.elements(RocStr) orelse return error.RocListUnexpectedlyEmpty;
+            for (elements, 0..paths_len) |roc_str, _| {
+                var path: []const u8 = try allocator.dupe(u8, roc_str.asSlice());
+                path = drop_leading_slash(path);
+                checkPathExists(path);
+                try site_paths.append(path);
             }
         },
     }
+}
+
+fn process_files_in(dir_path: []const u8) !void {
+    const source_dir = project_dir.openDir(dir_path, .{ .iterate = true }) catch |err| {
+        const stderr = std.io.getStdErr().writer();
+        stderr.print("Can't read directory '{s}': {}\n", .{ dir_path, err }) catch unreachable;
+        std.process.exit(1);
+    };
+    var dir_iter = source_dir.iterate();
+    while (dir_iter.next()) |opt_entry| {
+        if (opt_entry) |entry| {
+            const segments = &[_][]const u8{ dir_path, entry.name };
+            const rel_path = try std.fs.path.join(allocator, segments);
+            try site_paths.append(rel_path);
+        } else {
+            break;
+        }
+    } else |err| {
+        return err;
+    }
+}
+
+fn drop_leading_slash(path: []const u8) []const u8 {
+    if (path.len == 0) {
+        return path;
+    } else if (std.fs.path.isSep(path[0])) {
+        return path[1..];
+    } else {
+        return path;
+    }
+}
+
+fn checkPathExists(path: []const u8) void {
+    project_dir.access(path, .{}) catch |err| {
+        const stderr = std.io.getStdErr().writer();
+        stderr.print("Can't read file '{s}': {}\n", .{ path, err }) catch unreachable;
+        std.process.exit(1);
+    };
 }
