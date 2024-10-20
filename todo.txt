@@ -1,10 +1,14 @@
 x setup basic zig platform
 x get allocators to work
-implement `copy`
+x implement `copy`
 implement `fromMarkdown`
 implement `bootstrap`
 implement `wrapHtml`
 implement `replaceHtml`
 watch for source-file changes and rebuild
 watch for roc-file changes and rebuild
+warn if not all source files are mapped
+warn if site contains broken links
 perform partial builds when source file changes
+run local http server
+automatically reload browser when files change

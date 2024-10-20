@@ -105,9 +105,7 @@ fn run() !void {
     roc__mainForHost_1_exposed_generic(captures);
     roc__mainForHost_0_caller(undefined, captures, &out);
 
-    for (try site_paths.toOwnedSlice()) |path| {
-        std.debug.print("path: {s}\n", .{path});
-    }
+    try generateSite("output");
 }
 
 const RocPages = extern struct {
@@ -249,4 +247,35 @@ test "checkFileExists" {
     try checkFileExists(file_path);
     try std.testing.expectError(error.PrettyError, checkFileExists("made/up/path"));
     try std.testing.expectError(error.PrettyError, checkFileExists(&dir.sub_path));
+}
+
+fn generateSite(output_dir_path: []const u8) !void {
+    // Clear output directory if it already exists.
+    project_dir.deleteTree(output_dir_path) catch |err| {
+        if (err != error.NotDir) {
+            return err;
+        }
+    };
+    try project_dir.makeDir(output_dir_path);
+    var output_dir = try project_dir.openDir(output_dir_path, .{});
+    defer output_dir.close();
+
+    const buffer = try allocator.alloc(u8, 1000);
+    defer allocator.free(buffer);
+    for (try site_paths.toOwnedSlice()) |file_path| {
+        // I'd like to use the below, but get the following error when I do:
+        //     hidden symbol `__dso_handle' isn't defined
+        // try project_dir.copyFile(file_path, output_dir, file_path, .{});
+
+        if (std.fs.path.dirname(file_path)) |parent_dir| {
+            try output_dir.makePath(parent_dir);
+        }
+        var fifo = std.fifo.LinearFifo(u8, .Slice).init(buffer);
+        defer fifo.deinit();
+        const from_file = try project_dir.openFile(file_path, .{});
+        defer from_file.close();
+        const to_file = try output_dir.createFile(file_path, .{ .truncate = true, .exclusive = true });
+        defer to_file.close();
+        try fifo.pump(from_file.reader(), to_file.writer());
+    }
 }
