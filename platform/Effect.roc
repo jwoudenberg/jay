@@ -1,7 +1,16 @@
 hosted Effect
-    exposes [writePages, readPages]
-    imports [Internal]
+    exposes [copy, Pages, Xml]
+    imports []
 
-writePages : Box (List Internal.Pages) -> Task {} {}
+copy : Box Pages -> Task {} {}
 
-readPages : Task (Box (List Internal.Pages)) {}
+Pages : [
+    FilesIn Str,
+    Files (List Str),
+]
+
+Xml : List
+    [
+        SourceFile,
+        Snippet (List U8),
+    ]

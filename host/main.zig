@@ -1,8 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const RocStr = @import("roc/str.zig").RocStr;
+const RocList = @import("roc/list.zig").RocList;
 const RocResult = @import("roc/result.zig").RocResult;
-const utils = @import("roc/utils.zig");
 
 export fn roc_alloc(size: usize, alignment: u32) callconv(.C) *anyopaque {
     _ = alignment;
@@ -68,21 +68,15 @@ extern fn roc__mainForHost_1_exposed_generic(*anyopaque) callconv(.C) void;
 extern fn roc__mainForHost_1_exposed_size() callconv(.C) i64;
 extern fn roc__mainForHost_0_caller(flags: *anyopaque, closure_data: *anyopaque, output: *RocResult(void, i32)) void;
 
+var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+const allocator = gpa.allocator();
+
+var site_paths = std.ArrayList([]const u8).init(allocator);
+
 pub fn main() void {
     const stdout = std.io.getStdOut().writer();
     const stderr = std.io.getStdErr().writer();
     stdout.print("started!\n", .{}) catch unreachable;
-
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-    defer {
-        const deinit_status = gpa.deinit();
-        //fail test; can't try in defer as defer is executed after we return
-        if (deinit_status == .leak) std.testing.expect(false) catch @panic("TEST FAIL");
-    }
-    const foo = allocator.alloc(u8, 10) catch unreachable;
-    defer allocator.free(foo);
-    stdout.print("allocated!\n", .{}) catch unreachable;
 
     // call into roc
     const size = @as(usize, @intCast(roc__mainForHost_1_exposed_size()));
@@ -97,29 +91,49 @@ pub fn main() void {
     roc__mainForHost_1_exposed_generic(captures);
     roc__mainForHost_0_caller(undefined, captures, &out);
 
+    for (site_paths.toOwnedSlice() catch unreachable) |path| {
+        stdout.print("path: {s}\n", .{path}) catch unreachable;
+    }
+
     switch (out.tag) {
         .RocOk => {
             stdout.print("Bye!\n", .{}) catch unreachable;
+            std.process.exit(0);
         },
         .RocErr => {
             stderr.print("Exited with code {d}\n", .{out.payload.err}) catch unreachable;
+            std.process.exit(1);
         },
     }
 }
 
-var stored_pages: ?*anyopaque = null;
+const RocPages = extern struct {
+    payload: RocPagesPayload,
+    tag: RocPagesTag,
+};
+const RocPagesPayload = extern union {
+    filesIn: RocStr,
+    files: RocList,
+};
+const RocPagesTag = enum(u8) {
+    RocFiles = 0,
+    RocFilesIn = 1,
+};
 
-export fn roc_fx_writePages(pages: *anyopaque) callconv(.C) RocResult(void, void) {
-    // TODO: fix pages refs leaking.
-    utils.increfDataPtrC(@ptrCast(pages), 1);
-    stored_pages = pages;
-    return .{ .payload = .{ .ok = void{} }, .tag = .RocOk };
-}
-
-export fn roc_fx_readPages() callconv(.C) RocResult(*anyopaque, void) {
-    if (stored_pages) |stored| {
-        return .{ .payload = .{ .ok = stored }, .tag = .RocOk };
-    } else {
-        return .{ .payload = .{ .err = void{} }, .tag = .RocErr };
+export fn roc_fx_copy(pages: *RocPages) callconv(.C) RocResult(void, void) {
+    switch (pages.tag) {
+        .RocFilesIn => {
+            const path = allocator.dupe(u8, pages.payload.filesIn.asSlice()) catch unreachable;
+            site_paths.append(path) catch unreachable;
+        },
+        .RocFiles => {
+            const paths_len = pages.payload.files.len();
+            for (pages.payload.files.elements(RocStr).?, 0..paths_len) |roc_str, _| {
+                const path = allocator.dupe(u8, roc_str.asSlice()) catch unreachable;
+                site_paths.append(path) catch unreachable;
+            }
+        },
     }
+
+    return .{ .payload = .{ .ok = void{} }, .tag = .RocOk };
 }

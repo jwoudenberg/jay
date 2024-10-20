@@ -55,6 +55,15 @@ pub fn build(b: *std.Build) !void {
         build_host.addFileInput(roc_path);
     }
 
+    // Present description of roc types from running 'roc glue'. Glue does not
+    // currently generate types for Zig, so I only use the output from this
+    // command as documentation for hand-writing roc types in zig host code.
+    const build_glue = b.addSystemCommand(&.{"roc"});
+    build_glue.addArgs(&.{"glue"});
+    build_glue.addFileArg(b.path("glue.roc"));
+    const build_glue_dir = build_glue.addOutputDirectoryArg(b.makeTempPath());
+    build_glue.addFileArg(b.path("platform/main-glue.roc"));
+
     b.getInstallStep().dependOn(&b.addInstallDirectory(.{
         .source_dir = b.path("platform"),
         .install_dir = .{ .prefix = {} },
@@ -64,6 +73,11 @@ pub fn build(b: *std.Build) !void {
     b.getInstallStep().dependOn(&b.addInstallFile(build_dynhost.getEmittedBin(), "platform/dynhost").step);
     b.getInstallStep().dependOn(&b.addInstallFile(build_libhost.getEmittedBin(), "platform/linux-x64.a").step);
     b.getInstallStep().dependOn(&b.addInstallFile(libapp, "platform/libapp.so").step);
+    b.getInstallStep().dependOn(&b.addInstallDirectory(.{
+        .source_dir = build_glue_dir,
+        .install_dir = .{ .prefix = {} },
+        .install_subdir = "glue",
+    }).step);
 
     // Short-hand for compiling and then running the example application.
     const run_example = b.addSystemCommand(&.{"./example/simple.roc"});

@@ -13,15 +13,15 @@ module [
     ul,
 ]
 
-import Internal
+import XmlInternal
 
-Html : Internal.Html
+Html : XmlInternal.Xml
 
 Attribute := (Str, Str)
 
 mkNode : Str -> (List Attribute, List Html -> Html)
 mkNode = \tag -> \attributes, children ->
-        Internal.node
+        XmlInternal.node
             tag
             (List.map attributes (\@Attribute pair -> pair))
             children
@@ -29,7 +29,7 @@ mkNode = \tag -> \attributes, children ->
 attr : Str, Str -> Attribute
 
 text : Str -> Html
-text = Internal.text
+text = XmlInternal.text
 
 a = mkNode "a"
 body = mkNode "body"

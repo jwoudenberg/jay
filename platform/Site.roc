@@ -13,20 +13,25 @@ module [
     toHtml,
 ]
 
-import Internal
 import Effect
-import Helpers
+import Effect
+import Html
 
-Html : Internal.Html
+Html : Html.Html
 
 Markdown := {}
 
-Pages a := Internal.Pages
+Pages a := Effect.Pages
 
 copy : Pages content -> Task {} *
 copy = \@Pages pages ->
-    stored = Helpers.okOrCrash! (Helpers.storedPages {})
-    Helpers.okOrCrash! (Effect.writePages (Box.box (List.append stored pages)))
+    Task.attempt
+        (Effect.copy (Box.box pages))
+        (\result ->
+            when result is
+                Ok {} -> Task.ok {}
+                Err _ -> crash "OH NOES"
+        )
 
 # Parse directory structure and rewrite main.roc with initial implementation.
 bootstrap : Task {} []
