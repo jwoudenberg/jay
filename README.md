@@ -1,7 +1,6 @@
 # Jay - a static site generator for Roc
 
-Jay works on a directory that mirrors the site we'd like to build. Jay maps each source file to a site file at the same relative path, but can transform a file's contents or change its extension.
-
+Jay takes a directory of files and turns it into a website.
 Let's say you have the following source files:
 
 ```
@@ -15,7 +14,7 @@ static/
 main.roc
 ```
 
-Given the right `main.roc` (more on that below), Jay will generate a site with these paths:
+Jay will turn those markdown files into HTML and produce a site with the following paths:
 
 ```
 /index.html
@@ -24,6 +23,8 @@ Given the right `main.roc` (more on that below), Jay will generate a site with t
 /static/image.jpg
 /static/style.css
 ```
+
+You define the markdown conversion and any other transformations in main.roc.
 
 ## Getting started
 
