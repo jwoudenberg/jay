@@ -67,12 +67,18 @@ extern fn roc__mainForHost_1_exposed_generic(*anyopaque) callconv(.C) void;
 extern fn roc__mainForHost_1_exposed_size() callconv(.C) i64;
 extern fn roc__mainForHost_0_caller(flags: *anyopaque, closure_data: *anyopaque, output: *RocResult(void, i32)) void;
 
-var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-const allocator = gpa.allocator();
+const State = struct {
+    arena: std.heap.ArenaAllocator,
+    source_root: std.fs.Dir,
+    source_files: std.StringHashMap(u32),
+    source_dirs: std.StringHashMap(void),
+    destination_files: []?bool,
 
-var roc_main_path: []const u8 = undefined;
-var project_dir: std.fs.Dir = undefined;
-var site_paths = std.ArrayList([]const u8).init(allocator);
+    fn deinit(self: *State) void {
+        self.arena.deinit();
+    }
+};
+var state: State = undefined;
 
 pub fn main() void {
     if (run()) {
@@ -84,13 +90,14 @@ pub fn main() void {
 }
 
 fn run() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
     var args = std.process.args();
-    roc_main_path = args.next() orelse return error.EmptyArgv;
+    const roc_main_path = args.next() orelse return error.EmptyArgv;
     const project_path = std.fs.path.dirname(roc_main_path) orelse return error.NoProjectPath;
-    project_dir = std.fs.cwd().openDir(project_path, .{}) catch |err| {
-        try failPrettily("Cannot access directory containing {s}: '{}'\n", .{ roc_main_path, err });
-    };
-    defer project_dir.close();
+
+    try scanSourceFiles(allocator, project_path);
+    defer state.deinit();
 
     // call into roc
     const size = @as(usize, @intCast(roc__mainForHost_1_exposed_size()));
@@ -105,7 +112,37 @@ fn run() !void {
     roc__mainForHost_1_exposed_generic(captures);
     roc__mainForHost_0_caller(undefined, captures, &out);
 
-    try generateSite("output");
+    try generateSite(allocator, "output");
+}
+
+fn scanSourceFiles(child_allocator: std.mem.Allocator, root_path: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(child_allocator);
+    const allocator = arena.allocator();
+    const source_root = std.fs.cwd().openDir(root_path, .{ .iterate = true }) catch |err| {
+        try failPrettily("Cannot access directory containing {s}: '{}'\n", .{ root_path, err });
+    };
+    var source_files = std.StringHashMap(u32).init(allocator);
+    var source_dirs = std.StringHashMap(void).init(allocator);
+    var walker = try source_root.walk(allocator);
+    defer walker.deinit();
+    var next_id: u32 = 0;
+    while (try walker.next()) |entry| {
+        if (entry.kind == .directory) {
+            try source_dirs.put(try allocator.dupe(u8, entry.path), void{});
+        } else if (entry.kind == .file) {
+            try source_files.put(try allocator.dupe(u8, entry.path), next_id);
+            next_id += 1;
+        }
+    }
+    const destination_files = try allocator.alloc(?bool, next_id);
+    @memset(destination_files, null);
+    state = .{
+        .arena = arena,
+        .source_root = source_root,
+        .source_files = source_files,
+        .source_dirs = source_dirs,
+        .destination_files = destination_files,
+    };
 }
 
 const RocPages = extern struct {
@@ -114,7 +151,7 @@ const RocPages = extern struct {
 };
 const RocPagesPayload = extern union {
     filesIn: RocStr,
-    files: RocList,
+    source_files: RocList,
 };
 const RocPagesTag = enum(u8) {
     RocFiles = 0,
@@ -136,60 +173,75 @@ fn copy(pages: *RocPages) !void {
             try processFilesIn(dropLeadingSlash(dir_path));
         },
         .RocFiles => {
-            const paths_len = pages.payload.files.len();
+            const paths_len = pages.payload.source_files.len();
             if (paths_len == 0) {
                 return;
             }
 
-            const elements = pages.payload.files.elements(RocStr) orelse return error.RocListUnexpectedlyEmpty;
+            const elements = pages.payload.source_files.elements(RocStr) orelse return error.RocListUnexpectedlyEmpty;
             for (elements, 0..paths_len) |roc_str, _| {
-                var path: []const u8 = try allocator.dupe(u8, roc_str.asSlice());
-                path = dropLeadingSlash(path);
-                try checkFileExists(path);
-                try site_paths.append(path);
+                const path = dropLeadingSlash(roc_str.asSlice());
+                if (state.source_files.get(path)) |id| {
+                    state.destination_files[id] = true;
+                }
             }
         },
     }
 }
 
 fn processFilesIn(dir_path: []const u8) !void {
-    const source_dir = project_dir.openDir(dir_path, .{ .iterate = true }) catch |err| {
-        try failPrettily("Can't read directory '{s}': {}\n", .{ dir_path, err });
-    };
-    var dir_iter = source_dir.iterate();
-    while (dir_iter.next()) |opt_entry| {
-        if (opt_entry) |entry| {
-            if (entry.kind != .file) {
-                continue;
+    if (!state.source_dirs.contains(dir_path)) {
+        try failPrettily("Can't read directory '{s}'\n", .{dir_path});
+    }
+    var source_file_iter = state.source_files.iterator();
+    while (source_file_iter.next()) |entry| {
+        if (std.fs.path.dirname(entry.key_ptr.*)) |file_dir| {
+            if (std.mem.eql(u8, file_dir, dir_path)) {
+                state.destination_files[entry.value_ptr.*] = true;
             }
-            const segments = &[_][]const u8{ dir_path, entry.name };
-            const rel_path = try std.fs.path.join(allocator, segments);
-            try site_paths.append(rel_path);
-        } else {
-            break;
         }
-    } else |err| {
-        return err;
     }
 }
 
-test "processFilesIn: directory with files" {
-    project_dir = std.testing.tmpDir(.{}).dir;
-    try project_dir.makeDir("project");
+fn expectDestinationFileForPath(expected: ?bool, path: []const u8) !void {
+    const actual = state.destination_files[state.source_files.get(path).?];
+    return std.testing.expectEqual(expected, actual);
+}
 
+test "processFilesIn: directory with source_files" {
+    var tmpdir = std.testing.tmpDir(.{});
+    defer tmpdir.cleanup();
+    const root_path = try tmpdir.parent_dir.realpathAlloc(std.testing.allocator, &tmpdir.sub_path);
+    defer std.testing.allocator.free(root_path);
+    const project_dir = tmpdir.dir;
+
+    try project_dir.makeDir("project");
+    try project_dir.makeDir("project/subdir");
     try project_dir.writeFile(.{ .sub_path = "project/file.1", .data = &[_]u8{} });
     try project_dir.writeFile(.{ .sub_path = "project/file.2", .data = &[_]u8{} });
-    try project_dir.makeDir("project/dir"); // directory should not get added.
+    try project_dir.writeFile(.{ .sub_path = "project/subdir/file.3", .data = &[_]u8{} });
+    try project_dir.writeFile(.{ .sub_path = "file.4", .data = &[_]u8{} });
+
+    try scanSourceFiles(std.testing.allocator, root_path);
+    defer state.deinit();
 
     try processFilesIn("project");
 
-    try std.testing.expectEqual(2, site_paths.items.len);
-    try std.testing.expectEqualStrings("project/file.1", site_paths.items[0]);
-    try std.testing.expectEqualStrings("project/file.2", site_paths.items[1]);
+    try expectDestinationFileForPath(true, "project/file.1");
+    try expectDestinationFileForPath(true, "project/file.2");
+    try expectDestinationFileForPath(null, "project/subdir/file.3");
+    try expectDestinationFileForPath(null, "file.4");
 }
 
 test "processFilesIn: non-existing directory" {
-    project_dir = std.testing.tmpDir(.{}).dir;
+    var tmpdir = std.testing.tmpDir(.{});
+    defer tmpdir.cleanup();
+    const root_path = try tmpdir.parent_dir.realpathAlloc(std.testing.allocator, &tmpdir.sub_path);
+    defer std.testing.allocator.free(root_path);
+    try scanSourceFiles(std.testing.allocator, root_path);
+    defer state.deinit();
+    defer std.testing.allocator.free(state.destination_files);
+
     try std.testing.expectError(error.PrettyError, processFilesIn("made-up"));
 }
 
@@ -227,52 +279,39 @@ test "dropLeadingSlash" {
     try std.testing.expectEqualStrings("foo/bar", dropLeadingSlash("foo/bar"));
 }
 
-fn checkFileExists(path: []const u8) !void {
-    const stat = project_dir.statFile(path) catch |err| {
-        try failPrettily("Can't read file '{s}': {}\n", .{ path, err });
-    };
-    if (stat.kind != .file) {
-        try failPrettily("'{s}' is not a file\n", .{path});
-    }
-}
-
-test "checkFileExists" {
-    const dir = std.testing.tmpDir(.{});
-    project_dir = dir.parent_dir;
-    try dir.dir.writeFile(.{ .sub_path = "file", .data = &[_]u8{} });
-    const file_path_segments = &[_][]const u8{ &dir.sub_path, "file" };
-    const file_path = try std.fs.path.join(std.testing.allocator, file_path_segments);
-    defer std.testing.allocator.free(file_path);
-
-    try checkFileExists(file_path);
-    try std.testing.expectError(error.PrettyError, checkFileExists("made/up/path"));
-    try std.testing.expectError(error.PrettyError, checkFileExists(&dir.sub_path));
-}
-
-fn generateSite(output_dir_path: []const u8) !void {
+fn generateSite(allocator: std.mem.Allocator, output_dir_path: []const u8) !void {
     // Clear output directory if it already exists.
-    project_dir.deleteTree(output_dir_path) catch |err| {
+    state.source_root.deleteTree(output_dir_path) catch |err| {
         if (err != error.NotDir) {
             return err;
         }
     };
-    try project_dir.makeDir(output_dir_path);
-    var output_dir = try project_dir.openDir(output_dir_path, .{});
+    try state.source_root.makeDir(output_dir_path);
+    var output_dir = try state.source_root.openDir(output_dir_path, .{});
     defer output_dir.close();
 
     const buffer = try allocator.alloc(u8, 1000);
     defer allocator.free(buffer);
-    for (try site_paths.toOwnedSlice()) |file_path| {
+
+    var source_dir_iter = state.source_dirs.keyIterator();
+    while (source_dir_iter.next()) |dir_path| {
+        try output_dir.makePath(dir_path.*);
+    }
+
+    var source_file_iter = state.source_files.iterator();
+    while (source_file_iter.next()) |entry| {
+        const file_path = entry.key_ptr.*;
+        if (state.destination_files[entry.value_ptr.*] != true) {
+            continue;
+        }
+
         // I'd like to use the below, but get the following error when I do:
         //     hidden symbol `__dso_handle' isn't defined
-        // try project_dir.copyFile(file_path, output_dir, file_path, .{});
+        // try source_root.copyFile(file_path, output_dir, file_path, .{});
 
-        if (std.fs.path.dirname(file_path)) |parent_dir| {
-            try output_dir.makePath(parent_dir);
-        }
         var fifo = std.fifo.LinearFifo(u8, .Slice).init(buffer);
         defer fifo.deinit();
-        const from_file = try project_dir.openFile(file_path, .{});
+        const from_file = try state.source_root.openFile(file_path, .{});
         defer from_file.close();
         const to_file = try output_dir.createFile(file_path, .{ .truncate = true, .exclusive = true });
         defer to_file.close();

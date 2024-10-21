@@ -4,7 +4,6 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     roc.url = "git+file:/home/jasper/dev/roc";
-    roc.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =

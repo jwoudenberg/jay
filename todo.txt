@@ -5,6 +5,7 @@ implement `fromMarkdown`
 implement `bootstrap`
 implement `wrapHtml`
 implement `replaceHtml`
+support metadata frontmatter
 watch for source-file changes and rebuild
 watch for roc-file changes and rebuild
 warn if not all source files are mapped
@@ -12,3 +13,5 @@ warn if site contains broken links
 perform partial builds when source file changes
 run local http server
 automatically reload browser when files change
+generate site in remote cache location
+provide --output flag for production builds
