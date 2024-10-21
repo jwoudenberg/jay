@@ -4,5 +4,7 @@ app [main] { pf: platform "../zig-out/platform/main.roc" }
 import pf.Site
 
 main =
-    Site.copy! (Site.files ["index.md", "about.md"])
-    Site.copy! (Site.filesIn "/posts")
+    Site.match { dirs: ["/posts"] }
+        |> Site.copy!
+    Site.match { files: ["index.md", "about.md"] }
+        |> Site.copy!

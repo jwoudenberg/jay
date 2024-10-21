@@ -5,14 +5,15 @@ import pf.Site exposing [Pages, Html]
 import pf.Html
 
 main =
-    Site.copy! (Site.filesIn "static")
+    Site.match { dirs: ["static"] }
+        |> Site.copy!
 
-    posts = Site.fromMarkdown (Site.filesIn "posts")
+    posts = Site.match { dirs: ["posts"] } |> Site.fromMarkdown
 
     Site.wrapHtml posts applyLayout
         |> Site.copy!
 
-    Site.files ["blog.html", "about.html"]
+    Site.match { files: ["blog.html", "about.html"] }
         |> Site.wrapHtml applyLayout
         |> Site.replaceHtml "posts-list" (\_ -> renderPostsListing posts)
         |> Site.copy!

@@ -4,10 +4,10 @@ hosted Effect
 
 copy : Box Pages -> Task {} {}
 
-Pages : [
-    FilesIn Str,
-    Files (List Str),
-]
+Pages : {
+    files : List Str,
+    dirs : List Str,
+}
 
 Xml : List
     [

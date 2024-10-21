@@ -146,16 +146,8 @@ fn scanSourceFiles(child_allocator: std.mem.Allocator, root_path: []const u8) !v
 }
 
 const RocPages = extern struct {
-    payload: RocPagesPayload,
-    tag: RocPagesTag,
-};
-const RocPagesPayload = extern union {
-    filesIn: RocStr,
-    source_files: RocList,
-};
-const RocPagesTag = enum(u8) {
-    RocFiles = 0,
-    RocFilesIn = 1,
+    dirs: RocList,
+    files: RocList,
 };
 
 export fn roc_fx_copy(pages: *RocPages) callconv(.C) RocResult(void, void) {
@@ -167,29 +159,32 @@ export fn roc_fx_copy(pages: *RocPages) callconv(.C) RocResult(void, void) {
 }
 
 fn copy(pages: *RocPages) !void {
-    switch (pages.tag) {
-        .RocFilesIn => {
-            const dir_path = pages.payload.filesIn.asSlice();
-            try processFilesIn(dropLeadingSlash(dir_path));
-        },
-        .RocFiles => {
-            const paths_len = pages.payload.source_files.len();
-            if (paths_len == 0) {
-                return;
-            }
+    // Process dirs.
+    const dirs_len = pages.dirs.len();
+    if (dirs_len > 0) {
+        const elements = pages.dirs.elements(RocStr) orelse return error.RocListUnexpectedlyEmpty;
+        for (elements, 0..dirs_len) |roc_str, _| {
+            const path = dropLeadingSlash(roc_str.asSlice());
+            try addFilesInDir(dropLeadingSlash(path));
+        }
+    }
 
-            const elements = pages.payload.source_files.elements(RocStr) orelse return error.RocListUnexpectedlyEmpty;
-            for (elements, 0..paths_len) |roc_str, _| {
-                const path = dropLeadingSlash(roc_str.asSlice());
-                if (state.source_files.get(path)) |id| {
-                    state.destination_files[id] = true;
-                }
+    // Process files.
+    const files_len = pages.files.len();
+    if (files_len > 0) {
+        const elements = pages.files.elements(RocStr) orelse return error.RocListUnexpectedlyEmpty;
+        for (elements, 0..files_len) |roc_str, _| {
+            const path = dropLeadingSlash(roc_str.asSlice());
+            if (state.source_files.get(path)) |id| {
+                state.destination_files[id] = true;
+            } else {
+                try failPrettily("Can't read file '{s}'\n", .{path});
             }
-        },
+        }
     }
 }
 
-fn processFilesIn(dir_path: []const u8) !void {
+fn addFilesInDir(dir_path: []const u8) !void {
     if (!state.source_dirs.contains(dir_path)) {
         try failPrettily("Can't read directory '{s}'\n", .{dir_path});
     }
@@ -208,7 +203,7 @@ fn expectDestinationFileForPath(expected: ?bool, path: []const u8) !void {
     return std.testing.expectEqual(expected, actual);
 }
 
-test "processFilesIn: directory with source_files" {
+test "addFilesInDir: directory with source_files" {
     var tmpdir = std.testing.tmpDir(.{});
     defer tmpdir.cleanup();
     const root_path = try tmpdir.parent_dir.realpathAlloc(std.testing.allocator, &tmpdir.sub_path);
@@ -225,7 +220,7 @@ test "processFilesIn: directory with source_files" {
     try scanSourceFiles(std.testing.allocator, root_path);
     defer state.deinit();
 
-    try processFilesIn("project");
+    try addFilesInDir("project");
 
     try expectDestinationFileForPath(true, "project/file.1");
     try expectDestinationFileForPath(true, "project/file.2");
@@ -233,7 +228,7 @@ test "processFilesIn: directory with source_files" {
     try expectDestinationFileForPath(null, "file.4");
 }
 
-test "processFilesIn: non-existing directory" {
+test "addFilesInDir: non-existing directory" {
     var tmpdir = std.testing.tmpDir(.{});
     defer tmpdir.cleanup();
     const root_path = try tmpdir.parent_dir.realpathAlloc(std.testing.allocator, &tmpdir.sub_path);
@@ -242,7 +237,7 @@ test "processFilesIn: non-existing directory" {
     defer state.deinit();
     defer std.testing.allocator.free(state.destination_files);
 
-    try std.testing.expectError(error.PrettyError, processFilesIn("made-up"));
+    try std.testing.expectError(error.PrettyError, addFilesInDir("made-up"));
 }
 
 // For use in situations where we want to show a pretty helpful error.
