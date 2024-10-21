@@ -7,6 +7,7 @@ copy : Box Pages -> Task {} {}
 Pages : {
     files : List Str,
     dirs : List Str,
+    conversion : [None, Markdown],
 }
 
 Xml : List

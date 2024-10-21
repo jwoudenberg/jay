@@ -72,7 +72,7 @@ const State = struct {
     source_root: std.fs.Dir,
     source_files: std.StringHashMap(u32),
     source_dirs: std.StringHashMap(void),
-    destination_files: []?bool,
+    destination_files: []?[]const u8,
 
     fn deinit(self: *State) void {
         self.arena.deinit();
@@ -134,7 +134,7 @@ fn scanSourceFiles(child_allocator: std.mem.Allocator, root_path: []const u8) !v
             next_id += 1;
         }
     }
-    const destination_files = try allocator.alloc(?bool, next_id);
+    const destination_files = try allocator.alloc(?[]const u8, next_id);
     @memset(destination_files, null);
     state = .{
         .arena = arena,
@@ -148,6 +148,12 @@ fn scanSourceFiles(child_allocator: std.mem.Allocator, root_path: []const u8) !v
 const RocPages = extern struct {
     dirs: RocList,
     files: RocList,
+    conversion: RocConversion,
+};
+
+const RocConversion = enum(u8) {
+    markdown = 0,
+    none = 1,
 };
 
 export fn roc_fx_copy(pages: *RocPages) callconv(.C) RocResult(void, void) {
@@ -176,7 +182,7 @@ fn copy(pages: *RocPages) !void {
         for (elements, 0..files_len) |roc_str, _| {
             const path = dropLeadingSlash(roc_str.asSlice());
             if (state.source_files.get(path)) |id| {
-                state.destination_files[id] = true;
+                state.destination_files[id] = try state.arena.allocator().dupe(u8, path);
             } else {
                 try failPrettily("Can't read file '{s}'\n", .{path});
             }
@@ -190,17 +196,22 @@ fn addFilesInDir(dir_path: []const u8) !void {
     }
     var source_file_iter = state.source_files.iterator();
     while (source_file_iter.next()) |entry| {
-        if (std.fs.path.dirname(entry.key_ptr.*)) |file_dir| {
+        const file_path = entry.key_ptr.*;
+        if (std.fs.path.dirname(file_path)) |file_dir| {
             if (std.mem.eql(u8, file_dir, dir_path)) {
-                state.destination_files[entry.value_ptr.*] = true;
+                state.destination_files[entry.value_ptr.*] = file_path;
             }
         }
     }
 }
 
-fn expectDestinationFileForPath(expected: ?bool, path: []const u8) !void {
+fn expectDestinationFileForPath(expected: ?[]const u8, path: []const u8) !void {
     const actual = state.destination_files[state.source_files.get(path).?];
-    return std.testing.expectEqual(expected, actual);
+    if (expected) |expected_string| {
+        try std.testing.expectEqualStrings(expected_string, actual.?);
+    } else {
+        try std.testing.expectEqual(null, actual);
+    }
 }
 
 test "addFilesInDir: directory with source_files" {
@@ -222,8 +233,8 @@ test "addFilesInDir: directory with source_files" {
 
     try addFilesInDir("project");
 
-    try expectDestinationFileForPath(true, "project/file.1");
-    try expectDestinationFileForPath(true, "project/file.2");
+    try expectDestinationFileForPath("project/file.1", "project/file.1");
+    try expectDestinationFileForPath("project/file.2", "project/file.2");
     try expectDestinationFileForPath(null, "project/subdir/file.3");
     try expectDestinationFileForPath(null, "file.4");
 }
@@ -295,21 +306,19 @@ fn generateSite(allocator: std.mem.Allocator, output_dir_path: []const u8) !void
 
     var source_file_iter = state.source_files.iterator();
     while (source_file_iter.next()) |entry| {
-        const file_path = entry.key_ptr.*;
-        if (state.destination_files[entry.value_ptr.*] != true) {
-            continue;
+        const source_path = entry.key_ptr.*;
+        if (state.destination_files[entry.value_ptr.*]) |destination_path| {
+            // I'd like to use the below, but get the following error when I do:
+            //     hidden symbol `__dso_handle' isn't defined
+            // try source_root.copyFile(source_path, output_dir, destination_path, .{});
+
+            var fifo = std.fifo.LinearFifo(u8, .Slice).init(buffer);
+            defer fifo.deinit();
+            const from_file = try state.source_root.openFile(source_path, .{});
+            defer from_file.close();
+            const to_file = try output_dir.createFile(destination_path, .{ .truncate = true, .exclusive = true });
+            defer to_file.close();
+            try fifo.pump(from_file.reader(), to_file.writer());
         }
-
-        // I'd like to use the below, but get the following error when I do:
-        //     hidden symbol `__dso_handle' isn't defined
-        // try source_root.copyFile(file_path, output_dir, file_path, .{});
-
-        var fifo = std.fifo.LinearFifo(u8, .Slice).init(buffer);
-        defer fifo.deinit();
-        const from_file = try state.source_root.openFile(file_path, .{});
-        defer from_file.close();
-        const to_file = try output_dir.createFile(file_path, .{ .truncate = true, .exclusive = true });
-        defer to_file.close();
-        try fifo.pump(from_file.reader(), to_file.writer());
     }
 }
