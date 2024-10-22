@@ -36,12 +36,12 @@ copy = \@Pages pages ->
 bootstrap : Task {} []
 
 match : { files ? List Str, dirs ? List Str } -> Pages content
-match = \{ files ? [], dirs ? [] } -> @Pages { files, dirs, conversion: None }
+match = \{ files ? [], dirs ? [] } -> @Pages { files, dirs, processing: None }
 
 meta : Pages * -> List { path : Str }a
 
 fromMarkdown : Pages Markdown -> Pages Html
-fromMarkdown = \@Pages pages -> @Pages { pages & conversion: Markdown }
+fromMarkdown = \@Pages pages -> @Pages { pages & processing: Markdown }
 
 wrapHtml : Pages Html, (Html, meta -> Html) -> Pages Html
 

@@ -170,10 +170,10 @@ fn ignorePath(path: []const u8) bool {
 const RocPages = extern struct {
     dirs: RocList,
     files: RocList,
-    conversion: RocConversion,
+    processing: RocProcessing,
 };
 
-const RocConversion = enum(u8) {
+const RocProcessing = enum(u8) {
     markdown = 0,
     none = 1,
 };
@@ -193,7 +193,7 @@ fn copy(pages: *RocPages) !void {
         const elements = pages.dirs.elements(RocStr) orelse return error.RocListUnexpectedlyEmpty;
         for (elements, 0..dirs_len) |roc_str, _| {
             const path = dropLeadingSlash(roc_str.asSlice());
-            try addFilesInDir(dropLeadingSlash(path), pages.conversion);
+            try addFilesInDir(dropLeadingSlash(path), pages.processing);
         }
     }
 
@@ -205,7 +205,7 @@ fn copy(pages: *RocPages) !void {
             const path = dropLeadingSlash(roc_str.asSlice());
             if (state.source_files.get(path)) |id| {
                 const file_path = try state.arena.allocator().dupe(u8, path);
-                try addFile(file_path, id, pages.conversion);
+                try addFile(file_path, id, pages.processing);
             } else {
                 try failPrettily("Can't read file '{s}'\n", .{path});
             }
@@ -213,7 +213,7 @@ fn copy(pages: *RocPages) !void {
     }
 }
 
-fn addFilesInDir(dir_path: []const u8, conversion: RocConversion) !void {
+fn addFilesInDir(dir_path: []const u8, processing: RocProcessing) !void {
     if (!state.source_dirs.contains(dir_path)) {
         try failPrettily("Can't read directory '{s}'\n", .{dir_path});
     }
@@ -222,14 +222,14 @@ fn addFilesInDir(dir_path: []const u8, conversion: RocConversion) !void {
         const file_path = entry.key_ptr.*;
         if (std.fs.path.dirname(file_path)) |file_dir| {
             if (std.mem.eql(u8, file_dir, dir_path)) {
-                try addFile(file_path, entry.value_ptr.*, conversion);
+                try addFile(file_path, entry.value_ptr.*, processing);
             }
         }
     }
 }
 
-fn addFile(source_path: []const u8, index: u32, conversion: RocConversion) !void {
-    const destination_path = switch (conversion) {
+fn addFile(source_path: []const u8, index: u32, processing: RocProcessing) !void {
+    const destination_path = switch (processing) {
         .none => source_path,
         .markdown => try changeMarkdownExtension(state.arena.allocator(), source_path),
     };
