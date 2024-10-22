@@ -75,9 +75,10 @@ extern fn roc__mainForHost_0_caller(flags: *anyopaque, closure_data: *anyopaque,
 const State = struct {
     arena: std.heap.ArenaAllocator,
     source_root: std.fs.Dir,
-    source_files: std.StringHashMap(u32),
+    source_files: std.ArrayList([]const u8),
     source_dirs: std.StringHashMap(void),
-    destination_files: []?[]const u8,
+    destination_files: std.ArrayList(?[]const u8),
+    processing: std.ArrayList(?RocProcessing),
 
     fn deinit(self: *State) void {
         self.arena.deinit();
@@ -126,11 +127,10 @@ fn scanSourceFiles(child_allocator: std.mem.Allocator, root_path: []const u8) !v
     const source_root = std.fs.cwd().openDir(root_path, .{ .iterate = true }) catch |err| {
         try failPrettily("Cannot access directory containing {s}: '{}'\n", .{ root_path, err });
     };
-    var source_files = std.StringHashMap(u32).init(allocator);
+    var source_files = std.ArrayList([]const u8).init(allocator);
     var source_dirs = std.StringHashMap(void).init(allocator);
     var walker = try source_root.walk(allocator);
     defer walker.deinit();
-    var next_id: u32 = 0;
     while (try walker.next()) |entry| {
         if (ignorePath(entry.path)) {
             if (entry.kind == .directory) {
@@ -147,18 +147,26 @@ fn scanSourceFiles(child_allocator: std.mem.Allocator, root_path: []const u8) !v
         } else if (entry.kind == .directory) {
             try source_dirs.put(try allocator.dupe(u8, entry.path), void{});
         } else if (entry.kind == .file) {
-            try source_files.put(try allocator.dupe(u8, entry.path), next_id);
-            next_id += 1;
+            try source_files.append(try allocator.dupe(u8, entry.path));
         }
     }
-    const destination_files = try allocator.alloc(?[]const u8, next_id);
-    @memset(destination_files, null);
+    const destination_files = std.ArrayList(?[]const u8).fromOwnedSlice(
+        allocator,
+        try allocator.alloc(?[]const u8, source_files.items.len),
+    );
+    @memset(destination_files.items, null);
+    const processing = std.ArrayList(?RocProcessing).fromOwnedSlice(
+        allocator,
+        try allocator.alloc(?RocProcessing, source_files.items.len),
+    );
+    @memset(processing.items, null);
     state = .{
         .arena = arena,
         .source_root = source_root,
         .source_files = source_files,
         .source_dirs = source_dirs,
         .destination_files = destination_files,
+        .processing = processing,
     };
 }
 
@@ -203,9 +211,11 @@ fn copy(pages: *RocPages) !void {
         const elements = pages.files.elements(RocStr) orelse return error.RocListUnexpectedlyEmpty;
         for (elements, 0..files_len) |roc_str, _| {
             const path = dropLeadingSlash(roc_str.asSlice());
-            if (state.source_files.get(path)) |id| {
-                const file_path = try state.arena.allocator().dupe(u8, path);
-                try addFile(file_path, id, pages.processing);
+            for (state.source_files.items, 0..) |candidate, index| {
+                if (std.mem.eql(u8, candidate, path)) {
+                    const file_path = try state.arena.allocator().dupe(u8, path);
+                    break try addFile(file_path, index, pages.processing);
+                }
             } else {
                 try failPrettily("Can't read file '{s}'\n", .{path});
             }
@@ -217,23 +227,21 @@ fn addFilesInDir(dir_path: []const u8, processing: RocProcessing) !void {
     if (!state.source_dirs.contains(dir_path)) {
         try failPrettily("Can't read directory '{s}'\n", .{dir_path});
     }
-    var source_file_iter = state.source_files.iterator();
-    while (source_file_iter.next()) |entry| {
-        const file_path = entry.key_ptr.*;
-        if (std.fs.path.dirname(file_path)) |file_dir| {
-            if (std.mem.eql(u8, file_dir, dir_path)) {
-                try addFile(file_path, entry.value_ptr.*, processing);
-            }
+    for (state.source_files.items, 0..) |file_path, index| {
+        const file_dir = std.fs.path.dirname(file_path) orelse continue;
+        if (std.mem.eql(u8, file_dir, dir_path)) {
+            try addFile(file_path, index, processing);
         }
     }
 }
 
-fn addFile(source_path: []const u8, index: u32, processing: RocProcessing) !void {
+fn addFile(source_path: []const u8, index: usize, processing: RocProcessing) !void {
     const destination_path = switch (processing) {
         .none => source_path,
         .markdown => try changeMarkdownExtension(state.arena.allocator(), source_path),
     };
-    state.destination_files[index] = destination_path;
+    state.destination_files.items[index] = destination_path;
+    state.processing.items[index] = processing;
 }
 
 fn changeMarkdownExtension(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
@@ -275,11 +283,15 @@ test checkForMarkdownExtension {
 }
 
 fn expectDestinationFileForPath(expected: ?[]const u8, path: []const u8) !void {
-    const actual = state.destination_files[state.source_files.get(path).?];
-    if (expected) |expected_string| {
-        try std.testing.expectEqualStrings(expected_string, actual.?);
+    const destination_file = for (state.source_files.items, 0..) |candidate, index| {
+        if (std.mem.eql(u8, candidate, path)) {
+            break state.destination_files.items[index];
+        }
+    } else null;
+    if (expected != null and destination_file != null) {
+        try std.testing.expectEqualStrings(expected.?, destination_file.?);
     } else {
-        try std.testing.expectEqual(null, actual);
+        try std.testing.expectEqual(expected, destination_file);
     }
 }
 
@@ -315,7 +327,6 @@ test "addFilesInDir: non-existing directory" {
     defer std.testing.allocator.free(root_path);
     try scanSourceFiles(std.testing.allocator, root_path);
     defer state.deinit();
-    defer std.testing.allocator.free(state.destination_files);
 
     try std.testing.expectError(error.PrettyError, addFilesInDir("made-up", .none));
 }
@@ -367,29 +378,30 @@ fn generateSite(allocator: std.mem.Allocator, output_dir_path: []const u8) !void
     var output_dir = try state.source_root.openDir(output_dir_path, .{});
     defer output_dir.close();
 
-    const buffer = try allocator.alloc(u8, 1000);
-    defer allocator.free(buffer);
-
     var source_dir_iter = state.source_dirs.keyIterator();
     while (source_dir_iter.next()) |dir_path| {
         try output_dir.makePath(dir_path.*);
     }
 
-    var source_file_iter = state.source_files.iterator();
-    while (source_file_iter.next()) |entry| {
-        const source_path = entry.key_ptr.*;
-        if (state.destination_files[entry.value_ptr.*]) |destination_path| {
-            // I'd like to use the below, but get the following error when I do:
-            //     hidden symbol `__dso_handle' isn't defined
-            // try source_root.copyFile(source_path, output_dir, destination_path, .{});
-
-            var fifo = std.fifo.LinearFifo(u8, .Slice).init(buffer);
-            defer fifo.deinit();
-            const from_file = try state.source_root.openFile(source_path, .{});
-            defer from_file.close();
-            const to_file = try output_dir.createFile(destination_path, .{ .truncate = true, .exclusive = true });
-            defer to_file.close();
-            try fifo.pump(from_file.reader(), to_file.writer());
-        }
+    const buffer = try allocator.alloc(u8, 1000);
+    defer allocator.free(buffer);
+    var fifo = std.fifo.LinearFifo(u8, .Slice).init(buffer);
+    for (0..state.source_files.items.len) |index| {
+        try generateSitePath(&fifo, output_dir, index);
     }
+}
+
+fn generateSitePath(fifo: anytype, output_dir: std.fs.Dir, index: usize) !void {
+    // I'd like to use the below, but get the following error when I do:
+    //     hidden symbol `__dso_handle' isn't defined
+    // try state.source_root.copyFile(source_path, output_dir, destination_path, .{});
+
+    const destination_path = state.destination_files.items[index] orelse return void{};
+    const source_path = state.source_files.items[index];
+    defer fifo.deinit();
+    const from_file = try state.source_root.openFile(source_path, .{});
+    defer from_file.close();
+    const to_file = try output_dir.createFile(destination_path, .{ .truncate = true, .exclusive = true });
+    defer to_file.close();
+    try fifo.pump(from_file.reader(), to_file.writer());
 }
