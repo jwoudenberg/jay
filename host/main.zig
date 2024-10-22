@@ -26,8 +26,10 @@ export fn roc_panic(msg: *RocStr, tag_id: u32) callconv(.C) void {
 }
 
 export fn roc_dbg(loc: *RocStr, msg: *RocStr, src: *RocStr) callconv(.C) void {
-    const stderr = std.io.getStdErr().writer();
-    stderr.print("[{s}] {s} = {s}\n", .{ loc.asSlice(), src.asSlice(), msg.asSlice() }) catch unreachable;
+    if (!builtin.is_test) {
+        const stderr = std.io.getStdErr().writer();
+        stderr.print("[{s}] {s} = {s}\n", .{ loc.asSlice(), src.asSlice(), msg.asSlice() }) catch unreachable;
+    }
 }
 
 export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void {
@@ -254,8 +256,10 @@ test "addFilesInDir: non-existing directory" {
 // For use in situations where we want to show a pretty helpful error.
 // 'pretty' is relative, much work to do here to really live up to that.
 fn failPrettily(comptime format: []const u8, args: anytype) !noreturn {
-    const stderr = std.io.getStdErr().writer();
-    try stderr.print(format, args);
+    if (!builtin.is_test) {
+        const stderr = std.io.getStdErr().writer();
+        try stderr.print(format, args);
+    }
     return error.PrettyError;
 }
 
