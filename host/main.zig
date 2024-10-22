@@ -3,6 +3,9 @@ const builtin = @import("builtin");
 const RocStr = @import("roc/str.zig").RocStr;
 const RocList = @import("roc/list.zig").RocList;
 const RocResult = @import("roc/result.zig").RocResult;
+const c = @cImport({
+    @cInclude("cmark-gfm.h");
+});
 
 export fn roc_alloc(size: usize, alignment: u32) callconv(.C) *anyopaque {
     _ = alignment;

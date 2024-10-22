@@ -1,0 +1,16 @@
+.{
+    .name = "jay",
+    .version = "0.0.0",
+    .minimum_zig_version = "0.13.0",
+    .dependencies = .{
+        .@"libcmark-gfm" = .{
+            .url = "https://github.com/abhinav/libcmark-gfm.zig/archive/0.1.0.tar.gz",
+            .hash = "1220b8a2a0e06f9adbe77b64be7482f5814383e647ced9a332f100044881af5e23a7",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "host",
+    },
+}

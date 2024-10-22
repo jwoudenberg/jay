@@ -24,7 +24,7 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
     build_dynhost.addObjectFile(libapp);
-    build_dynhost.linkLibC(); // provides malloc/free/.. used in main.zig
+    try addZigDependencies(b, target, optimize, build_dynhost);
 
     // Build the host again, this time as a library for static linking.
     const build_libhost = b.addStaticLibrary(.{
@@ -33,8 +33,7 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
-    build_libhost.bundle_compiler_rt = true;
-    build_libhost.linkLibC(); // provides malloc/free/.. used in main.zig
+    try addZigDependencies(b, target, optimize, build_libhost);
 
     // Run the Roc surgical linker to tie together our Roc platform and host
     // into something that can be packed up and used as a platform by others.
@@ -99,4 +98,21 @@ pub fn build(b: *std.Build) !void {
     // running the unit tests.
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_exe_unit_tests.step);
+}
+
+fn addZigDependencies(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    step: *std.Build.Step.Compile,
+) !void {
+    const libcmark_gfm = b.dependency("libcmark-gfm", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
+    step.bundle_compiler_rt = true;
+    step.linkLibC(); // provides malloc/free/.. used in main.zig
+    step.linkLibrary(libcmark_gfm.artifact("cmark-gfm"));
+    step.linkLibrary(libcmark_gfm.artifact("cmark-gfm-extensions"));
 }
