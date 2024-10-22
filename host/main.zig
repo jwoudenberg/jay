@@ -193,7 +193,7 @@ fn copy(pages: *RocPages) !void {
         const elements = pages.dirs.elements(RocStr) orelse return error.RocListUnexpectedlyEmpty;
         for (elements, 0..dirs_len) |roc_str, _| {
             const path = dropLeadingSlash(roc_str.asSlice());
-            try addFilesInDir(dropLeadingSlash(path));
+            try addFilesInDir(dropLeadingSlash(path), pages.conversion);
         }
     }
 
@@ -204,7 +204,8 @@ fn copy(pages: *RocPages) !void {
         for (elements, 0..files_len) |roc_str, _| {
             const path = dropLeadingSlash(roc_str.asSlice());
             if (state.source_files.get(path)) |id| {
-                state.destination_files[id] = try state.arena.allocator().dupe(u8, path);
+                const file_path = try state.arena.allocator().dupe(u8, path);
+                try addFile(file_path, id, pages.conversion);
             } else {
                 try failPrettily("Can't read file '{s}'\n", .{path});
             }
@@ -212,7 +213,7 @@ fn copy(pages: *RocPages) !void {
     }
 }
 
-fn addFilesInDir(dir_path: []const u8) !void {
+fn addFilesInDir(dir_path: []const u8, conversion: RocConversion) !void {
     if (!state.source_dirs.contains(dir_path)) {
         try failPrettily("Can't read directory '{s}'\n", .{dir_path});
     }
@@ -221,10 +222,56 @@ fn addFilesInDir(dir_path: []const u8) !void {
         const file_path = entry.key_ptr.*;
         if (std.fs.path.dirname(file_path)) |file_dir| {
             if (std.mem.eql(u8, file_dir, dir_path)) {
-                state.destination_files[entry.value_ptr.*] = file_path;
+                try addFile(file_path, entry.value_ptr.*, conversion);
             }
         }
     }
+}
+
+fn addFile(source_path: []const u8, index: u32, conversion: RocConversion) !void {
+    const destination_path = switch (conversion) {
+        .none => source_path,
+        .markdown => try changeMarkdownExtension(state.arena.allocator(), source_path),
+    };
+    state.destination_files[index] = destination_path;
+}
+
+fn changeMarkdownExtension(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
+    const extension = try checkForMarkdownExtension(path);
+    return std.fmt.allocPrint(
+        allocator,
+        "{s}.html",
+        .{path[0..(path.len - extension.len)]},
+    );
+}
+
+test changeMarkdownExtension {
+    const actual = try changeMarkdownExtension(std.testing.allocator, "file.md");
+    defer std.testing.allocator.free(actual);
+    try std.testing.expectEqualStrings("file.html", actual);
+
+    try std.testing.expectError(error.PrettyError, changeMarkdownExtension(
+        std.testing.allocator,
+        "file.txt",
+    ));
+}
+
+fn checkForMarkdownExtension(path: []const u8) ![]const u8 {
+    const extension = std.fs.path.extension(path);
+    if (std.ascii.eqlIgnoreCase(extension, ".md") or
+        std.ascii.eqlIgnoreCase(extension, ".markdown"))
+    {
+        return extension;
+    } else {
+        try failPrettily("You're asking me to process a file as markdown, but it does not have a markdown file extension: {s}", .{path});
+    }
+}
+
+test checkForMarkdownExtension {
+    try std.testing.expectEqualStrings(".md", try checkForMarkdownExtension("file.md"));
+    try std.testing.expectEqualStrings(".MD", try checkForMarkdownExtension("file.MD"));
+    try std.testing.expectEqualStrings(".MarkDown", try checkForMarkdownExtension("file.MarkDown"));
+    try std.testing.expectError(error.PrettyError, checkForMarkdownExtension("file.txt"));
 }
 
 fn expectDestinationFileForPath(expected: ?[]const u8, path: []const u8) !void {
@@ -253,7 +300,7 @@ test "addFilesInDir: directory with source_files" {
     try scanSourceFiles(std.testing.allocator, root_path);
     defer state.deinit();
 
-    try addFilesInDir("project");
+    try addFilesInDir("project", .none);
 
     try expectDestinationFileForPath("project/file.1", "project/file.1");
     try expectDestinationFileForPath("project/file.2", "project/file.2");
@@ -270,7 +317,7 @@ test "addFilesInDir: non-existing directory" {
     defer state.deinit();
     defer std.testing.allocator.free(state.destination_files);
 
-    try std.testing.expectError(error.PrettyError, addFilesInDir("made-up"));
+    try std.testing.expectError(error.PrettyError, addFilesInDir("made-up", .none));
 }
 
 // For use in situations where we want to show a pretty helpful error.
