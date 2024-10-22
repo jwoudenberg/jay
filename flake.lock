@@ -100,17 +100,17 @@
         "rust-overlay": "rust-overlay"
       },
       "locked": {
-        "lastModified": 1729534037,
-        "narHash": "sha256-quFcG6uJOExCP0N67XojysqJCt8oU55q9QyzX9TNBz8=",
-        "ref": "refs/heads/expose-original-script-to-host",
-        "rev": "1229819eb1b2aabf95ed1d458832a5faaf7df853",
-        "revCount": 29600,
-        "type": "git",
-        "url": "file:/home/jasper/dev/roc"
+        "lastModified": 1729543405,
+        "narHash": "sha256-oCjktLO+mSOTQpuRJAGjsRnIBrRmTdHNfYxdc+BRP1o=",
+        "owner": "roc-lang",
+        "repo": "roc",
+        "rev": "ff83fd6e3ef64b48f7b4d3399377a1c1ab7ce331",
+        "type": "github"
       },
       "original": {
-        "type": "git",
-        "url": "file:/home/jasper/dev/roc"
+        "owner": "roc-lang",
+        "repo": "roc",
+        "type": "github"
       }
     },
     "root": {
