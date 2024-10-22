@@ -129,7 +129,19 @@ fn scanSourceFiles(child_allocator: std.mem.Allocator, root_path: []const u8) !v
     defer walker.deinit();
     var next_id: u32 = 0;
     while (try walker.next()) |entry| {
-        if (entry.kind == .directory) {
+        if (ignorePath(entry.path)) {
+            if (entry.kind == .directory) {
+                // Reaching into the walker internals here to skip an entire
+                // directory, similar to how the walker implementation does
+                // this itself in a couple of places. This avoids needing to
+                // iterate through potentially large amounts of ignored files,
+                // for instance a .git directory.
+                var item = walker.stack.pop();
+                if (walker.stack.items.len != 0) {
+                    item.iter.dir.close();
+                }
+            }
+        } else if (entry.kind == .directory) {
             try source_dirs.put(try allocator.dupe(u8, entry.path), void{});
         } else if (entry.kind == .file) {
             try source_files.put(try allocator.dupe(u8, entry.path), next_id);
@@ -145,6 +157,11 @@ fn scanSourceFiles(child_allocator: std.mem.Allocator, root_path: []const u8) !v
         .source_dirs = source_dirs,
         .destination_files = destination_files,
     };
+}
+
+fn ignorePath(path: []const u8) bool {
+    // TODO: add .gitignore behavior.
+    return std.mem.eql(u8, path, ".git");
 }
 
 const RocPages = extern struct {
