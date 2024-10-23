@@ -98,12 +98,6 @@ pub fn build(b: *std.Build) !void {
         .install_subdir = "glue",
     }).step);
 
-    // Short-hand for compiling and then running the example application.
-    const run_example = b.addSystemCommand(&.{"./example/simple.roc"});
-    const run_step = b.step("run", "Run the example");
-    run_step.dependOn(b.getInstallStep());
-    run_step.dependOn(&run_example.step);
-
     const exe_unit_tests = b.addTest(.{
         .root_source_file = b.path("host/main.zig"),
         .target = target,
