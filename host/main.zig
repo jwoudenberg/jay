@@ -383,25 +383,49 @@ fn generateSite(allocator: std.mem.Allocator, output_dir_path: []const u8) !void
         try output_dir.makePath(dir_path.*);
     }
 
-    const buffer = try allocator.alloc(u8, 1000);
+    const buffer = try allocator.alloc(u8, 1024);
     defer allocator.free(buffer);
     var fifo = std.fifo.LinearFifo(u8, .Slice).init(buffer);
+    defer fifo.deinit();
     for (0..state.source_files.items.len) |index| {
-        try generateSitePath(&fifo, output_dir, index);
+        try generateSitePath(allocator, &fifo, output_dir, index);
     }
 }
 
-fn generateSitePath(fifo: anytype, output_dir: std.fs.Dir, index: usize) !void {
-    // I'd like to use the below, but get the following error when I do:
-    //     hidden symbol `__dso_handle' isn't defined
-    // try state.source_root.copyFile(source_path, output_dir, destination_path, .{});
-
+fn generateSitePath(
+    allocator: std.mem.Allocator,
+    fifo: anytype,
+    output_dir: std.fs.Dir,
+    index: usize,
+) !void {
     const destination_path = state.destination_files.items[index] orelse return void{};
     const source_path = state.source_files.items[index];
-    defer fifo.deinit();
-    const from_file = try state.source_root.openFile(source_path, .{});
-    defer from_file.close();
-    const to_file = try output_dir.createFile(destination_path, .{ .truncate = true, .exclusive = true });
-    defer to_file.close();
-    try fifo.pump(from_file.reader(), to_file.writer());
+    const processing = state.processing.items[index] orelse return error.UnexpectedMissingElement;
+    switch (processing) {
+        .none => {
+            // I'd like to use the below, but get the following error when I do:
+            //     hidden symbol `__dso_handle' isn't defined
+            // try state.source_root.copyFile(source_path, output_dir, destination_path, .{});
+
+            const from_file = try state.source_root.openFile(source_path, .{});
+            defer from_file.close();
+            const to_file = try output_dir.createFile(destination_path, .{ .truncate = true, .exclusive = true });
+            defer to_file.close();
+            try fifo.pump(from_file.reader(), to_file.writer());
+        },
+        .markdown => {
+            // TODO: figure out what to do if markdown files are larger than this.
+            const markdown = try state.source_root.readFileAlloc(allocator, source_path, 1024 * 1024);
+            defer allocator.free(markdown);
+            const html = c.cmark_markdown_to_html(
+                @ptrCast(markdown),
+                markdown.len,
+                c.CMARK_OPT_DEFAULT | c.CMARK_OPT_UNSAFE,
+            ) orelse return error.OutOfMemory;
+            defer std.c.free(html);
+            const to_file = try output_dir.createFile(destination_path, .{ .truncate = true, .exclusive = true });
+            defer to_file.close();
+            try to_file.writeAll(std.mem.span(html));
+        },
+    }
 }

@@ -1,7 +1,7 @@
 x setup basic zig platform
 x get allocators to work
 x implement `copy`
-implement `fromMarkdown`
+x implement `fromMarkdown`
 implement `bootstrap`
 implement `wrapHtml`
 implement `replaceHtml`
