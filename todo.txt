@@ -15,3 +15,7 @@ run local http server
 automatically reload browser when files change
 generate site in remote cache location
 provide --output flag for production builds
+rss support
+offer way to get next/previous files
+site for jay project with cookbooks
+add changelog

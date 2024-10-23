@@ -12,7 +12,12 @@ pub fn build(b: *std.Build) !void {
     build_libapp.addArgs(&.{ "build", "--lib" });
     build_libapp.addFileArg(b.path("platform/libapp.roc"));
     build_libapp.addArg("--output");
-    const libapp = build_libapp.addOutputFileArg("libapp.so");
+    const libapp = build_libapp.addOutputFileArg(makeTempFilePath(b, "libapp.so"));
+
+    const libcmark_gfm = b.dependency("libcmark-gfm", .{
+        .target = target,
+        .optimize = optimize,
+    });
 
     // Build the host. We're claiming to build an executable here, but I don't
     // think that's exactly right as the artifact produced here is not intended
@@ -24,7 +29,10 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
     build_dynhost.addObjectFile(libapp);
-    try addZigDependencies(b, target, optimize, build_dynhost);
+    build_dynhost.bundle_compiler_rt = true;
+    build_dynhost.linkLibC(); // provides malloc/free/.. used in main.zig
+    build_dynhost.linkLibrary(libcmark_gfm.artifact("cmark-gfm"));
+    build_dynhost.linkLibrary(libcmark_gfm.artifact("cmark-gfm-extensions"));
 
     // Build the host again, this time as a library for static linking.
     const build_libhost = b.addStaticLibrary(.{
@@ -33,7 +41,10 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
-    try addZigDependencies(b, target, optimize, build_libhost);
+    build_libhost.bundle_compiler_rt = true;
+    build_libhost.linkLibC(); // provides malloc/free/.. used in main.zig
+    build_libhost.linkLibrary(libcmark_gfm.artifact("cmark-gfm"));
+    build_libhost.linkLibrary(libcmark_gfm.artifact("cmark-gfm-extensions"));
 
     // Run the Roc surgical linker to tie together our Roc platform and host
     // into something that can be packed up and used as a platform by others.
@@ -63,6 +74,15 @@ pub fn build(b: *std.Build) !void {
     const build_glue_dir = build_glue.addOutputDirectoryArg(b.makeTempPath());
     build_glue.addFileArg(b.path("platform/main-glue.roc"));
 
+    // We need the host's object files along with any C dependencies to be
+    // bundled in a single archive for the legacy linker. The below build
+    // step combines archives using a small bash script included in this repo.
+    const combine_archive = b.addSystemCommand(&.{"/home/jasper/dev/jay/combine-archives.sh"});
+    const combined_archive = combine_archive.addOutputFileArg(makeTempFilePath(b, "combined.a"));
+    combine_archive.addFileArg(libcmark_gfm.artifact("cmark-gfm").getEmittedBin());
+    combine_archive.addFileArg(libcmark_gfm.artifact("cmark-gfm-extensions").getEmittedBin());
+    combine_archive.addFileArg(build_libhost.getEmittedBin());
+
     b.getInstallStep().dependOn(&b.addInstallDirectory(.{
         .source_dir = b.path("platform"),
         .install_dir = .{ .prefix = {} },
@@ -70,7 +90,7 @@ pub fn build(b: *std.Build) !void {
         .include_extensions = &.{"roc"},
     }).step);
     b.getInstallStep().dependOn(&b.addInstallFile(build_dynhost.getEmittedBin(), "platform/dynhost").step);
-    b.getInstallStep().dependOn(&b.addInstallFile(build_libhost.getEmittedBin(), "platform/linux-x64.a").step);
+    b.getInstallStep().dependOn(&b.addInstallFile(combined_archive, "platform/linux-x64.a").step);
     b.getInstallStep().dependOn(&b.addInstallFile(libapp, "platform/libapp.so").step);
     b.getInstallStep().dependOn(&b.addInstallDirectory(.{
         .source_dir = build_glue_dir,
@@ -100,19 +120,6 @@ pub fn build(b: *std.Build) !void {
     test_step.dependOn(&run_exe_unit_tests.step);
 }
 
-fn addZigDependencies(
-    b: *std.Build,
-    target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-    step: *std.Build.Step.Compile,
-) !void {
-    const libcmark_gfm = b.dependency("libcmark-gfm", .{
-        .target = target,
-        .optimize = optimize,
-    });
-
-    step.bundle_compiler_rt = true;
-    step.linkLibC(); // provides malloc/free/.. used in main.zig
-    step.linkLibrary(libcmark_gfm.artifact("cmark-gfm"));
-    step.linkLibrary(libcmark_gfm.artifact("cmark-gfm-extensions"));
+fn makeTempFilePath(b: *std.Build, filename: []const u8) []const u8 {
+    return b.pathJoin(&[_][]const u8{ b.makeTempPath(), filename });
 }
