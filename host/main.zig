@@ -96,6 +96,8 @@ pub fn main() void {
     }
 }
 
+const output_path = "output";
+
 fn run() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
@@ -103,7 +105,7 @@ fn run() !void {
     const roc_main_path = args.next() orelse return error.EmptyArgv;
     const project_path = std.fs.path.dirname(roc_main_path) orelse return error.NoProjectPath;
 
-    try scanSourceFiles(allocator, project_path);
+    try scanSourceFiles(allocator, roc_main_path, project_path);
     defer state.deinit();
 
     // call into roc
@@ -119,10 +121,14 @@ fn run() !void {
     roc__mainForHost_1_exposed_generic(captures);
     roc__mainForHost_0_caller(undefined, captures, &out);
 
-    try generateSite(allocator, "output");
+    try generateSite(allocator, output_path);
 }
 
-fn scanSourceFiles(child_allocator: std.mem.Allocator, root_path: []const u8) !void {
+fn scanSourceFiles(
+    child_allocator: std.mem.Allocator,
+    roc_main_path: []const u8,
+    root_path: []const u8,
+) !void {
     var arena = std.heap.ArenaAllocator.init(child_allocator);
     errdefer arena.deinit();
     const allocator = arena.allocator();
@@ -132,10 +138,13 @@ fn scanSourceFiles(child_allocator: std.mem.Allocator, root_path: []const u8) !v
     var source_files = std.ArrayList([]const u8).init(allocator);
     var source_dirs = std.StringHashMap(void).init(allocator);
 
+    const relative_roc_main_path = try std.fs.path.relative(child_allocator, root_path, roc_main_path);
+    defer child_allocator.free(relative_roc_main_path);
+
     var walker = try source_root.walk(allocator);
     defer walker.deinit();
     while (try walker.next()) |entry| {
-        if (glob(".git", entry.path)) {
+        if (try dontScan(entry.path, relative_roc_main_path)) {
             if (entry.kind == .directory) {
                 // Reaching into the walker internals here to skip an entire
                 // directory, similar to how the walker implementation does
@@ -173,14 +182,22 @@ fn scanSourceFiles(child_allocator: std.mem.Allocator, root_path: []const u8) !v
     };
 }
 
+fn dontScan(path: []const u8, relative_roc_main_path: []const u8) !bool {
+    return std.mem.startsWith(u8, path, ".git") or
+        std.mem.startsWith(u8, path, output_path) or
+        std.mem.eql(u8, path, relative_roc_main_path) or
+        std.mem.eql(u8, path, std.fs.path.stem(relative_roc_main_path));
+}
+
 const RocPages = extern struct {
     patterns: RocList,
     processing: RocProcessing,
 };
 
 const RocProcessing = enum(u8) {
-    markdown = 0,
-    none = 1,
+    ignore = 0,
+    markdown = 1,
+    none = 2,
 };
 
 export fn roc_fx_copy(pages: *RocPages) callconv(.C) RocResult(void, void) {
@@ -216,6 +233,7 @@ fn addFilesInPattern(pattern: []const u8, processing: RocProcessing) !void {
 
 fn addFile(source_path: []const u8, index: usize, processing: RocProcessing) !void {
     const destination_path = switch (processing) {
+        .ignore => null,
         .none => source_path,
         .markdown => try changeMarkdownExtension(state.arena.allocator(), source_path),
     };
@@ -319,16 +337,44 @@ fn generateSite(allocator: std.mem.Allocator, output_dir_path: []const u8) !void
     }
 }
 
+fn unmappedFileError() !noreturn {
+    if (builtin.is_test) return error.PrettyError;
+
+    const stderr = std.io.getStdErr().writer();
+
+    try stderr.print(
+        \\Some source files are not matched by any rule.
+        \\If you don't mean to include these in your site,
+        \\you can ignore them like this:
+        \\
+        \\    Site.ignore!
+        \\        [
+        \\
+    , .{});
+    for (state.processing.items, 0..) |processing, index| {
+        if (processing == null) {
+            const source_path = state.source_files.items[index];
+            try stderr.print("            \"{s}\",\n", .{source_path});
+        }
+    }
+    try stderr.print(
+        \\        ]
+    , .{});
+
+    return error.PrettyError;
+}
+
 fn generateSitePath(
     allocator: std.mem.Allocator,
     fifo: anytype,
     output_dir: std.fs.Dir,
     index: usize,
 ) !void {
+    const processing = state.processing.items[index] orelse try unmappedFileError();
     const destination_path = state.destination_files.items[index] orelse return void{};
     const source_path = state.source_files.items[index];
-    const processing = state.processing.items[index] orelse return error.UnexpectedMissingElement;
     switch (processing) {
+        .ignore => {},
         .none => {
             // I'd like to use the below, but get the following error when I do:
             //     hidden symbol `__dso_handle' isn't defined

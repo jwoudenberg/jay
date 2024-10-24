@@ -4,6 +4,7 @@ module [
     bootstrap,
     copy,
     files,
+    ignore,
     meta,
     fromMarkdown,
     wrapHtml,
@@ -37,6 +38,11 @@ bootstrap : Task {} []
 
 files : List Str -> Pages content
 files = \patterns -> @Pages { patterns, processing: None }
+
+ignore : List Str -> Task {} *
+ignore = \patterns ->
+    @Pages { patterns, processing: Ignore }
+    |> copy
 
 meta : Pages * -> List { path : Str }a
 

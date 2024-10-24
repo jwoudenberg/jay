@@ -6,7 +6,7 @@ copy : Box Pages -> Task {} {}
 
 Pages : {
     patterns : List Str,
-    processing : [None, Markdown],
+    processing : [None, Ignore, Markdown],
 }
 
 Xml : List
