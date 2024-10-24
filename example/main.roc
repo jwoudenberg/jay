@@ -2,6 +2,7 @@
 app [main] { pf: platform "../zig-out/platform/main.roc" }
 
 import pf.Site
+import pf.Html exposing [Html]
 
 main =
     Site.files ["/static"]
@@ -9,6 +10,16 @@ main =
 
     Site.files ["/posts", "*.md"]
         |> Site.fromMarkdown
+        |> Site.wrapHtml pageLayout
         |> Site.copy!
 
     Site.ignore! ["README.md"]
+
+pageLayout : Html, _ -> Html
+pageLayout = \contents, _meta ->
+    Html.html {} [
+        Html.head {} [
+            Html.link { href: "/static/main.css", rel: "stylesheet" } [],
+        ],
+        Html.body {} [contents],
+    ]

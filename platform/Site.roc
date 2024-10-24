@@ -50,6 +50,7 @@ fromMarkdown : Pages Markdown -> Pages Html
 fromMarkdown = \@Pages pages -> @Pages { pages & processing: Markdown }
 
 wrapHtml : Pages Html, (Html, meta -> Html) -> Pages Html
+wrapHtml = \pages, _wrapper -> pages
 
 # Replace an HTML element in the passed in pages.
 replaceHtml :
