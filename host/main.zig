@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const RocStr = @import("roc/str.zig").RocStr;
 const RocList = @import("roc/list.zig").RocList;
 const RocResult = @import("roc/result.zig").RocResult;
+const glob = @import("glob.zig").glob;
 const c = @cImport({
     @cInclude("cmark-gfm.h");
 });
@@ -123,16 +124,18 @@ fn run() !void {
 
 fn scanSourceFiles(child_allocator: std.mem.Allocator, root_path: []const u8) !void {
     var arena = std.heap.ArenaAllocator.init(child_allocator);
+    errdefer arena.deinit();
     const allocator = arena.allocator();
     const source_root = std.fs.cwd().openDir(root_path, .{ .iterate = true }) catch |err| {
         try failPrettily("Cannot access directory containing {s}: '{}'\n", .{ root_path, err });
     };
     var source_files = std.ArrayList([]const u8).init(allocator);
     var source_dirs = std.StringHashMap(void).init(allocator);
+
     var walker = try source_root.walk(allocator);
     defer walker.deinit();
     while (try walker.next()) |entry| {
-        if (ignorePath(entry.path)) {
+        if (glob(".git", entry.path)) {
             if (entry.kind == .directory) {
                 // Reaching into the walker internals here to skip an entire
                 // directory, similar to how the walker implementation does
@@ -170,14 +173,8 @@ fn scanSourceFiles(child_allocator: std.mem.Allocator, root_path: []const u8) !v
     };
 }
 
-fn ignorePath(path: []const u8) bool {
-    // TODO: add .gitignore behavior.
-    return std.mem.eql(u8, path, ".git");
-}
-
 const RocPages = extern struct {
-    dirs: RocList,
-    files: RocList,
+    patterns: RocList,
     processing: RocProcessing,
 };
 
@@ -195,43 +192,25 @@ export fn roc_fx_copy(pages: *RocPages) callconv(.C) RocResult(void, void) {
 }
 
 fn copy(pages: *RocPages) !void {
-    // Process dirs.
-    const dirs_len = pages.dirs.len();
-    if (dirs_len > 0) {
-        const elements = pages.dirs.elements(RocStr) orelse return error.RocListUnexpectedlyEmpty;
-        for (elements, 0..dirs_len) |roc_str, _| {
-            const path = dropLeadingSlash(roc_str.asSlice());
-            try addFilesInDir(dropLeadingSlash(path), pages.processing);
-        }
-    }
-
-    // Process files.
-    const files_len = pages.files.len();
-    if (files_len > 0) {
-        const elements = pages.files.elements(RocStr) orelse return error.RocListUnexpectedlyEmpty;
-        for (elements, 0..files_len) |roc_str, _| {
-            const path = dropLeadingSlash(roc_str.asSlice());
-            for (state.source_files.items, 0..) |candidate, index| {
-                if (std.mem.eql(u8, candidate, path)) {
-                    const file_path = try state.arena.allocator().dupe(u8, path);
-                    break try addFile(file_path, index, pages.processing);
-                }
-            } else {
-                try failPrettily("Can't read file '{s}'\n", .{path});
-            }
+    const patterns_len = pages.patterns.len();
+    if (patterns_len > 0) {
+        const elements = pages.patterns.elements(RocStr) orelse return error.RocListUnexpectedlyEmpty;
+        for (elements, 0..patterns_len) |roc_str, _| {
+            try addFilesInPattern(roc_str.asSlice(), pages.processing);
         }
     }
 }
 
-fn addFilesInDir(dir_path: []const u8, processing: RocProcessing) !void {
-    if (!state.source_dirs.contains(dir_path)) {
-        try failPrettily("Can't read directory '{s}'\n", .{dir_path});
-    }
+fn addFilesInPattern(pattern: []const u8, processing: RocProcessing) !void {
+    var none_matched = true;
     for (state.source_files.items, 0..) |file_path, index| {
-        const file_dir = std.fs.path.dirname(file_path) orelse continue;
-        if (std.mem.eql(u8, file_dir, dir_path)) {
+        if (glob(pattern, file_path)) {
+            none_matched = false;
             try addFile(file_path, index, processing);
         }
+    }
+    if (none_matched) {
+        try failPrettily("The pattern '{s}' did not match any files", .{pattern});
     }
 }
 
@@ -295,42 +274,6 @@ fn expectDestinationFileForPath(expected: ?[]const u8, path: []const u8) !void {
     }
 }
 
-test "addFilesInDir: directory with source_files" {
-    var tmpdir = std.testing.tmpDir(.{});
-    defer tmpdir.cleanup();
-    const root_path = try tmpdir.parent_dir.realpathAlloc(std.testing.allocator, &tmpdir.sub_path);
-    defer std.testing.allocator.free(root_path);
-    const project_dir = tmpdir.dir;
-
-    try project_dir.makeDir("project");
-    try project_dir.makeDir("project/subdir");
-    try project_dir.writeFile(.{ .sub_path = "project/file.1", .data = &[_]u8{} });
-    try project_dir.writeFile(.{ .sub_path = "project/file.2", .data = &[_]u8{} });
-    try project_dir.writeFile(.{ .sub_path = "project/subdir/file.3", .data = &[_]u8{} });
-    try project_dir.writeFile(.{ .sub_path = "file.4", .data = &[_]u8{} });
-
-    try scanSourceFiles(std.testing.allocator, root_path);
-    defer state.deinit();
-
-    try addFilesInDir("project", .none);
-
-    try expectDestinationFileForPath("project/file.1", "project/file.1");
-    try expectDestinationFileForPath("project/file.2", "project/file.2");
-    try expectDestinationFileForPath(null, "project/subdir/file.3");
-    try expectDestinationFileForPath(null, "file.4");
-}
-
-test "addFilesInDir: non-existing directory" {
-    var tmpdir = std.testing.tmpDir(.{});
-    defer tmpdir.cleanup();
-    const root_path = try tmpdir.parent_dir.realpathAlloc(std.testing.allocator, &tmpdir.sub_path);
-    defer std.testing.allocator.free(root_path);
-    try scanSourceFiles(std.testing.allocator, root_path);
-    defer state.deinit();
-
-    try std.testing.expectError(error.PrettyError, addFilesInDir("made-up", .none));
-}
-
 // For use in situations where we want to show a pretty helpful error.
 // 'pretty' is relative, much work to do here to really live up to that.
 fn failPrettily(comptime format: []const u8, args: anytype) !noreturn {
@@ -349,22 +292,6 @@ fn failCrudely(err: anyerror) noreturn {
         failPrettily("Error: {}", .{err}) catch {};
     }
     std.process.exit(1);
-}
-
-fn dropLeadingSlash(path: []const u8) []const u8 {
-    if (path.len == 0) {
-        return path;
-    } else if (std.fs.path.isSep(path[0])) {
-        return path[1..];
-    } else {
-        return path;
-    }
-}
-
-test "dropLeadingSlash" {
-    try std.testing.expectEqualStrings("", dropLeadingSlash(""));
-    try std.testing.expectEqualStrings("foo/bar", dropLeadingSlash("/foo/bar"));
-    try std.testing.expectEqualStrings("foo/bar", dropLeadingSlash("foo/bar"));
 }
 
 fn generateSite(allocator: std.mem.Allocator, output_dir_path: []const u8) !void {

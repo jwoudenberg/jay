@@ -3,7 +3,7 @@ module [
     Html,
     bootstrap,
     copy,
-    match,
+    files,
     meta,
     fromMarkdown,
     wrapHtml,
@@ -35,8 +35,8 @@ copy = \@Pages pages ->
 # Parse directory structure and rewrite main.roc with initial implementation.
 bootstrap : Task {} []
 
-match : { files ? List Str, dirs ? List Str } -> Pages content
-match = \{ files ? [], dirs ? [] } -> @Pages { files, dirs, processing: None }
+files : List Str -> Pages content
+files = \patterns -> @Pages { patterns, processing: None }
 
 meta : Pages * -> List { path : Str }a
 
