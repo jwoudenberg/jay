@@ -5,11 +5,9 @@ module [
     copy,
     files,
     ignore,
-    meta,
     fromMarkdown,
     wrapHtml,
     replaceHtml,
-    page,
     toHtml,
 ]
 
@@ -36,37 +34,28 @@ copy = \@Pages pages ->
 # Parse directory structure and rewrite main.roc with initial implementation.
 bootstrap : Task {} []
 
-files : List Str -> Pages content
-files = \patterns -> @Pages { patterns, processing: None }
+files : Str, List Str -> Pages content
+files = \_name, patterns -> @Pages { patterns, processing: None }
 
 ignore : List Str -> Task {} *
 ignore = \patterns ->
     @Pages { patterns, processing: Ignore }
     |> copy
 
-meta : Pages * -> List { path : Str }a
-
 fromMarkdown : Pages Markdown -> Pages Html
 fromMarkdown = \@Pages pages -> @Pages { pages & processing: Markdown }
 
-wrapHtml : Pages Html, (Html, meta -> Html) -> Pages Html
+wrapHtml : Pages Html, (Html -> Html) -> Pages Html
 wrapHtml = \pages, _wrapper -> pages
 
 # Replace an HTML element in the passed in pages.
-replaceHtml :
-    Pages Html,
-    Str,
-    ({ meta : meta, attrs : attrs, content : Html } -> Html)
-    -> Pages Html
-
-# Advanced: Used to create pages from nothing, i.e. not from a template
-page : Str, Html, meta -> Pages Html
+replaceHtml : Pages Html, Str, ({}attrs, Html -> Html) -> Pages Html
 
 # Advanced: Used to implement functions like 'fromMarkdown'
 toHtml :
     {
         extension : Str,
-        parser : List U8 -> (Html, meta),
+        parser : List U8 -> (Html, {}meta),
     },
     Pages content
     -> Pages Html

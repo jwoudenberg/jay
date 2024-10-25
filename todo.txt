@@ -21,3 +21,5 @@ rss support
 offer way to get next/previous files
 site for jay project with cookbooks
 add changelog
+don't scan ingored paths
+add support for pagination

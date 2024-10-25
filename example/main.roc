@@ -5,23 +5,23 @@ import pf.Site
 import pf.Html exposing [Html]
 
 main =
-    Site.files ["/static"]
+    Site.files "static" ["/static"]
         |> Site.copy!
 
-    Site.files ["*.md"]
+    Site.files "pages" ["*.md"]
         |> Site.fromMarkdown
         |> Site.wrapHtml pageLayout
         |> Site.copy!
 
-    Site.files ["/posts"]
+    Site.files "posts" ["/posts"]
         |> Site.fromMarkdown
         |> Site.wrapHtml pageLayout
         |> Site.copy!
 
     Site.ignore! ["README.md"]
 
-pageLayout : Html, _ -> Html
-pageLayout = \contents, _meta ->
+pageLayout : Html -> Html
+pageLayout = \contents ->
     Html.html {} [
         Html.head {} [
             Html.link { href: "/static/main.css", rel: "stylesheet" } [],
