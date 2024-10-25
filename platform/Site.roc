@@ -1,6 +1,5 @@
 module [
     Pages,
-    Html,
     bootstrap,
     copy,
     files,
@@ -12,10 +11,8 @@ module [
 ]
 
 import Effect
-import Effect
-import Html
-
-Html : Html.Html
+import Html exposing [Html]
+import XmlInternal
 
 Markdown := {}
 
@@ -35,18 +32,20 @@ copy = \@Pages pages ->
 bootstrap : Task {} []
 
 files : Str, List Str -> Pages content
-files = \_name, patterns -> @Pages { patterns, processing: None }
+files = \_name, patterns -> @Pages { patterns, processing: None, transforms: [] }
 
 ignore : List Str -> Task {} *
 ignore = \patterns ->
-    @Pages { patterns, processing: Ignore }
+    @Pages { patterns, processing: Ignore, transforms: [] }
     |> copy
 
 fromMarkdown : Pages Markdown -> Pages Html
 fromMarkdown = \@Pages pages -> @Pages { pages & processing: Markdown }
 
 wrapHtml : Pages Html, (Html -> Html) -> Pages Html
-wrapHtml = \pages, _wrapper -> pages
+wrapHtml = \@Pages pages, wrapper ->
+    transform = \xml -> wrapper (XmlInternal.wrap xml) |> XmlInternal.unwrap
+    @Pages { pages & transforms: List.append pages.transforms transform }
 
 # Replace an HTML element in the passed in pages.
 replaceHtml : Pages Html, Str, ({}attrs, Html -> Html) -> Pages Html

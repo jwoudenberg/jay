@@ -191,6 +191,7 @@ fn dontScan(path: []const u8, relative_roc_main_path: []const u8) !bool {
 
 const RocPages = extern struct {
     patterns: RocList,
+    transforms: RocList,
     processing: RocProcessing,
 };
 
