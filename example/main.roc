@@ -8,7 +8,12 @@ main =
     Site.files ["/static"]
         |> Site.copy!
 
-    Site.files ["/posts", "*.md"]
+    Site.files ["*.md"]
+        |> Site.fromMarkdown
+        |> Site.wrapHtml pageLayout
+        |> Site.copy!
+
+    Site.files ["/posts"]
         |> Site.fromMarkdown
         |> Site.wrapHtml pageLayout
         |> Site.copy!
