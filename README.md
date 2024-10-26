@@ -1,5 +1,7 @@
 # Jay - a static site generator for Roc
 
+**IMPORTANT: this project is not nearly done yet! The README below is aspirational!**
+
 Jay takes a directory of files and turns it into a website.
 Let's say you have the following source files:
 
