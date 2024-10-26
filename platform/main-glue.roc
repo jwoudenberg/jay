@@ -5,11 +5,11 @@ platform "glue-types"
     imports []
     provides [mainForHost]
 
-import Effect
+import PagesInternal
 
 GlueTypes : {
-    a : Effect.Pages,
-    b : Effect.Wrapper,
+    a : PagesInternal.PagesInternal,
+    b : PagesInternal.Content,
 }
 
 mainForHost : GlueTypes

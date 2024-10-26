@@ -1,9 +1,9 @@
 platform "jay"
-    requires {} { main : Task {} * }
-    exposes [Site, Html]
+    requires {} { main : List (Pages.Pages a) }
+    exposes [Pages, Html]
     packages {}
-    imports []
+    imports [PagesInternal, Pages]
     provides [mainForHost]
 
-mainForHost : Task {} I32 as Fx
-mainForHost = main
+mainForHost : {} -> List PagesInternal.PagesInternal
+mainForHost = \_ -> List.map main PagesInternal.unwrap

@@ -69,9 +69,7 @@ comptime {
     }
 }
 
-extern fn roc__mainForHost_1_exposed_generic(*anyopaque) callconv(.C) void;
-extern fn roc__mainForHost_1_exposed_size() callconv(.C) i64;
-extern fn roc__mainForHost_0_caller(flags: *anyopaque, closure_data: *anyopaque, output: *RocResult(void, i32)) void;
+extern fn roc__mainForHost_1_exposed_generic(*RocList, *anyopaque) callconv(.C) void;
 
 const State = struct {
     arena: std.heap.ArenaAllocator,
@@ -80,7 +78,7 @@ const State = struct {
     source_dirs: std.StringHashMap(void),
     destination_files: std.ArrayList(?[]const u8),
     processing: std.ArrayList(?RocProcessing),
-    wrapper: std.ArrayList(?[]const Snippet),
+    content: std.ArrayList(?[]const Snippet),
 
     fn deinit(self: *State) void {
         self.arena.deinit();
@@ -109,18 +107,13 @@ fn run() !void {
     try scanSourceFiles(allocator, roc_main_path, project_path);
     defer state.deinit();
 
-    // call into roc
-    const size = @as(usize, @intCast(roc__mainForHost_1_exposed_size()));
-    const captures = roc_alloc(size, @alignOf(u128));
-    defer roc_dealloc(captures, @alignOf(u128));
+    var out: RocList = RocList{ .bytes = null, .length = 0, .capacity_or_alloc_ptr = 0 };
+    roc__mainForHost_1_exposed_generic(&out, undefined);
 
-    var out: RocResult(void, i32) = .{
-        .payload = .{ .ok = void{} },
-        .tag = .RocOk,
-    };
-
-    roc__mainForHost_1_exposed_generic(captures);
-    roc__mainForHost_0_caller(undefined, captures, &out);
+    var out_iterator = RocListIterator(RocPages).init(out);
+    while (out_iterator.next()) |roc_pages| {
+        try copy(roc_pages);
+    }
 
     try generateSite(allocator, output_path);
 }
@@ -173,11 +166,11 @@ fn scanSourceFiles(
         try allocator.alloc(?RocProcessing, source_files.items.len),
     );
     @memset(processing.items, null);
-    const wrapper = std.ArrayList(?[]const Snippet).fromOwnedSlice(
+    const content = std.ArrayList(?[]const Snippet).fromOwnedSlice(
         allocator,
         try allocator.alloc(?[]const Snippet, source_files.items.len),
     );
-    @memset(wrapper.items, null);
+    @memset(content.items, null);
     state = .{
         .arena = arena,
         .source_root = source_root,
@@ -185,7 +178,7 @@ fn scanSourceFiles(
         .source_dirs = source_dirs,
         .destination_files = destination_files,
         .processing = processing,
-        .wrapper = wrapper,
+        .content = content,
     };
 }
 
@@ -197,8 +190,8 @@ fn dontScan(path: []const u8, relative_roc_main_path: []const u8) !bool {
 }
 
 const RocPages = extern struct {
+    content: RocList,
     patterns: RocList,
-    wrapper: RocList,
     processing: RocProcessing,
 };
 
@@ -213,48 +206,40 @@ const Snippet = union(enum) {
     source_contents: void,
 };
 
-const RocWrapper = extern struct { payload: RocWrapperPayload, tag: RocWrapperTag };
+const RocContent = extern struct { payload: RocContentPayload, tag: RocContentTag };
 
-const RocWrapperPayload = extern union {
+const RocContentPayload = extern union {
     snippet: RocList,
     source_contents: void,
 };
 
-const RocWrapperTag = enum(u8) {
+const RocContentTag = enum(u8) {
     RocSnippet = 0,
     RocSourceFile = 1,
 };
 
-export fn roc_fx_copy(pages: *RocPages) callconv(.C) RocResult(void, void) {
-    if (copy(pages)) {
-        return .{ .payload = .{ .ok = void{} }, .tag = .RocOk };
-    } else |err| {
-        failCrudely(err);
-    }
-}
-
-fn copy(pages: *RocPages) !void {
-    const wrapper = try rocListMapToOwnedSlice(
-        RocWrapper,
+fn copy(pages: RocPages) !void {
+    const content = try rocListMapToOwnedSlice(
+        RocContent,
         Snippet,
-        fromRocWrapper,
+        fromRocContent,
         state.arena.allocator(),
-        pages.wrapper,
+        pages.content,
     );
     var patterns_iter = RocListIterator(RocStr).init(pages.patterns);
     while (patterns_iter.next()) |roc_str| {
-        try addFilesInPattern(roc_str.asSlice(), pages.processing, wrapper);
+        try addFilesInPattern(roc_str.asSlice(), pages.processing, content);
     }
 }
 
-fn fromRocWrapper(allocator: std.mem.Allocator, roc_wrapper: RocWrapper) !Snippet {
-    return switch (roc_wrapper.tag) {
+fn fromRocContent(allocator: std.mem.Allocator, roc_content: RocContent) !Snippet {
+    return switch (roc_content.tag) {
         .RocSourceFile => .source_contents,
         .RocSnippet => {
             const snippet = try rocListCopyToOwnedSlice(
                 u8,
                 allocator,
-                roc_wrapper.payload.snippet,
+                roc_content.payload.snippet,
             );
             return .{ .snippet = snippet };
         },
@@ -324,13 +309,13 @@ fn rocListCopyToOwnedSlice(
 fn addFilesInPattern(
     pattern: []const u8,
     processing: RocProcessing,
-    wrapper: []const Snippet,
+    content: []const Snippet,
 ) !void {
     var none_matched = true;
     for (state.source_files.items, 0..) |file_path, index| {
         if (glob(pattern, file_path)) {
             none_matched = false;
-            try addFile(file_path, index, processing, wrapper);
+            try addFile(file_path, index, processing, content);
         }
     }
     if (none_matched) {
@@ -342,7 +327,7 @@ fn addFile(
     source_path: []const u8,
     index: usize,
     processing: RocProcessing,
-    wrapper: []const Snippet,
+    content: []const Snippet,
 ) !void {
     const destination_path = switch (processing) {
         .ignore => null,
@@ -351,7 +336,7 @@ fn addFile(
     };
     state.destination_files.items[index] = destination_path;
     state.processing.items[index] = processing;
-    state.wrapper.items[index] = wrapper;
+    state.content.items[index] = content;
 }
 
 fn changeMarkdownExtension(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
@@ -485,7 +470,7 @@ fn generateSitePath(
 ) !void {
     const processing = state.processing.items[index] orelse try unmappedFileError();
     const destination_path = state.destination_files.items[index] orelse return void{};
-    const wrapper = state.wrapper.items[index] orelse return error.MissingWrapper;
+    const content = state.content.items[index] orelse return error.MissingContent;
     const source_path = state.source_files.items[index];
     switch (processing) {
         .ignore => {},
@@ -498,10 +483,10 @@ fn generateSitePath(
             defer from_file.close();
             const to_file = try output_dir.createFile(destination_path, .{ .truncate = true, .exclusive = true });
             defer to_file.close();
-            for (wrapper) |wrapper_elem| {
-                switch (wrapper_elem) {
+            for (content) |content_elem| {
+                switch (content_elem) {
                     .source_contents => try fifo.pump(from_file.reader(), to_file.writer()),
-                    .snippet => try to_file.writeAll(wrapper_elem.snippet),
+                    .snippet => try to_file.writeAll(content_elem.snippet),
                 }
             }
         },
@@ -517,7 +502,7 @@ fn generateSitePath(
             defer std.c.free(html);
             const to_file = try output_dir.createFile(destination_path, .{ .truncate = true, .exclusive = true });
             defer to_file.close();
-            for (wrapper) |xml| {
+            for (content) |xml| {
                 switch (xml) {
                     .source_contents => try to_file.writeAll(std.mem.span(html)),
                     .snippet => try to_file.writeAll(xml.snippet),

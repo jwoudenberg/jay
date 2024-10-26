@@ -36,9 +36,9 @@ In a directory with some source files, create a file `main.roc` with the followi
 #!/usr/bin/env roc
 app [main] { pf: platform "github.com/jwoudenberg/roc-static-site" }
 
-import Site
+import Pages
 
-main = Site.bootstrap
+main = Pages.bootstrap
 ```
 
 The shebang on the first line makes it a script. Run it by typing `./main.roc`. This will:

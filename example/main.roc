@@ -1,27 +1,30 @@
 #!/usr/bin/env roc
 app [main] { pf: platform "../zig-out/platform/main.roc" }
 
-import pf.Site
+import pf.Pages
 import pf.Html exposing [Html]
 
-main =
-    Site.files ["/static"]
-        |> Site.copy!
+main = [
+    static,
+    pages,
+    posts,
+    Pages.ignore ["README.md"],
+]
 
-    Site.files ["*.md"]
-        |> Site.fromMarkdown
-        |> Site.wrapHtml pageLayout
-        |> Site.copy!
+static = Pages.files ["/static"]
 
-    Site.files ["/posts"]
-        |> Site.fromMarkdown
-        |> Site.wrapHtml pageLayout
-        |> Site.copy!
+pages =
+    Pages.files ["*.md"]
+    |> Pages.fromMarkdown
+    |> Pages.wrapHtml layout
 
-    Site.ignore! ["README.md"]
+posts =
+    Pages.files ["/posts"]
+    |> Pages.fromMarkdown
+    |> Pages.wrapHtml layout
 
-pageLayout : Html -> Html
-pageLayout = \contents ->
+layout : Html -> Html
+layout = \contents ->
     Html.html {} [
         Html.head {} [
             Html.link { href: "/static/main.css", rel: "stylesheet" } [],

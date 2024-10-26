@@ -1,17 +1,3 @@
 hosted Effect
-    exposes [copy, Pages, Wrapper]
+    exposes []
     imports []
-
-copy : Box Pages -> Task {} {}
-
-Pages : {
-    patterns : List Str,
-    processing : [None, Ignore, Markdown],
-    wrapper : Wrapper,
-}
-
-Wrapper : List
-    [
-        SourceFile,
-        Snippet (List U8),
-    ]

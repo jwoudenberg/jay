@@ -1,13 +1,13 @@
 module [Xml, node, text, wrap, unwrap]
 
-import Effect
+import PagesInternal exposing [Content]
 
-Xml := Effect.Wrapper
+Xml := Content
 
-wrap : Effect.Wrapper -> Xml
+wrap : Content -> Xml
 wrap = \xml -> @Xml xml
 
-unwrap : Xml -> Effect.Wrapper
+unwrap : Xml -> Content
 unwrap = \@Xml xml -> xml
 
 # Escaping performed by this function:
