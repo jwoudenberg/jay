@@ -5,15 +5,15 @@ import pf.Site
 import pf.Html exposing [Html]
 
 main =
-    Site.files "static" ["/static"]
+    Site.files ["/static"]
         |> Site.copy!
 
-    Site.files "pages" ["*.md"]
+    Site.files ["*.md"]
         |> Site.fromMarkdown
         |> Site.wrapHtml pageLayout
         |> Site.copy!
 
-    Site.files "posts" ["/posts"]
+    Site.files ["/posts"]
         |> Site.fromMarkdown
         |> Site.wrapHtml pageLayout
         |> Site.copy!

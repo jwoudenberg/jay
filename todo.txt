@@ -4,8 +4,8 @@ x implement `copy`
 x implement `fromMarkdown`
 x warn if not all source files are mapped
 x warn if pattern matches no files
+x implement `wrapHtml`
 implement `bootstrap`
-implement `wrapHtml`
 implement `replaceHtml`
 support metadata frontmatter
 watch for source-file changes and rebuild
@@ -23,3 +23,5 @@ site for jay project with cookbooks
 add changelog
 don't scan ingored paths
 add support for pagination
+complete Xml module functions
+make Xml module functions take node-specific attributes

@@ -2,15 +2,33 @@ module [Xml, node, text, wrap, unwrap]
 
 import Effect
 
-Xml := Effect.Xml
+Xml := Effect.Wrapper
 
-wrap : Effect.Xml -> Xml
+wrap : Effect.Wrapper -> Xml
 wrap = \xml -> @Xml xml
 
-unwrap : Xml -> Effect.Xml
+unwrap : Xml -> Effect.Wrapper
 unwrap = \@Xml xml -> xml
 
-# TODO: perform escaping of tagname and attributes.
+# Escaping performed by this function:
+# https://www.w3.org/TR/REC-xml/#NT-Name
+#
+# - Tag name
+# Currently not escaped. 'node' is currently used by internal
+# functions that provided harcoded name strings only. If in the
+# future name might be provided by application authors then we might
+# want to escape it.
+#
+# - Attribute names
+# Attribute names are taken from field names. We're relying on Roc's
+# limitations on field names being stricter than XML's limitations on names.
+#
+# - Attribute values
+# Escaping '<', '&', and '"'. We don't escape the single quote character
+# because we consistently encode attributes in double quotes.
+#
+# - Text content
+# Escaping '<' and '&', according to the XML spec.
 node : Str, {}attributes, List Xml -> Xml where attributes implements Encoding
 node = \tagName, attributes, children ->
     openTag =
@@ -26,9 +44,6 @@ node = \tagName, attributes, children ->
     |> List.append (Snippet closeTag)
     |> wrap
 
-text : Str -> Xml
-text = \str -> @Xml [Snippet (Str.toUtf8 str)]
-
 expect
     attrs = { class: "green", id: "key-point" }
     children = [
@@ -43,6 +58,53 @@ expect
         Snippet (Str.toUtf8 "kill"),
         Snippet (Str.toUtf8 "</span>"),
     ]
+
+text : Str -> Xml
+text = \str ->
+    bytes = escape (Str.toUtf8 str) \byte ->
+        when byte is
+            '<' -> Replace ['&', 'l', 't', ';']
+            '&' -> Replace ['&', 'a', 'm', 'p', ';']
+            _ -> Keep
+
+    @Xml [Snippet bytes]
+
+escape : List U8, (U8 -> [Replace (List U8), Keep]) -> List U8
+escape = \unescaped, escapeByte ->
+    escapeOrKeep = \state, byte ->
+        when escapeByte byte is
+            Replace replacement ->
+                afterCopy = copySlice state
+                { afterCopy &
+                    start: afterCopy.start + 1,
+                    escaped: List.concat afterCopy.escaped replacement,
+                }
+
+            Keep -> { state & len: state.len + 1 }
+
+    copySlice = \{ start, len, escaped } -> {
+        start: start + len,
+        len: 0,
+        escaped: List.concat escaped (List.sublist unescaped { start, len }),
+    }
+
+    init = {
+        escaped: List.withCapacity (List.len unescaped),
+        start: 0,
+        len: 0,
+    }
+
+    List.walk unescaped init escapeOrKeep
+    |> copySlice
+    |> .escaped
+
+expect
+    actual = escape (Str.toUtf8 "abXcdXXef") \byte ->
+        when byte is
+            'X' -> Replace ['*', '*']
+            _ -> Keep
+
+    Str.fromUtf8 actual == Ok "ab**cd****ef"
 
 HtmlAttributes := {}
     implements [
@@ -114,7 +176,13 @@ encodeBool = \_ -> crash "can't encode Bool"
 encodeString : Str -> Encoder HtmlAttributes
 encodeString = \str ->
     Encode.custom \bytes, @HtmlAttributes _ ->
-        List.concatUtf8 bytes str
+        escaped = escape (Str.toUtf8 str) \byte ->
+            when byte is
+                '<' -> Replace ['&', 'l', 't', ';']
+                '&' -> Replace ['&', 'a', 'm', 'p', ';']
+                '"' -> Replace ['&', 'q', 'u', 'o', 't', ';']
+                _ -> Keep
+        List.concat bytes escaped
 
 encodeList : List elem, (elem -> Encoder HtmlAttributes) -> Encoder HtmlAttributes
 encodeList = \_, _ -> crash "can't encode List"

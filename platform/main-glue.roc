@@ -9,6 +9,7 @@ import Effect
 
 GlueTypes : {
     a : Effect.Pages,
+    b : Effect.Wrapper,
 }
 
 mainForHost : GlueTypes

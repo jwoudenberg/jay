@@ -1,5 +1,5 @@
 hosted Effect
-    exposes [copy, Pages, Xml]
+    exposes [copy, Pages, Wrapper]
     imports []
 
 copy : Box Pages -> Task {} {}
@@ -7,10 +7,10 @@ copy : Box Pages -> Task {} {}
 Pages : {
     patterns : List Str,
     processing : [None, Ignore, Markdown],
-    transforms : List (Xml -> Xml),
+    wrapper : Wrapper,
 }
 
-Xml : List
+Wrapper : List
     [
         SourceFile,
         Snippet (List U8),
