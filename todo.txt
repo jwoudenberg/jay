@@ -19,9 +19,12 @@ generate site in remote cache location
 provide --output flag for production builds
 rss support
 offer way to get next/previous files
-site for jay project with cookbooks
 add changelog
 don't scan ingored paths
 add support for pagination
 complete Xml module functions
 make Xml module functions take node-specific attributes
++site for jay project with cookbooks
++site example of gitbook-like site
++site example of blog
++site example of recipe site
