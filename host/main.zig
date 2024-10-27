@@ -234,36 +234,91 @@ export fn roc_fx_copy(pages: *RocPages) callconv(.C) RocResult(void, void) {
 }
 
 fn copy(pages: *RocPages) !void {
-    const wrapper_len = pages.wrapper.len();
-    const allocator = state.arena.allocator();
-    const wrapper = try allocator.alloc(Snippet, wrapper_len);
-    if (wrapper_len > 0) {
-        const elements = pages.wrapper.elements(RocWrapper) orelse return error.RocListUnexpectedlyEmpty;
-        for (elements, 0..wrapper_len) |roc_wrapper, index| {
-            wrapper[index] = switch (roc_wrapper.tag) {
-                .RocSourceFile => blk: {
-                    break :blk .source_contents;
-                },
-                .RocSnippet => blk: {
-                    const snippet_len = roc_wrapper.payload.snippet.len();
-                    const snippet =
-                        if (roc_wrapper.payload.snippet.elements(u8)) |bytes|
-                        try allocator.dupe(u8, bytes[0..snippet_len])
-                    else
-                        try allocator.alloc(u8, 0);
-                    break :blk .{ .snippet = snippet };
-                },
+    const wrapper = try rocListMapToOwnedSlice(
+        RocWrapper,
+        Snippet,
+        fromRocWrapper,
+        state.arena.allocator(),
+        pages.wrapper,
+    );
+    var patterns_iter = RocListIterator(RocStr).init(pages.patterns);
+    while (patterns_iter.next()) |roc_str| {
+        try addFilesInPattern(roc_str.asSlice(), pages.processing, wrapper);
+    }
+}
+
+fn fromRocWrapper(allocator: std.mem.Allocator, roc_wrapper: RocWrapper) !Snippet {
+    return switch (roc_wrapper.tag) {
+        .RocSourceFile => .source_contents,
+        .RocSnippet => {
+            const snippet = try rocListCopyToOwnedSlice(
+                u8,
+                allocator,
+                roc_wrapper.payload.snippet,
+            );
+            return .{ .snippet = snippet };
+        },
+    };
+}
+
+fn RocListIterator(comptime T: type) type {
+    return struct {
+        const Self = @This();
+
+        elements: ?[*]T,
+        len: usize,
+        index: usize,
+
+        fn init(list: RocList) Self {
+            return Self{
+                .elements = list.elements(T),
+                .len = list.len(),
+                .index = 0,
             };
         }
-    }
 
-    const patterns_len = pages.patterns.len();
-    if (patterns_len > 0) {
-        const elements = pages.patterns.elements(RocStr) orelse return error.RocListUnexpectedlyEmpty;
-        for (elements, 0..patterns_len) |roc_str, _| {
-            try addFilesInPattern(roc_str.asSlice(), pages.processing, wrapper);
+        fn next(self: *Self) ?T {
+            if (self.index < self.len) {
+                const elem = self.elements.?[self.index];
+                self.index += 1;
+                return elem;
+            } else {
+                return null;
+            }
         }
+    };
+}
+
+fn rocListMapToOwnedSlice(
+    comptime T: type,
+    comptime O: type,
+    comptime map: fn (allocator: std.mem.Allocator, elem: T) anyerror!O,
+    allocator: std.mem.Allocator,
+    list: RocList,
+) ![]const O {
+    const len = list.len();
+    if (len == 0) return allocator.alloc(O, 0);
+    const elements = list.elements(T) orelse return error.RocListUnexpectedlyEmpty;
+    const slice = try allocator.alloc(O, len);
+    for (elements, 0..len) |element, index| {
+        slice[index] = try map(allocator, element);
     }
+    return slice;
+}
+
+fn rocListCopyToOwnedSlice(
+    comptime T: type,
+    allocator: std.mem.Allocator,
+    list: RocList,
+) ![]const T {
+    const len = list.len();
+    if (len == 0) return allocator.alloc(T, 0);
+    const elements = list.elements(T) orelse return error.RocListUnexpectedlyEmpty;
+    const slice = try allocator.alloc(T, len);
+    for (elements, 0..len) |element, index| {
+        slice[index] = element;
+    }
+    return slice;
 }
 
 fn addFilesInPattern(
