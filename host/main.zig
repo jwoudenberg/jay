@@ -76,15 +76,19 @@ const State = struct {
     source_root: std.fs.Dir,
     source_files: std.ArrayList([]const u8),
     source_dirs: std.StringHashMap(void),
-    destination_files: std.ArrayList(?[]const u8),
-    processing: std.ArrayList(?RocProcessing),
-    content: std.ArrayList(?[]const Snippet),
+    destination_file_paths: std.ArrayList(?[]const u8),
+    destination_file_rules: std.ArrayList(?PageRule),
 
     fn deinit(self: *State) void {
         self.arena.deinit();
     }
 };
-var state: State = undefined;
+
+const PageRule = struct {
+    patterns: []const []const u8,
+    processing: RocProcessing,
+    content: []const Snippet,
+};
 
 pub fn main() void {
     if (run()) {
@@ -104,41 +108,46 @@ fn run() !void {
     const roc_main_path = args.next() orelse return error.EmptyArgv;
     const project_path = std.fs.path.dirname(roc_main_path) orelse return error.NoProjectPath;
 
-    try scanSourceFiles(allocator, roc_main_path, project_path);
+    var roc_pages: RocList = RocList{ .bytes = null, .length = 0, .capacity_or_alloc_ptr = 0 };
+    roc__mainForHost_1_exposed_generic(&roc_pages, undefined);
+
+    const rules = try rocListMapToOwnedSlice(
+        RocPages,
+        PageRule,
+        rocPagesToPageRule,
+        allocator,
+        roc_pages,
+    );
+
+    const ignore_patterns = try getIgnorePatterns(allocator, rules, project_path, roc_main_path);
+    var state = try scanSourceFiles(allocator, project_path, ignore_patterns);
     defer state.deinit();
 
-    var out: RocList = RocList{ .bytes = null, .length = 0, .capacity_or_alloc_ptr = 0 };
-    roc__mainForHost_1_exposed_generic(&out, undefined);
-
-    var out_iterator = RocListIterator(RocPages).init(out);
-    while (out_iterator.next()) |roc_pages| {
-        try copy(roc_pages);
+    for (rules) |rule| {
+        try planRule(&state, rule);
     }
 
-    try generateSite(allocator, output_path);
+    try generateSite(allocator, state, output_path);
 }
 
 fn scanSourceFiles(
     child_allocator: std.mem.Allocator,
-    roc_main_path: []const u8,
-    root_path: []const u8,
-) !void {
+    project_path: []const u8,
+    ignore_patterns: []const []const u8,
+) !State {
     var arena = std.heap.ArenaAllocator.init(child_allocator);
     errdefer arena.deinit();
     const allocator = arena.allocator();
-    const source_root = std.fs.cwd().openDir(root_path, .{ .iterate = true }) catch |err| {
-        try failPrettily("Cannot access directory containing {s}: '{}'\n", .{ root_path, err });
+    const source_root = std.fs.cwd().openDir(project_path, .{ .iterate = true }) catch |err| {
+        try failPrettily("Cannot access directory containing {s}: '{}'\n", .{ project_path, err });
     };
     var source_files = std.ArrayList([]const u8).init(allocator);
     var source_dirs = std.StringHashMap(void).init(allocator);
 
-    const relative_roc_main_path = try std.fs.path.relative(child_allocator, root_path, roc_main_path);
-    defer child_allocator.free(relative_roc_main_path);
-
     var walker = try source_root.walk(allocator);
     defer walker.deinit();
     while (try walker.next()) |entry| {
-        if (try dontScan(entry.path, relative_roc_main_path)) {
+        if (skipInScan(ignore_patterns, entry.path)) {
             if (entry.kind == .directory) {
                 // Reaching into the walker internals here to skip an entire
                 // directory, similar to how the walker implementation does
@@ -156,37 +165,57 @@ fn scanSourceFiles(
             try source_files.append(try allocator.dupe(u8, entry.path));
         }
     }
-    const destination_files = std.ArrayList(?[]const u8).fromOwnedSlice(
+    const destination_file_paths = std.ArrayList(?[]const u8).fromOwnedSlice(
         allocator,
         try allocator.alloc(?[]const u8, source_files.items.len),
     );
-    @memset(destination_files.items, null);
-    const processing = std.ArrayList(?RocProcessing).fromOwnedSlice(
+    @memset(destination_file_paths.items, null);
+    const destination_file_rules = std.ArrayList(?PageRule).fromOwnedSlice(
         allocator,
-        try allocator.alloc(?RocProcessing, source_files.items.len),
+        try allocator.alloc(?PageRule, source_files.items.len),
     );
-    @memset(processing.items, null);
-    const content = std.ArrayList(?[]const Snippet).fromOwnedSlice(
-        allocator,
-        try allocator.alloc(?[]const Snippet, source_files.items.len),
-    );
-    @memset(content.items, null);
-    state = .{
+    @memset(destination_file_rules.items, null);
+    return .{
         .arena = arena,
         .source_root = source_root,
         .source_files = source_files,
         .source_dirs = source_dirs,
-        .destination_files = destination_files,
-        .processing = processing,
-        .content = content,
+        .destination_file_paths = destination_file_paths,
+        .destination_file_rules = destination_file_rules,
     };
 }
 
-fn dontScan(path: []const u8, relative_roc_main_path: []const u8) !bool {
-    return std.mem.startsWith(u8, path, ".git") or
-        std.mem.startsWith(u8, path, output_path) or
-        std.mem.eql(u8, path, relative_roc_main_path) or
-        std.mem.eql(u8, path, std.fs.path.stem(relative_roc_main_path));
+fn skipInScan(ignore_patterns: []const []const u8, path: []const u8) bool {
+    for (ignore_patterns) |pattern| {
+        if (glob(pattern, path)) return true;
+    } else {
+        return false;
+    }
+}
+
+fn getIgnorePatterns(
+    allocator: std.mem.Allocator,
+    rules: []const PageRule,
+    project_path: []const u8,
+    roc_main_path: []const u8,
+) ![]const []const u8 {
+    var ignore_patterns = std.ArrayList([]const u8).init(allocator);
+
+    const relative_roc_main_path = try std.fs.path.relative(allocator, project_path, roc_main_path);
+    const default_ignores = [_][]const u8{
+        ".git",
+        output_path,
+        relative_roc_main_path,
+        std.fs.path.stem(relative_roc_main_path),
+    };
+    try ignore_patterns.appendSlice(&default_ignores);
+
+    for (rules) |rule| {
+        if (rule.processing == .ignore) {
+            try ignore_patterns.appendSlice(rule.patterns);
+        }
+    }
+    return ignore_patterns.toOwnedSlice();
 }
 
 const RocPages = extern struct {
@@ -218,17 +247,33 @@ const RocContentTag = enum(u8) {
     RocSourceFile = 1,
 };
 
-fn copy(pages: RocPages) !void {
-    const content = try rocListMapToOwnedSlice(
-        RocContent,
-        Snippet,
-        fromRocContent,
-        state.arena.allocator(),
-        pages.content,
-    );
-    var patterns_iter = RocListIterator(RocStr).init(pages.patterns);
-    while (patterns_iter.next()) |roc_str| {
-        try addFilesInPattern(roc_str.asSlice(), pages.processing, content);
+fn rocPagesToPageRule(allocator: std.mem.Allocator, pages: RocPages) !PageRule {
+    return .{
+        .patterns = try rocListMapToOwnedSlice(
+            RocStr,
+            []const u8,
+            fromRocPattern,
+            allocator,
+            pages.patterns,
+        ),
+        .processing = pages.processing,
+        .content = try rocListMapToOwnedSlice(
+            RocContent,
+            Snippet,
+            fromRocContent,
+            allocator,
+            pages.content,
+        ),
+    };
+}
+
+fn fromRocPattern(allocator: std.mem.Allocator, roc_pattern: RocStr) ![]const u8 {
+    return try allocator.dupe(u8, roc_pattern.asSlice());
+}
+
+fn planRule(state: *State, rule: PageRule) !void {
+    for (rule.patterns) |pattern| {
+        try addFilesInPattern(state, rule, pattern);
     }
 }
 
@@ -306,16 +351,14 @@ fn rocListCopyToOwnedSlice(
     return slice;
 }
 
-fn addFilesInPattern(
-    pattern: []const u8,
-    processing: RocProcessing,
-    content: []const Snippet,
-) !void {
+fn addFilesInPattern(state: *State, rule: PageRule, pattern: []const u8) !void {
+    if (rule.processing == .ignore) return;
+
     var none_matched = true;
     for (state.source_files.items, 0..) |file_path, index| {
         if (glob(pattern, file_path)) {
             none_matched = false;
-            try addFile(file_path, index, processing, content);
+            try addFile(state, rule, file_path, index);
         }
     }
     if (none_matched) {
@@ -323,20 +366,14 @@ fn addFilesInPattern(
     }
 }
 
-fn addFile(
-    source_path: []const u8,
-    index: usize,
-    processing: RocProcessing,
-    content: []const Snippet,
-) !void {
-    const destination_path = switch (processing) {
+fn addFile(state: *State, rule: PageRule, source_path: []const u8, index: usize) !void {
+    const destination_path = switch (rule.processing) {
         .ignore => null,
         .none => source_path,
         .markdown => try changeMarkdownExtension(state.arena.allocator(), source_path),
     };
-    state.destination_files.items[index] = destination_path;
-    state.processing.items[index] = processing;
-    state.content.items[index] = content;
+    state.destination_file_paths.items[index] = destination_path;
+    state.destination_file_rules.items[index] = rule;
 }
 
 fn changeMarkdownExtension(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
@@ -377,19 +414,6 @@ test checkForMarkdownExtension {
     try std.testing.expectError(error.PrettyError, checkForMarkdownExtension("file.txt"));
 }
 
-fn expectDestinationFileForPath(expected: ?[]const u8, path: []const u8) !void {
-    const destination_file = for (state.source_files.items, 0..) |candidate, index| {
-        if (std.mem.eql(u8, candidate, path)) {
-            break state.destination_files.items[index];
-        }
-    } else null;
-    if (expected != null and destination_file != null) {
-        try std.testing.expectEqualStrings(expected.?, destination_file.?);
-    } else {
-        try std.testing.expectEqual(expected, destination_file);
-    }
-}
-
 // For use in situations where we want to show a pretty helpful error.
 // 'pretty' is relative, much work to do here to really live up to that.
 fn failPrettily(comptime format: []const u8, args: anytype) !noreturn {
@@ -410,7 +434,7 @@ fn failCrudely(err: anyerror) noreturn {
     std.process.exit(1);
 }
 
-fn generateSite(allocator: std.mem.Allocator, output_dir_path: []const u8) !void {
+fn generateSite(allocator: std.mem.Allocator, state: State, output_dir_path: []const u8) !void {
     // Clear output directory if it already exists.
     state.source_root.deleteTree(output_dir_path) catch |err| {
         if (err != error.NotDir) {
@@ -431,11 +455,11 @@ fn generateSite(allocator: std.mem.Allocator, output_dir_path: []const u8) !void
     var fifo = std.fifo.LinearFifo(u8, .Slice).init(buffer);
     defer fifo.deinit();
     for (0..state.source_files.items.len) |index| {
-        try generateSitePath(allocator, &fifo, output_dir, index);
+        try generateSitePath(allocator, state, &fifo, output_dir, index);
     }
 }
 
-fn unmappedFileError() !noreturn {
+fn unmappedFileError(state: State) !noreturn {
     if (builtin.is_test) return error.PrettyError;
 
     const stderr = std.io.getStdErr().writer();
@@ -445,12 +469,12 @@ fn unmappedFileError() !noreturn {
         \\If you don't mean to include these in your site,
         \\you can ignore them like this:
         \\
-        \\    Site.ignore!
+        \\    Site.ignore
         \\        [
         \\
     , .{});
-    for (state.processing.items, 0..) |processing, index| {
-        if (processing == null) {
+    for (state.destination_file_paths.items, 0..) |path, index| {
+        if (path == null) {
             const source_path = state.source_files.items[index];
             try stderr.print("            \"{s}\",\n", .{source_path});
         }
@@ -464,15 +488,15 @@ fn unmappedFileError() !noreturn {
 
 fn generateSitePath(
     allocator: std.mem.Allocator,
+    state: State,
     fifo: anytype,
     output_dir: std.fs.Dir,
     index: usize,
 ) !void {
-    const processing = state.processing.items[index] orelse try unmappedFileError();
-    const destination_path = state.destination_files.items[index] orelse return void{};
-    const content = state.content.items[index] orelse return error.MissingContent;
+    const destination_path = state.destination_file_paths.items[index] orelse try unmappedFileError(state);
+    const rule = state.destination_file_rules.items[index] orelse return error.MissingPageRule;
     const source_path = state.source_files.items[index];
-    switch (processing) {
+    switch (rule.processing) {
         .ignore => {},
         .none => {
             // I'd like to use the below, but get the following error when I do:
@@ -483,7 +507,7 @@ fn generateSitePath(
             defer from_file.close();
             const to_file = try output_dir.createFile(destination_path, .{ .truncate = true, .exclusive = true });
             defer to_file.close();
-            for (content) |content_elem| {
+            for (rule.content) |content_elem| {
                 switch (content_elem) {
                     .source_contents => try fifo.pump(from_file.reader(), to_file.writer()),
                     .snippet => try to_file.writeAll(content_elem.snippet),
@@ -502,7 +526,7 @@ fn generateSitePath(
             defer std.c.free(html);
             const to_file = try output_dir.createFile(destination_path, .{ .truncate = true, .exclusive = true });
             defer to_file.close();
-            for (content) |xml| {
+            for (rule.content) |xml| {
                 switch (xml) {
                     .source_contents => try to_file.writeAll(std.mem.span(html)),
                     .snippet => try to_file.writeAll(xml.snippet),

@@ -5,6 +5,7 @@ x implement `fromMarkdown`
 x warn if not all source files are mapped
 x warn if pattern matches no files
 x implement `wrapHtml`
+x don't scan ingored paths
 implement `bootstrap`
 implement `replaceHtml`
 support metadata frontmatter
@@ -20,7 +21,6 @@ provide --output flag for production builds
 rss support
 offer way to get next/previous files
 add changelog
-don't scan ingored paths
 add support for pagination
 complete Xml module functions
 make Xml module functions take node-specific attributes
