@@ -13,6 +13,7 @@ watch for source-file changes and rebuild
 watch for roc-file changes and rebuild
 warn if site contains broken links
 warn if file matched by multiple patterns
+add timing information to output
 perform partial builds when source file changes
 run local http server
 automatically reload browser when files change
@@ -22,6 +23,7 @@ rss support
 offer way to get next/previous files
 add changelog
 add support for pagination
+add support for search
 complete Xml module functions
 make Xml module functions take node-specific attributes
 +site for jay project with cookbooks

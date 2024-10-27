@@ -4,7 +4,7 @@ Pages a := PagesInternal
 
 PagesInternal : {
     patterns : List Str,
-    processing : [None, Ignore, Markdown],
+    processing : [None, Ignore, Bootstrap, Markdown],
     content : Content,
 }
 
