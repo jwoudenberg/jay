@@ -309,26 +309,24 @@ fn bootstrapPageRules(gpa_allocator: std.mem.Allocator, state: State) ![]const P
         const dir = entry.key_ptr.*;
         const extensions = entry.value_ptr;
         var extensions_iterator = extensions.keyIterator();
-        if (extensions.count() == 1) {
-            const extension = extensions_iterator.next() orelse return error.UnexpectedEmptyExtensionMap;
-            const pattern = try state.allocator.dupe(u8, dir);
+        while (extensions_iterator.next()) |extension| {
+            const pattern =
+                if (dir.len > 0)
+                try std.fmt.allocPrint(
+                    state.allocator,
+                    "{s}/*{s}",
+                    .{ dir, extension.* },
+                )
+            else
+                try std.fmt.allocPrint(
+                    state.allocator,
+                    "*{s}",
+                    .{extension.*},
+                );
             if (isMarkdown(extension.*)) {
                 try markdown_patterns.append(pattern);
             } else {
                 try static_patterns.append(pattern);
-            }
-        } else {
-            while (extensions_iterator.next()) |extension| {
-                const pattern = try std.fmt.allocPrint(
-                    state.allocator,
-                    "{s}/*{s}",
-                    .{ dir, extension.* },
-                );
-                if (isMarkdown(extension.*)) {
-                    try markdown_patterns.append(pattern);
-                } else {
-                    try static_patterns.append(pattern);
-                }
             }
         }
     }
@@ -396,8 +394,8 @@ test bootstrapPageRules {
     const markdown_patterns = try std.testing.allocator.dupe([]const u8, rules[0].patterns);
     defer std.testing.allocator.free(markdown_patterns);
     std.sort.insertion([]const u8, markdown_patterns, {}, compareStrings);
-    try std.testing.expectEqualStrings("", markdown_patterns[0]);
-    try std.testing.expectEqualStrings("markdown_only", markdown_patterns[1]);
+    try std.testing.expectEqualStrings("*.md", markdown_patterns[0]);
+    try std.testing.expectEqualStrings("markdown_only/*.md", markdown_patterns[1]);
     try std.testing.expectEqualStrings("mixed/*.md", markdown_patterns[2]);
 
     try std.testing.expectEqual(.none, rules[1].processing);
