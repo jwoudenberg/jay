@@ -331,31 +331,35 @@ fn bootstrapPageRules(gpa_allocator: std.mem.Allocator, state: State) ![]const P
         }
     }
 
-    const rules = try state.allocator.alloc(PageRule, 3);
-    rules[0] = PageRule{
-        .patterns = try markdown_patterns.toOwnedSlice(),
-        .processing = .markdown,
-        .content = blk: {
-            const snippets = try state.allocator.alloc(Snippet, 1);
-            snippets[0] = .source_contents;
-            break :blk snippets;
-        },
-    };
-    rules[1] = PageRule{
-        .patterns = try static_patterns.toOwnedSlice(),
-        .processing = .none,
-        .content = blk: {
-            const snippets = try state.allocator.alloc(Snippet, 1);
-            snippets[0] = .source_contents;
-            break :blk snippets;
-        },
-    };
-    rules[2] = PageRule{
+    var rules = try std.ArrayList(PageRule).initCapacity(state.allocator, 3);
+    if (markdown_patterns.items.len > 0) {
+        try rules.append(PageRule{
+            .patterns = try markdown_patterns.toOwnedSlice(),
+            .processing = .markdown,
+            .content = blk: {
+                const snippets = try state.allocator.alloc(Snippet, 1);
+                snippets[0] = .source_contents;
+                break :blk snippets;
+            },
+        });
+    }
+    if (static_patterns.items.len > 0) {
+        try rules.append(PageRule{
+            .patterns = try static_patterns.toOwnedSlice(),
+            .processing = .none,
+            .content = blk: {
+                const snippets = try state.allocator.alloc(Snippet, 1);
+                snippets[0] = .source_contents;
+                break :blk snippets;
+            },
+        });
+    }
+    try rules.append(PageRule{
         .patterns = state.ignored_paths.items,
         .processing = .ignore,
         .content = try state.allocator.alloc(Snippet, 0),
-    };
-    return rules;
+    });
+    return rules.items;
 }
 
 fn compareStrings(_: void, lhs: []const u8, rhs: []const u8) bool {
