@@ -70,14 +70,14 @@ pub fn build(b: *std.Build) !void {
     // command as documentation for hand-writing roc types in zig host code.
     const build_glue = b.addSystemCommand(&.{"roc"});
     build_glue.addArgs(&.{"glue"});
-    build_glue.addFileArg(b.path("glue.roc"));
+    build_glue.addFileArg(b.path("build/glue.roc"));
     const build_glue_dir = build_glue.addOutputDirectoryArg(b.makeTempPath());
     build_glue.addFileArg(b.path("platform/main-glue.roc"));
 
     // We need the host's object files along with any C dependencies to be
     // bundled in a single archive for the legacy linker. The below build
     // step combines archives using a small bash script included in this repo.
-    const combine_archive = b.addSystemCommand(&.{"/home/jasper/dev/jay/combine-archives.sh"});
+    const combine_archive = b.addSystemCommand(&.{"build/combine-archives.sh"});
     const combined_archive = combine_archive.addOutputFileArg(makeTempFilePath(b, "combined.a"));
     combine_archive.addFileArg(libcmark_gfm.artifact("cmark-gfm").getEmittedBin());
     combine_archive.addFileArg(libcmark_gfm.artifact("cmark-gfm-extensions").getEmittedBin());
