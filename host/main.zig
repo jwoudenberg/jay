@@ -123,16 +123,21 @@ fn run() !void {
     var state: State = undefined;
 
     if (rules.len == 1 and rules[0].processing == .bootstrap) {
-        const ignores = try getBootstrapIgnorePatterns(roc_main_path);
         state = try scanSourceFiles(
             allocator,
             project_path,
-            ignores[0..],
+            roc_main_path,
+            bootstrap_ignore_patterns[0..],
         );
         rules = try bootstrap(gpa.allocator(), state);
     } else {
-        const ignores = try getIgnorePatterns(allocator, rules, roc_main_path);
-        state = try scanSourceFiles(allocator, project_path, ignores);
+        const ignores = try getRuleIgnorePatterns(allocator, rules);
+        state = try scanSourceFiles(
+            allocator,
+            project_path,
+            roc_main_path,
+            ignores,
+        );
     }
 
     for (rules) |rule| {
@@ -280,7 +285,8 @@ test bootstrapPageRules {
 fn scanSourceFiles(
     allocator: std.mem.Allocator,
     project_path: []const u8,
-    ignore_patterns: []const []const u8,
+    roc_main_path: []const u8,
+    explicit_ignores: []const []const u8,
 ) !State {
     const source_root = std.fs.cwd().openDir(project_path, .{ .iterate = true }) catch |err| {
         try failPrettily("Cannot access directory containing {s}: '{}'\n", .{ project_path, err });
@@ -288,12 +294,17 @@ fn scanSourceFiles(
     var source_files = std.ArrayList([]const u8).init(allocator);
     var ignored_paths = std.ArrayList([]const u8).init(allocator);
     var source_dirs = std.StringHashMap(void).init(allocator);
+    const implicit_ignores = try getImplicitIgnorePatterns(roc_main_path);
 
     var walker = try source_root.walk(allocator);
     defer walker.deinit();
     while (try walker.next()) |entry| {
-        if (skipInScan(ignore_patterns, entry.path)) {
+        const ignore_implicitly = skipInScan(&implicit_ignores, entry.path);
+        const ignore_explicitly = skipInScan(explicit_ignores, entry.path);
+        if (ignore_explicitly) {
             try ignored_paths.append(try allocator.dupe(u8, entry.path));
+        }
+        if (ignore_implicitly or ignore_explicitly) {
             if (entry.kind == .directory) {
                 // Reaching into the walker internals here to skip an entire
                 // directory, similar to how the walker implementation does
@@ -340,20 +351,12 @@ fn skipInScan(ignore_patterns: []const []const u8, path: []const u8) bool {
     }
 }
 
-fn getIgnorePatterns(
+// Read ignore patterns out of the page rules read from code.
+fn getRuleIgnorePatterns(
     allocator: std.mem.Allocator,
     rules: []const PageRule,
-    roc_main_path: []const u8,
 ) ![]const []const u8 {
     var ignore_patterns = std.ArrayList([]const u8).init(allocator);
-
-    const default_ignores = [_][]const u8{
-        output_path,
-        roc_main_path,
-        std.fs.path.stem(roc_main_path),
-    };
-    try ignore_patterns.appendSlice(&default_ignores);
-
     for (rules) |rule| {
         if (rule.processing == .ignore) {
             try ignore_patterns.appendSlice(rule.patterns);
@@ -362,16 +365,23 @@ fn getIgnorePatterns(
     return ignore_patterns.toOwnedSlice();
 }
 
-fn getBootstrapIgnorePatterns(roc_main_path: []const u8) ![6][]const u8 {
+// The Roc file that starts this script as well as anything we generate should
+// be ignored implicitly, i.e. the user should not need to specify these.
+fn getImplicitIgnorePatterns(roc_main_path: []const u8) ![3][]const u8 {
     return .{
-        ".git",
-        ".gitignore",
-        "README*",
         output_path,
         roc_main_path,
         std.fs.path.stem(roc_main_path),
     };
 }
+
+// When running the bootstrap script we have to guess which files the user
+// might want to be ignored. This is our list of such guesses.
+const bootstrap_ignore_patterns = [_][]const u8{
+    ".git",
+    ".gitignore",
+    "README*",
+};
 
 const RocPages = extern struct {
     content: RocList,
