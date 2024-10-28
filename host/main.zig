@@ -285,6 +285,65 @@ fn generateCodeForRules(roc_main_path: []const u8, rules: []const PageRule) !voi
     }
 }
 
+test generateCodeForRules {
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.writeFile(.{ .sub_path = "main.roc", .data = 
+    \\app [main] { pf: platform "some hash here" }
+    \\
+    \\import pf.Pages
+    \\
+    \\main = Pages.bootstrap
+    });
+    const rules = [_]PageRule{
+        PageRule{
+            .processing = .markdown,
+            .patterns = ([_][]const u8{ "posts/*.md", "*.md" })[0..],
+            .content = undefined,
+        },
+        PageRule{
+            .processing = .none,
+            .patterns = ([_][]const u8{"static"})[0..],
+            .content = undefined,
+        },
+        PageRule{
+            .processing = .ignore,
+            .patterns = ([_][]const u8{ ".git", ".gitignore" })[0..],
+            .content = undefined,
+        },
+    };
+    const roc_main_path = try tmp_dir.dir.realpathAlloc(std.testing.allocator, "main.roc");
+    defer std.testing.allocator.free(roc_main_path);
+    try generateCodeForRules(roc_main_path, rules[0..]);
+    const generated = try tmp_dir.dir.readFileAlloc(std.testing.allocator, "main.roc", 1024 * 1024);
+    defer std.testing.allocator.free(generated);
+    try std.testing.expectEqualStrings(generated,
+        \\app [main] { pf: platform "some hash here" }
+        \\
+        \\import pf.Pages
+        \\import pf.Html exposing [Html]
+        \\
+        \\main = [
+        \\    markdownFiles,
+        \\    Pages.files ["static"],
+        \\    Pages.ignore [".git", ".gitignore"],
+        \\]
+        \\
+        \\markdownFiles =
+        \\    Pages.files ["posts/*.md", "*.md"]
+        \\    |> Pages.fromMarkdown
+        \\    |> Pages.wrapHtml layout
+        \\
+        \\layout : Html -> Html
+        \\layout = \contents ->
+        \\    Html.html {} [
+        \\        Html.head {} [],
+        \\        Html.body {} [contents],
+        \\    ]
+        \\
+    );
+}
+
 fn bootstrapPageRules(gpa_allocator: std.mem.Allocator, state: State) ![]const PageRule {
     var arena = std.heap.ArenaAllocator.init(gpa_allocator);
     defer arena.deinit();
