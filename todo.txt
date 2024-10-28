@@ -6,7 +6,7 @@ x warn if not all source files are mapped
 x warn if pattern matches no files
 x implement `wrapHtml`
 x don't scan ingored paths
-implement `bootstrap`
+x implement `bootstrap`
 implement `replaceHtml`
 support metadata frontmatter
 watch for source-file changes and rebuild

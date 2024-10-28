@@ -19,7 +19,7 @@ Pages a : PagesInternal.Pages a
 
 # Parse directory structure and rewrite main.roc with initial implementation.
 bootstrap : List (Pages type)
-bootstrap = []
+bootstrap = [wrap { patterns: [], processing: Bootstrap, content: [] }]
 
 files : List Str -> Pages type
 files = \patterns -> wrap { patterns, processing: None, content: [SourceFile] }

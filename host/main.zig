@@ -129,7 +129,7 @@ fn run() !void {
             roc_main_path,
             bootstrap_ignore_patterns[0..],
         );
-        rules = try bootstrap(gpa.allocator(), state);
+        rules = try bootstrap(gpa.allocator(), state, argv0);
     } else {
         const ignores = try getRuleIgnorePatterns(allocator, rules);
         state = try scanSourceFiles(
@@ -147,8 +147,142 @@ fn run() !void {
     try generateSite(gpa.allocator(), state, output_path);
 }
 
-fn bootstrap(gpa_allocator: std.mem.Allocator, state: State) ![]const PageRule {
-    return bootstrapPageRules(gpa_allocator, state);
+fn bootstrap(
+    gpa_allocator: std.mem.Allocator,
+    state: State,
+    roc_main_path: []const u8,
+) ![]const PageRule {
+    const rules = try bootstrapPageRules(gpa_allocator, state);
+    try generateCodeForRules(roc_main_path, rules);
+    return rules;
+}
+
+fn generateCodeForRules(roc_main_path: []const u8, rules: []const PageRule) !void {
+    const cwd = std.fs.cwd();
+    const file = try cwd.openFile(roc_main_path, .{ .mode = .read_write });
+    defer file.close();
+
+    // The size of my minimal bootstrap examples is 119 bytes at time of
+    // writing. A file might contain some extra whitespace, but if it's much
+    // larger than that then there's unexpected content in the file we don't
+    // want to overwrite by accident.
+    const stat = try file.stat();
+    if (stat.size > 200) {
+        try failPrettily(
+            \\You're asking me to generate bootstrap code, which involves me
+            \\replacing the code in main.roc.
+            \\
+            \\Your main.roc contains a bit more code than I expect and I don't
+            \\want to accidentally delete anything important.
+            \\
+            \\If you're sure you want me to bootstrap delete everything from
+            \\the main.roc file except:
+            \\
+            \\    app [main] {{ pf: platform "<dont change this part>" }}
+            \\
+            \\    import pf.Pages
+            \\
+            \\    main = Pages.bootstrap
+            \\
+        , .{});
+    }
+
+    // Find the end of the app header. We could truncate the entire file and
+    // regenerate the app-header, but then we'd change the platform hash.
+    var reader = file.reader();
+    var end_of_app_declaration_offset: u64 = 0;
+    while (reader.readByte() catch null) |byte| {
+        end_of_app_declaration_offset += 1;
+        if (byte == '}') break;
+    }
+
+    // We could truncate the file from the app header onwards before starting
+    // to write, but the boostrapped code should always be longer than the code
+    // we're replacing, or something is wrong. So instead of truncating we
+    // instead check the file size before even getting to this point.
+    var writer = file.writer();
+    try writer.writeAll(
+        \\
+        \\
+        \\import pf.Pages
+        \\import pf.Html exposing [Html]
+        \\
+        \\main = [
+        \\
+    );
+    for (rules) |rule| {
+        switch (rule.processing) {
+            .markdown => try writer.writeAll("    markdownFiles,\n"),
+            .none => {
+                try writer.writeAll(
+                    \\    Pages.files [
+                );
+                for (rule.patterns, 0..) |pattern, index| {
+                    try writer.print("\"{s}\"", .{pattern});
+                    if (index < rule.patterns.len - 1) {
+                        try writer.writeAll(", ");
+                    }
+                }
+                try writer.writeAll(
+                    \\],
+                    \\
+                );
+            },
+            .ignore => {
+                try writer.writeAll(
+                    \\    Pages.ignore [
+                );
+                for (rule.patterns, 0..) |pattern, index| {
+                    try writer.print("\"{s}\"", .{pattern});
+                    if (index < rule.patterns.len - 1) {
+                        try writer.writeAll(", ");
+                    }
+                }
+                try writer.writeAll(
+                    \\],
+                    \\
+                );
+            },
+            .bootstrap => unreachable,
+        }
+    }
+    try writer.writeAll(
+        \\]
+        \\
+        \\
+    );
+    for (rules) |rule| {
+        switch (rule.processing) {
+            .markdown => {
+                try writer.writeAll(
+                    \\markdownFiles =
+                    \\    Pages.files [
+                );
+                for (rule.patterns, 0..) |pattern, index| {
+                    try writer.print("\"{s}\"", .{pattern});
+                    if (index < rule.patterns.len - 1) {
+                        try writer.writeAll(", ");
+                    }
+                }
+                try writer.writeAll(
+                    \\]
+                    \\    |> Pages.fromMarkdown
+                    \\    |> Pages.wrapHtml layout
+                    \\
+                    \\layout : Html -> Html
+                    \\layout = \contents ->
+                    \\    Html.html {} [
+                    \\        Html.head {} [],
+                    \\        Html.body {} [contents],
+                    \\    ]
+                    \\
+                );
+            },
+            .none => {},
+            .ignore => {},
+            .bootstrap => unreachable,
+        }
+    }
 }
 
 fn bootstrapPageRules(gpa_allocator: std.mem.Allocator, state: State) ![]const PageRule {
