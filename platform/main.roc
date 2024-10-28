@@ -1,7 +1,7 @@
 platform "jay"
     requires {} { main : List (Pages.Pages a) }
     exposes [Pages, Html]
-    packages {}
+    packages { rvn: "https://github.com/jwoudenberg/rvn/releases/download/0.2.0/omuMnR9ZyK4n5MaBqi7Gg73-KS50UMs-1nTu165yxvM.tar.br" }
     imports [PagesInternal, Pages]
     provides [mainForHost]
 
