@@ -68,10 +68,7 @@ comptime {
 extern fn roc__mainForHost_1_exposed_generic(*RocList, *anyopaque) callconv(.C) void;
 
 pub fn main() void {
-    if (run()) {
-        const stdout = std.io.getStdOut().writer();
-        stdout.print("Bye!\n", .{}) catch unreachable;
-    } else |err| {
+    if (run()) {} else |err| {
         lib.failCrudely(err);
     }
 }

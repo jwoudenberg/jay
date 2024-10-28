@@ -7,13 +7,13 @@ x warn if pattern matches no files
 x implement `wrapHtml`
 x don't scan ingored paths
 x implement `bootstrap`
+x add timing information to output
 implement `replaceHtml`
 support metadata frontmatter
 watch for source-file changes and rebuild
 watch for roc-file changes and rebuild
 warn if site contains broken links
 warn if file matched by multiple patterns
-add timing information to output
 perform partial builds when source file changes
 run local http server
 automatically reload browser when files change

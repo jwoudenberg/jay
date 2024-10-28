@@ -26,6 +26,7 @@ const PageRule = struct {
 const output_path = "output";
 
 pub fn run(roc_pages: RocList) !void {
+    var timer = std.time.Timer.start() catch unreachable;
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
     defer arena.deinit();
@@ -69,6 +70,9 @@ pub fn run(roc_pages: RocList) !void {
     }
 
     try generateSite(gpa.allocator(), state, output_path);
+
+    const stdout = std.io.getStdOut().writer();
+    try stdout.print("Generated site in {d}ms\n", .{timer.read() / 1_000_000});
 }
 
 fn bootstrap(
