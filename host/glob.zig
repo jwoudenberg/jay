@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub fn glob(full_pattern: []const u8, path: []const u8) bool {
+pub fn match(full_pattern: []const u8, path: []const u8) bool {
     std.debug.assert(!std.mem.startsWith(u8, path, "/"));
     std.debug.assert(!std.mem.endsWith(u8, path, "/"));
 
@@ -36,42 +36,50 @@ pub fn glob(full_pattern: []const u8, path: []const u8) bool {
         (path_index > 0 and path[path_index - 1] == std.fs.path.sep);
 }
 
-test glob {
-    try std.testing.expect(glob("", "dir/file.txt"));
+test match {
+    try std.testing.expect(match("", "dir/file.txt"));
 
     // Passes on account of matching the directory containing the file.
-    try std.testing.expect(glob("*", "dir/file.txt"));
-    try std.testing.expect(glob("dir", "dir/file.txt"));
-    try std.testing.expect(glob("dir/", "dir/file.txt"));
-    try std.testing.expect(glob("/", "dir/file.txt"));
-    try std.testing.expect(glob("/*", "dir/file.txt"));
+    try std.testing.expect(match("*", "dir/file.txt"));
+    try std.testing.expect(match("dir", "dir/file.txt"));
+    try std.testing.expect(match("dir/", "dir/file.txt"));
+    try std.testing.expect(match("/", "dir/file.txt"));
+    try std.testing.expect(match("/*", "dir/file.txt"));
 
     // Passes on account of matching the full path.
-    try std.testing.expect(glob("dir/file.txt", "dir/file.txt"));
-    try std.testing.expect(glob("dir/*", "dir/file.txt"));
-    try std.testing.expect(glob("dir/*.txt", "dir/file.txt"));
-    try std.testing.expect(glob("dir/file*", "dir/file.txt"));
-    try std.testing.expect(glob("*/file.txt", "dir/file.txt"));
-    try std.testing.expect(glob("*/*.txt", "dir/file.txt"));
-    try std.testing.expect(glob("d*/*.txt", "dir/file.txt"));
-    try std.testing.expect(glob("d*r/*.txt", "dir/file.txt"));
-    try std.testing.expect(glob("/", "file.txt"));
-    try std.testing.expect(glob("*", "file.txt"));
-    try std.testing.expect(glob("dir/*/file.txt", "dir/sub/file.txt"));
+    try std.testing.expect(match("dir/file.txt", "dir/file.txt"));
+    try std.testing.expect(match("dir/*", "dir/file.txt"));
+    try std.testing.expect(match("dir/*.txt", "dir/file.txt"));
+    try std.testing.expect(match("dir/file*", "dir/file.txt"));
+    try std.testing.expect(match("*/file.txt", "dir/file.txt"));
+    try std.testing.expect(match("*/*.txt", "dir/file.txt"));
+    try std.testing.expect(match("d*/*.txt", "dir/file.txt"));
+    try std.testing.expect(match("d*r/*.txt", "dir/file.txt"));
+    try std.testing.expect(match("/", "file.txt"));
+    try std.testing.expect(match("*", "file.txt"));
+    try std.testing.expect(match("dir/*/file.txt", "dir/sub/file.txt"));
 
     // Fail on account of pattern not occuring in the path.
-    try std.testing.expect(!glob("nope", "dir/file.txt"));
+    try std.testing.expect(!match("nope", "dir/file.txt"));
 
     // Fail on account of pattern not being anchored on root.
-    try std.testing.expect(!glob("file.txt", "dir/file.txt"));
-    try std.testing.expect(!glob("file*", "dir/file.txt"));
+    try std.testing.expect(!match("file.txt", "dir/file.txt"));
+    try std.testing.expect(!match("file*", "dir/file.txt"));
 
     // Fail on account of * not spanning /.
-    try std.testing.expect(!glob("*.txt", "dir/file.txt"));
-    try std.testing.expect(!glob("*/file.txt", "dir/sub/file.txt"));
+    try std.testing.expect(!match("*.txt", "dir/file.txt"));
+    try std.testing.expect(!match("*/file.txt", "dir/sub/file.txt"));
 
     // Fail on account of being partial file or directory names.
-    try std.testing.expect(!glob(".txt", "file.txt"));
-    try std.testing.expect(!glob("di", "dir/file.txt"));
-    try std.testing.expect(!glob("dir/file", "dir/file.txt"));
+    try std.testing.expect(!match(".txt", "file.txt"));
+    try std.testing.expect(!match("di", "dir/file.txt"));
+    try std.testing.expect(!match("dir/file", "dir/file.txt"));
+}
+
+pub fn matchAny(patterns: []const []const u8, path: []const u8) bool {
+    for (patterns) |pattern| {
+        if (match(pattern, path)) return true;
+    } else {
+        return false;
+    }
 }

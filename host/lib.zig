@@ -2,92 +2,121 @@ const std = @import("std");
 const builtin = @import("builtin");
 const RocStr = @import("roc/str.zig").RocStr;
 const RocList = @import("roc/list.zig").RocList;
-const glob = @import("glob.zig").glob;
+const glob = @import("glob.zig");
 const c = @cImport({
     @cInclude("cmark-gfm.h");
 });
 
-const State = struct {
-    allocator: std.mem.Allocator,
+const Site = struct {
+    arena: *std.heap.ArenaAllocator,
     source_root: std.fs.Dir,
-    source_files: std.ArrayList([]const u8),
-    source_dirs: std.StringHashMap(void),
-    ignored_paths: std.ArrayList([]const u8),
-    destination_file_paths: std.ArrayList(?[]const u8),
-    destination_file_rules: std.ArrayList(?PageRule),
+    roc_main: []const u8,
+    rules: []PageRule,
 };
 
 const PageRule = struct {
     patterns: []const []const u8,
     processing: RocProcessing,
+    pages: std.ArrayList(Page),
+};
+
+const Page = struct {
+    source_path: []const u8,
+    output_path: []const u8,
+    frontmatter: []const u8,
     content: []const Snippet,
 };
 
-const output_path = "output";
+const output_root = "output";
 
-pub fn run(roc_pages: RocList) !void {
-    var timer = std.time.Timer.start() catch unreachable;
+extern fn roc__mainForHost_1_exposed_generic(*RocList, *const RocList) callconv(.C) void;
+
+pub fn run() !void {
+    var timer = try std.time.Timer.start();
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    var args = std.process.args();
-    const argv0 = args.next() orelse return error.EmptyArgv;
-    const project_path = std.fs.path.dirname(argv0) orelse return error.NoProjectPath;
-    const roc_main_path = try std.fs.path.relative(allocator, project_path, argv0);
-
-    var rules = try rocListMapToOwnedSlice(
-        RocPages,
-        PageRule,
-        rocPagesToPageRule,
-        allocator,
-        roc_pages,
-    );
-
-    var state: State = undefined;
-
-    if (rules.len == 1 and rules[0].processing == .bootstrap) {
-        state = try scanSourceFiles(
-            allocator,
-            project_path,
-            roc_main_path,
-            bootstrap_ignore_patterns[0..],
-        );
-        rules = try bootstrap(gpa.allocator(), state, argv0);
-    } else {
-        const ignores = try getRuleIgnorePatterns(allocator, rules);
-        state = try scanSourceFiles(
-            allocator,
-            project_path,
-            roc_main_path,
-            ignores,
-        );
-    }
-
-    for (rules) |rule| {
-        try planRule(allocator, &state, rule);
-    }
-
-    try generateSite(gpa.allocator(), state, output_path);
-
+    try run_timed(&gpa);
     const stdout = std.io.getStdOut().writer();
     try stdout.print("Generated site in {d}ms\n", .{timer.read() / 1_000_000});
 }
 
-fn bootstrap(
-    gpa_allocator: std.mem.Allocator,
-    state: State,
-    roc_main_path: []const u8,
-) ![]const PageRule {
-    const rules = try bootstrapPageRules(gpa_allocator, state);
-    try generateCodeForRules(roc_main_path, rules);
-    return rules;
+fn run_timed(gpa: *std.heap.GeneralPurposeAllocator(.{})) !void {
+    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    // (1) Get the path to the main.roc file that's currently running.
+    var args = std.process.args();
+    const argv0 = args.next() orelse return error.EmptyArgv;
+    const argv0_abs = try std.fs.cwd().realpathAlloc(allocator, argv0);
+    const source_root_path = std.fs.path.dirname(argv0_abs) orelse "/";
+    const source_root = std.fs.cwd().openDir(source_root_path, .{ .iterate = true }) catch |err| {
+        try failPrettily("Cannot access directory containing {s}: '{}'\n", .{ source_root_path, err });
+    };
+
+    // (2) Call platform first time to get page rules.
+    var roc_metadata = RocList.empty();
+    var roc_rules = RocList.empty();
+    roc__mainForHost_1_exposed_generic(&roc_rules, &roc_metadata);
+    var site = Site{
+        .arena = &arena,
+        .source_root = source_root,
+        .roc_main = std.fs.path.basename(argv0),
+        .rules = try rocListMapToOwnedSlice(
+            RocPages,
+            PageRule,
+            rocPagesToPageRule,
+            allocator,
+            roc_rules,
+        ),
+    };
+
+    // (3) Scan the project to find all the source files.
+    if (site.rules.len == 1 and site.rules[0].processing == .bootstrap) {
+        try bootstrapPageRules(&site);
+        try generateCodeForRules(&site);
+    } else {
+        try scanSourceFiles(&site);
+    }
+
+    // (4) Gather page metadata into a Roc datastructure.
+    var roc_metadata_slice = try allocator.alloc(RocList, site.rules.len);
+    for (site.rules, 0..) |rule, rule_index| {
+        var roc_pages = try allocator.alloc(RocMetadata, rule.pages.items.len);
+        for (rule.pages.items, 0..) |page, page_index| {
+            roc_pages[page_index] = RocMetadata{
+                .path = RocStr.fromSlice(page.output_path),
+                .frontmatter = RocList.fromSlice(u8, page.frontmatter, false),
+            };
+        }
+        roc_metadata_slice[rule_index] = RocList.fromSlice(RocMetadata, roc_pages, false);
+    }
+    roc_metadata = RocList.fromSlice(RocList, roc_metadata_slice, false);
+
+    // (5) Run platform a second time passing metadata, getting page contents.
+    roc__mainForHost_1_exposed_generic(&roc_rules, &roc_metadata);
+    var roc_rules_iterator = RocListIterator(RocPages).init(roc_rules);
+    var roc_rules_index: usize = 0;
+    while (roc_rules_iterator.next()) |roc_rule| {
+        const rule = site.rules[roc_rules_index];
+        roc_rules_index += 1;
+        for (0..rule.pages.items.len) |page_index| {
+            rule.pages.items[page_index].content = try rocListMapToOwnedSlice(
+                RocContent,
+                Snippet,
+                fromRocContent,
+                allocator,
+                roc_rule.content,
+            );
+        }
+    }
+
+    // (6) Generate output files.
+    try generateSite(gpa.allocator(), &site, output_root);
 }
 
-fn generateCodeForRules(roc_main_path: []const u8, rules: []const PageRule) !void {
+fn generateCodeForRules(site: *const Site) !void {
     const cwd = std.fs.cwd();
-    const file = try cwd.openFile(roc_main_path, .{ .mode = .read_write });
+    const file = try cwd.openFile(site.roc_main, .{ .mode = .read_write });
     defer file.close();
 
     // The size of my minimal bootstrap examples is 119 bytes at time of
@@ -138,7 +167,7 @@ fn generateCodeForRules(roc_main_path: []const u8, rules: []const PageRule) !voi
         \\main = [
         \\
     );
-    for (rules) |rule| {
+    for (site.rules) |rule| {
         switch (rule.processing) {
             .markdown => try writer.writeAll("    markdownFiles,\n"),
             .none => {
@@ -179,7 +208,7 @@ fn generateCodeForRules(roc_main_path: []const u8, rules: []const PageRule) !voi
         \\
         \\
     );
-    for (rules) |rule| {
+    for (site.rules) |rule| {
         switch (rule.processing) {
             .markdown => {
                 try writer.writeAll(
@@ -214,36 +243,47 @@ fn generateCodeForRules(roc_main_path: []const u8, rules: []const PageRule) !voi
 }
 
 test generateCodeForRules {
-    var tmp_dir = std.testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-    try tmp_dir.dir.writeFile(.{ .sub_path = "main.roc", .data = 
-    \\app [main] { pf: platform "some hash here" }
-    \\
-    \\import pf.Pages
-    \\
-    \\main = Pages.bootstrap
+    var tmpdir = std.testing.tmpDir(.{ .iterate = true });
+    defer tmpdir.cleanup();
+    try tmpdir.dir.writeFile(.{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main] { pf: platform "some hash here" }
+        \\
+        \\import pf.Pages
+        \\
+        \\main = Pages.bootstrap
+        ,
     });
-    const rules = [_]PageRule{
+    var rules = [_]PageRule{
         PageRule{
             .processing = .markdown,
             .patterns = ([_][]const u8{ "posts/*.md", "*.md" })[0..],
-            .content = undefined,
+            .pages = std.ArrayList(Page).init(std.testing.allocator),
         },
         PageRule{
             .processing = .none,
             .patterns = ([_][]const u8{"static"})[0..],
-            .content = undefined,
+            .pages = std.ArrayList(Page).init(std.testing.allocator),
         },
         PageRule{
             .processing = .ignore,
             .patterns = ([_][]const u8{ ".git", ".gitignore" })[0..],
-            .content = undefined,
+            .pages = std.ArrayList(Page).init(std.testing.allocator),
         },
     };
-    const roc_main_path = try tmp_dir.dir.realpathAlloc(std.testing.allocator, "main.roc");
-    defer std.testing.allocator.free(roc_main_path);
-    try generateCodeForRules(roc_main_path, rules[0..]);
-    const generated = try tmp_dir.dir.readFileAlloc(std.testing.allocator, "main.roc", 1024 * 1024);
+    const roc_main = try tmpdir.dir.realpathAlloc(std.testing.allocator, "main.roc");
+    defer std.testing.allocator.free(roc_main);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const site = Site{
+        .arena = &arena,
+        .source_root = tmpdir.dir,
+        .roc_main = roc_main,
+        .rules = rules[0..],
+    };
+    try generateCodeForRules(&site);
+    const generated = try tmpdir.dir.readFileAlloc(std.testing.allocator, "main.roc", 1024 * 1024);
     defer std.testing.allocator.free(generated);
     try std.testing.expectEqualStrings(generated,
         \\app [main] { pf: platform "some hash here" }
@@ -272,205 +312,303 @@ test generateCodeForRules {
     );
 }
 
-fn bootstrapPageRules(gpa_allocator: std.mem.Allocator, state: State) ![]const PageRule {
-    var arena = std.heap.ArenaAllocator.init(gpa_allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-    var filetypes_by_dir = std.StringHashMap(std.StringHashMap(void)).init(allocator);
-    for (state.source_files.items) |file_path| {
-        const dirname = std.fs.path.dirname(file_path) orelse "";
-        const extension = std.fs.path.extension(file_path);
-        const result = try filetypes_by_dir.getOrPut(dirname);
-        if (result.found_existing) {
-            try result.value_ptr.put(extension, void{});
+fn bootstrapPageRules(site: *Site) !void {
+    const allocator = site.arena.allocator();
+
+    var markdown_patterns = std.StringHashMap(void).init(allocator);
+    var static_patterns = std.StringHashMap(void).init(allocator);
+    var ignore_patterns = std.StringHashMap(void).init(allocator);
+
+    var source_iterator = try SourceFileWalker.init(
+        allocator,
+        site.source_root,
+        site.roc_main,
+        &bootstrap_ignore_patterns,
+    );
+    defer source_iterator.deinit();
+    while (try source_iterator.next()) |entry| {
+        if (entry.ignore) {
+            try ignore_patterns.put(try allocator.dupe(u8, entry.path), void{});
+            continue;
+        }
+
+        const pattern = try patternForPath(allocator, entry.path);
+        if (isMarkdown(entry.path)) {
+            try markdown_patterns.put(pattern, void{});
         } else {
-            result.value_ptr.* = std.StringHashMap(void).init(allocator);
-            try result.value_ptr.put(extension, void{});
+            try static_patterns.put(pattern, void{});
         }
     }
+    try updateSiteForPatterns(
+        site,
+        markdown_patterns,
+        static_patterns,
+        ignore_patterns,
+    );
+}
 
-    var markdown_patterns = std.ArrayList([]const u8).init(state.allocator);
-    var static_patterns = std.ArrayList([]const u8).init(state.allocator);
-    var filetypes_by_dir_iterator = filetypes_by_dir.iterator();
-    while (filetypes_by_dir_iterator.next()) |entry| {
-        const dir = entry.key_ptr.*;
-        const extensions = entry.value_ptr;
-        var extensions_iterator = extensions.keyIterator();
-        while (extensions_iterator.next()) |extension| {
-            const pattern =
-                if (dir.len > 0)
-                try std.fmt.allocPrint(
-                    state.allocator,
-                    "{s}/*{s}",
-                    .{ dir, extension.* },
-                )
-            else
-                try std.fmt.allocPrint(
-                    state.allocator,
-                    "*{s}",
-                    .{extension.*},
-                );
-            if (isMarkdown(extension.*)) {
-                try markdown_patterns.append(pattern);
-            } else {
-                try static_patterns.append(pattern);
-            }
-        }
-    }
+fn updateSiteForPatterns(
+    site: *Site,
+    markdown_patterns: std.hash_map.StringHashMap(void),
+    static_patterns: std.hash_map.StringHashMap(void),
+    ignore_patterns: std.hash_map.StringHashMap(void),
+) !void {
+    const allocator = site.arena.allocator();
+    var rules = try std.ArrayList(PageRule).initCapacity(allocator, 3);
 
-    var rules = try std.ArrayList(PageRule).initCapacity(state.allocator, 3);
-    if (markdown_patterns.items.len > 0) {
+    if (markdown_patterns.count() > 0) {
         try rules.append(PageRule{
-            .patterns = try markdown_patterns.toOwnedSlice(),
+            .patterns = try getHashMapKeys(allocator, markdown_patterns),
             .processing = .markdown,
-            .content = blk: {
-                const snippets = try state.allocator.alloc(Snippet, 1);
-                snippets[0] = .source_contents;
-                break :blk snippets;
-            },
+            .pages = std.ArrayList(Page).init(allocator),
         });
     }
-    if (static_patterns.items.len > 0) {
+    if (static_patterns.count() > 0) {
         try rules.append(PageRule{
-            .patterns = try static_patterns.toOwnedSlice(),
+            .patterns = try getHashMapKeys(allocator, static_patterns),
             .processing = .none,
-            .content = blk: {
-                const snippets = try state.allocator.alloc(Snippet, 1);
-                snippets[0] = .source_contents;
-                break :blk snippets;
-            },
+            .pages = std.ArrayList(Page).init(allocator),
         });
     }
     try rules.append(PageRule{
-        .patterns = state.ignored_paths.items,
+        .patterns = try getHashMapKeys(allocator, ignore_patterns),
         .processing = .ignore,
-        .content = try state.allocator.alloc(Snippet, 0),
+        .pages = std.ArrayList(Page).init(allocator),
     });
-    return rules.items;
+
+    site.rules = try rules.toOwnedSlice();
+}
+
+fn getHashMapKeys(
+    allocator: std.mem.Allocator,
+    map: std.hash_map.StringHashMap(void),
+) ![][]const u8 {
+    var keys = try allocator.alloc([]const u8, map.count());
+    var key_iterator = map.keyIterator();
+    var index: usize = 0;
+    while (key_iterator.next()) |key| {
+        keys[index] = key.*;
+        index += 1;
+    }
+    return keys;
+}
+
+fn patternForPath(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
+    const extension = std.fs.path.extension(path);
+    return if (std.fs.path.dirname(path)) |dirname|
+        try std.fmt.allocPrint(
+            allocator,
+            "{s}/*{s}",
+            .{ dirname, extension },
+        )
+    else
+        try std.fmt.allocPrint(
+            allocator,
+            "*{s}",
+            .{extension},
+        );
 }
 
 fn compareStrings(_: void, lhs: []const u8, rhs: []const u8) bool {
     return std.mem.order(u8, lhs, rhs).compare(std.math.CompareOperator.lt);
 }
 
-test bootstrapPageRules {
+test "bootstrapPageRules" {
+    var tmpdir = std.testing.tmpDir(.{ .iterate = true });
+    defer tmpdir.cleanup();
+
+    try tmpdir.dir.makeDir("markdown_only");
+    try tmpdir.dir.makeDir("static_only");
+    try tmpdir.dir.makeDir("mixed");
+
+    try tmpdir.dir.writeFile(.{ .sub_path = "markdown_only/one.md", .data = "" });
+    try tmpdir.dir.writeFile(.{ .sub_path = "markdown_only/two.md", .data = "" });
+    try tmpdir.dir.writeFile(.{ .sub_path = "static_only/main.css", .data = "" });
+    try tmpdir.dir.writeFile(.{ .sub_path = "static_only/logo.png", .data = "" });
+    try tmpdir.dir.writeFile(.{ .sub_path = "mixed/three.md", .data = "" });
+    try tmpdir.dir.writeFile(.{ .sub_path = "mixed/rss.xml", .data = "" });
+    try tmpdir.dir.writeFile(.{ .sub_path = "index.md", .data = "" });
+    try tmpdir.dir.writeFile(.{ .sub_path = ".gitignore", .data = "" });
+
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    const allocator = arena.allocator();
-    var state = State{
-        .allocator = allocator,
-        .source_root = undefined,
-        .source_files = std.ArrayList([]const u8).init(allocator),
-        .source_dirs = std.StringHashMap(void).init(allocator),
-        .ignored_paths = std.ArrayList([]const u8).init(allocator),
-        .destination_file_paths = undefined,
-        .destination_file_rules = undefined,
+    var site = Site{
+        .arena = &arena,
+        .source_root = tmpdir.dir,
+        .roc_main = "main.roc",
+        .rules = &.{},
     };
-    try state.source_files.append("markdown_only/one.md");
-    try state.source_files.append("markdown_only/two.md");
-    try state.source_files.append("static_only/main.css");
-    try state.source_files.append("static_only/logo.png");
-    try state.source_files.append("mixed/three.md");
-    try state.source_files.append("mixed/rss.xml");
-    try state.source_files.append("index.md");
-    try state.ignored_paths.append(".gitignore");
 
-    const rules = try bootstrapPageRules(std.testing.allocator, state);
+    try bootstrapPageRules(&site);
 
-    try std.testing.expectEqual(3, rules.len);
+    try std.testing.expectEqual(3, site.rules.len);
 
-    try std.testing.expectEqual(.markdown, rules[0].processing);
-    try std.testing.expectEqualSlices(Snippet, ([1]Snippet{.source_contents})[0..], rules[0].content);
-    try std.testing.expectEqual(3, rules[0].patterns.len);
-    const markdown_patterns = try std.testing.allocator.dupe([]const u8, rules[0].patterns);
+    try std.testing.expectEqual(.markdown, site.rules[0].processing);
+    try std.testing.expectEqual(3, site.rules[0].patterns.len);
+    const markdown_patterns = try std.testing.allocator.dupe([]const u8, site.rules[0].patterns);
     defer std.testing.allocator.free(markdown_patterns);
     std.sort.insertion([]const u8, markdown_patterns, {}, compareStrings);
     try std.testing.expectEqualStrings("*.md", markdown_patterns[0]);
     try std.testing.expectEqualStrings("markdown_only/*.md", markdown_patterns[1]);
     try std.testing.expectEqualStrings("mixed/*.md", markdown_patterns[2]);
 
-    try std.testing.expectEqual(.none, rules[1].processing);
-    try std.testing.expectEqualSlices(Snippet, ([1]Snippet{.source_contents})[0..], rules[1].content);
-    try std.testing.expectEqual(3, rules[1].patterns.len);
-    const static_patterns = try std.testing.allocator.dupe([]const u8, rules[1].patterns);
+    try std.testing.expectEqual(.none, site.rules[1].processing);
+    try std.testing.expectEqual(3, site.rules[1].patterns.len);
+    const static_patterns = try std.testing.allocator.dupe([]const u8, site.rules[1].patterns);
     defer std.testing.allocator.free(static_patterns);
     std.sort.insertion([]const u8, static_patterns, {}, compareStrings);
     try std.testing.expectEqualStrings("mixed/*.xml", static_patterns[0]);
     try std.testing.expectEqualStrings("static_only/*.css", static_patterns[1]);
     try std.testing.expectEqualStrings("static_only/*.png", static_patterns[2]);
 
-    try std.testing.expectEqual(.ignore, rules[2].processing);
-    try std.testing.expectEqualSlices(Snippet, ([0]Snippet{})[0..], rules[2].content);
-    try std.testing.expectEqual(1, rules[2].patterns.len);
-    try std.testing.expectEqualStrings(".gitignore", rules[2].patterns[0]);
+    try std.testing.expectEqual(.ignore, site.rules[2].processing);
+    try std.testing.expectEqual(1, site.rules[2].patterns.len);
+    try std.testing.expectEqualStrings(".gitignore", site.rules[2].patterns[0]);
 }
 
-fn scanSourceFiles(
-    allocator: std.mem.Allocator,
-    project_path: []const u8,
-    roc_main_path: []const u8,
-    explicit_ignores: []const []const u8,
-) !State {
-    const source_root = std.fs.cwd().openDir(project_path, .{ .iterate = true }) catch |err| {
-        try failPrettily("Cannot access directory containing {s}: '{}'\n", .{ project_path, err });
-    };
-    var source_files = std.ArrayList([]const u8).init(allocator);
-    var ignored_paths = std.ArrayList([]const u8).init(allocator);
-    var source_dirs = std.StringHashMap(void).init(allocator);
-    const implicit_ignores = try getImplicitIgnorePatterns(roc_main_path);
+const SourceFileWalker = struct {
+    const Self = @This();
 
-    var walker = try source_root.walk(allocator);
-    defer walker.deinit();
-    while (try walker.next()) |entry| {
-        const ignore_implicitly = skipInScan(&implicit_ignores, entry.path);
-        const ignore_explicitly = skipInScan(explicit_ignores, entry.path);
-        if (ignore_explicitly) {
-            try ignored_paths.append(try allocator.dupe(u8, entry.path));
-        }
-        if (ignore_implicitly or ignore_explicitly) {
-            if (entry.kind == .directory) {
+    const Entry = struct {
+        path: []const u8,
+        ignore: bool,
+    };
+
+    walker: std.fs.Dir.Walker,
+    explicit_ignores: []const []const u8,
+    implicit_ignores: []const []const u8,
+
+    fn init(
+        allocator: std.mem.Allocator,
+        source_root: std.fs.Dir,
+        roc_main: []const u8,
+        explicit_ignores: []const []const u8,
+    ) !Self {
+        // The Roc file that starts this script as well as anything we generate
+        // should be ignored implicitly, i.e. the user should not need to
+        // specify these.
+        var implicit_ignores = try allocator.alloc([]const u8, 3);
+        implicit_ignores[0] = output_root;
+        implicit_ignores[1] = roc_main;
+        implicit_ignores[2] = std.fs.path.stem(roc_main);
+
+        return Self{
+            .walker = try source_root.walk(allocator),
+            .explicit_ignores = explicit_ignores,
+            .implicit_ignores = implicit_ignores,
+        };
+    }
+
+    fn deinit(self: *Self) void {
+        self.walker.deinit();
+    }
+
+    fn next(self: *Self) !?Entry {
+        while (true) {
+            const entry = try self.walker.next() orelse return null;
+            const ignore_implicitly = glob.matchAny(self.implicit_ignores, entry.path);
+            const ignore_explicitly = glob.matchAny(self.explicit_ignores, entry.path);
+            const ignore = ignore_implicitly or ignore_explicitly;
+
+            if (ignore and entry.kind == .directory) {
                 // Reaching into the walker internals here to skip an entire
                 // directory, similar to how the walker implementation does
                 // this itself in a couple of places. This avoids needing to
                 // iterate through potentially large amounts of ignored files,
                 // for instance a .git directory.
-                var item = walker.stack.pop();
-                if (walker.stack.items.len != 0) {
+                var item = self.walker.stack.pop();
+                if (self.walker.stack.items.len != 0) {
                     item.iter.dir.close();
                 }
             }
-        } else if (entry.kind == .directory) {
-            try source_dirs.put(try allocator.dupe(u8, entry.path), void{});
-        } else if (entry.kind == .file) {
-            try source_files.append(try allocator.dupe(u8, entry.path));
+
+            if (entry.kind != .file) continue;
+
+            // Here's where the difference between implicit and explicit
+            // ignores becomes material. Implicit ignores we don't even let
+            // the code know about - we just pretend these files don't exist.
+            if (ignore_implicitly) continue;
+
+            return Entry{
+                .path = entry.path,
+                .ignore = ignore,
+            };
         }
     }
-    const destination_file_paths = std.ArrayList(?[]const u8).fromOwnedSlice(
+};
+
+fn scanSourceFiles(site: *Site) !void {
+    const allocator = site.arena.allocator();
+    const explicit_ignores = try getRuleIgnorePatterns(allocator, site.rules);
+    var source_iterator = try SourceFileWalker.init(
         allocator,
-        try allocator.alloc(?[]const u8, source_files.items.len),
+        site.source_root,
+        site.roc_main,
+        explicit_ignores,
     );
-    @memset(destination_file_paths.items, null);
-    const destination_file_rules = std.ArrayList(?PageRule).fromOwnedSlice(
-        allocator,
-        try allocator.alloc(?PageRule, source_files.items.len),
-    );
-    @memset(destination_file_rules.items, null);
-    return .{
-        .allocator = allocator,
-        .source_root = source_root,
-        .source_files = source_files,
-        .ignored_paths = ignored_paths,
-        .source_dirs = source_dirs,
-        .destination_file_paths = destination_file_paths,
-        .destination_file_rules = destination_file_rules,
-    };
+    defer source_iterator.deinit();
+    var unmatched_paths = std.ArrayList([]const u8).init(allocator);
+    defer unmatched_paths.deinit();
+    while (try source_iterator.next()) |entry| {
+        if (entry.ignore) {
+            continue;
+        } else {
+            const path = try allocator.dupe(u8, entry.path);
+            try addFileToRule(site, path, &unmatched_paths);
+        }
+    }
+
+    if (unmatched_paths.items.len > 0) {
+        try unmatchedSourceFileError(try unmatched_paths.toOwnedSlice());
+    }
 }
 
-fn skipInScan(ignore_patterns: []const []const u8, path: []const u8) bool {
-    for (ignore_patterns) |pattern| {
-        if (glob(pattern, path)) return true;
-    } else {
-        return false;
+fn addFileToRule(
+    site: *Site,
+    source_path: []const u8,
+    unmatched_paths: *std.ArrayList([]const u8),
+) !void {
+    const allocator = site.arena.allocator();
+
+    // TODO: detect patterns that are not matched by any file.
+    var matched_rules = std.ArrayList(usize).init(allocator);
+    defer matched_rules.deinit();
+
+    for (site.rules, 0..) |rule, index| {
+        if (!glob.matchAny(rule.patterns, source_path)) continue;
+
+        try matched_rules.append(index);
+        const output_path = switch (rule.processing) {
+            .ignore => return error.UnexpectedlyAskedToAddIgnoredFile,
+            .bootstrap => return error.UnexpectedlyAskedToAddFileForBootstrapRule,
+            .none => source_path,
+            .markdown => try changeMarkdownExtension(allocator, source_path),
+        };
+
+        try site.rules[index].pages.append(Page{
+            .source_path = source_path,
+            .output_path = output_path,
+            .frontmatter = &.{}, // TODO: perform frontmatter parsing.
+            .content = &.{},
+        });
+    }
+
+    switch (matched_rules.items.len) {
+        0 => try unmatched_paths.append(source_path),
+        1 => {}, // This is what we expect!
+        else => {
+            try failPrettily(
+                \\The following file is matched by multiple rules:
+                \\
+                \\    {s}
+                \\
+                \\These are the indices of the rules that match:
+                \\
+                \\    {any}
+                \\
+                \\
+            , .{ source_path, matched_rules.items });
+        },
     }
 }
 
@@ -486,16 +624,6 @@ fn getRuleIgnorePatterns(
         }
     }
     return ignore_patterns.toOwnedSlice();
-}
-
-// The Roc file that starts this script as well as anything we generate should
-// be ignored implicitly, i.e. the user should not need to specify these.
-fn getImplicitIgnorePatterns(roc_main_path: []const u8) ![3][]const u8 {
-    return .{
-        output_path,
-        roc_main_path,
-        std.fs.path.stem(roc_main_path),
-    };
 }
 
 // When running the bootstrap script we have to guess which files the user
@@ -517,6 +645,11 @@ const RocProcessing = enum(u8) {
     ignore = 1,
     markdown = 2,
     none = 3,
+};
+
+const RocMetadata = extern struct {
+    frontmatter: RocList,
+    path: RocStr,
 };
 
 const Snippet = union(enum) {
@@ -546,24 +679,12 @@ fn rocPagesToPageRule(allocator: std.mem.Allocator, pages: RocPages) !PageRule {
             pages.patterns,
         ),
         .processing = pages.processing,
-        .content = try rocListMapToOwnedSlice(
-            RocContent,
-            Snippet,
-            fromRocContent,
-            allocator,
-            pages.content,
-        ),
+        .pages = std.ArrayList(Page).init(allocator),
     };
 }
 
 fn fromRocPattern(allocator: std.mem.Allocator, roc_pattern: RocStr) ![]const u8 {
     return try allocator.dupe(u8, roc_pattern.asSlice());
-}
-
-fn planRule(allocator: std.mem.Allocator, state: *State, rule: PageRule) !void {
-    for (rule.patterns) |pattern| {
-        try addFilesInPattern(allocator, state, rule, pattern);
-    }
 }
 
 fn fromRocContent(allocator: std.mem.Allocator, roc_content: RocContent) !Snippet {
@@ -614,7 +735,7 @@ fn rocListMapToOwnedSlice(
     comptime map: fn (allocator: std.mem.Allocator, elem: T) anyerror!O,
     allocator: std.mem.Allocator,
     list: RocList,
-) ![]const O {
+) ![]O {
     const len = list.len();
     if (len == 0) return allocator.alloc(O, 0);
     const elements = list.elements(T) orelse return error.RocListUnexpectedlyEmpty;
@@ -629,7 +750,7 @@ fn rocListCopyToOwnedSlice(
     comptime T: type,
     allocator: std.mem.Allocator,
     list: RocList,
-) ![]const T {
+) ![]T {
     const len = list.len();
     if (len == 0) return allocator.alloc(T, 0);
     const elements = list.elements(T) orelse return error.RocListUnexpectedlyEmpty;
@@ -640,52 +761,14 @@ fn rocListCopyToOwnedSlice(
     return slice;
 }
 
-fn addFilesInPattern(
-    allocator: std.mem.Allocator,
-    state: *State,
-    rule: PageRule,
-    pattern: []const u8,
-) !void {
-    if (rule.processing == .ignore) return;
-
-    var none_matched = true;
-    for (state.source_files.items, 0..) |file_path, index| {
-        if (glob(pattern, file_path)) {
-            none_matched = false;
-            try addFile(allocator, state, rule, file_path, index);
-        }
-    }
-    if (none_matched) {
-        try failPrettily("The pattern '{s}' did not match any files", .{pattern});
-    }
-}
-
-fn addFile(
-    allocator: std.mem.Allocator,
-    state: *State,
-    rule: PageRule,
-    source_path: []const u8,
-    index: usize,
-) !void {
-    const destination_path = switch (rule.processing) {
-        .ignore => return error.UnexpectedlyAskedToAddIgnoredFile,
-        .bootstrap => return error.UnexpectedlyAskedToAddFileForBootstrapRule,
-        .none => source_path,
-        .markdown => try changeMarkdownExtension(allocator, source_path),
-    };
-    state.destination_file_paths.items[index] = destination_path;
-    state.destination_file_rules.items[index] = rule;
-}
-
 fn changeMarkdownExtension(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
-    const extension = std.fs.path.extension(path);
-    if (!isMarkdown(extension)) {
+    if (!isMarkdown(path)) {
         try failPrettily("You're asking me to process a file as markdown, but it does not have a markdown file extension: {s}", .{path});
     }
     return std.fmt.allocPrint(
         allocator,
         "{s}.html",
-        .{path[0..(path.len - extension.len)]},
+        .{path[0..(path.len - std.fs.path.extension(path).len)]},
     );
 }
 
@@ -700,24 +783,16 @@ test changeMarkdownExtension {
     ));
 }
 
-fn checkForMarkdownExtension(path: []const u8) ![]const u8 {
+fn isMarkdown(path: []const u8) bool {
     const extension = std.fs.path.extension(path);
-    if (isMarkdown(extension)) {
-        return extension;
-    } else {
-        try failPrettily("You're asking me to process a file as markdown, but it does not have a markdown file extension: {s}", .{path});
-    }
-}
-
-fn isMarkdown(extension: []const u8) bool {
     return std.ascii.eqlIgnoreCase(extension, ".md") or
         std.ascii.eqlIgnoreCase(extension, ".markdown");
 }
 
 test isMarkdown {
-    try std.testing.expect(isMarkdown(".md"));
-    try std.testing.expect(isMarkdown(".MD"));
-    try std.testing.expect(isMarkdown(".MarkDown"));
+    try std.testing.expect(isMarkdown("file.md"));
+    try std.testing.expect(isMarkdown("dir/file.MD"));
+    try std.testing.expect(isMarkdown("file.MarkDown"));
     try std.testing.expect(!isMarkdown("file.txt"));
 }
 
@@ -743,34 +818,32 @@ pub fn failCrudely(err: anyerror) noreturn {
 
 fn generateSite(
     gpa_allocator: std.mem.Allocator,
-    state: State,
+    site: *const Site,
     output_dir_path: []const u8,
 ) !void {
     // Clear output directory if it already exists.
-    state.source_root.deleteTree(output_dir_path) catch |err| {
+    site.source_root.deleteTree(output_dir_path) catch |err| {
         if (err != error.NotDir) {
             return err;
         }
     };
-    try state.source_root.makeDir(output_dir_path);
-    var output_dir = try state.source_root.openDir(output_dir_path, .{});
+    try site.source_root.makeDir(output_dir_path);
+    var output_dir = try site.source_root.openDir(output_dir_path, .{});
     defer output_dir.close();
-
-    var source_dir_iter = state.source_dirs.keyIterator();
-    while (source_dir_iter.next()) |dir_path| {
-        try output_dir.makePath(dir_path.*);
-    }
 
     var arena = std.heap.ArenaAllocator.init(gpa_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
-    for (0..state.source_files.items.len) |index| {
-        try generateSitePath(allocator, state, output_dir, index);
-        _ = arena.reset(.retain_capacity);
+    for (site.rules) |rule| {
+        for (rule.pages.items) |page| {
+            if (std.fs.path.dirname(page.output_path)) |dir| try output_dir.makePath(dir);
+            try generateSitePath(allocator, site.source_root, rule, page, output_dir);
+            _ = arena.reset(.retain_capacity);
+        }
     }
 }
 
-fn unmappedFileError(state: State) !noreturn {
+fn unmatchedSourceFileError(unmatched_paths: [][]const u8) !noreturn {
     if (builtin.is_test) return error.PrettyError;
 
     const stderr = std.io.getStdErr().writer();
@@ -784,11 +857,8 @@ fn unmappedFileError(state: State) !noreturn {
         \\        [
         \\
     , .{});
-    for (state.destination_file_paths.items, 0..) |path, index| {
-        if (path == null) {
-            const source_path = state.source_files.items[index];
-            try stderr.print("            \"{s}\",\n", .{source_path});
-        }
+    for (unmatched_paths) |path| {
+        try stderr.print("            \"{s}\",\n", .{path});
     }
     try stderr.print(
         \\        ]
@@ -799,31 +869,29 @@ fn unmappedFileError(state: State) !noreturn {
 
 fn generateSitePath(
     allocator: std.mem.Allocator,
-    state: State,
+    source_root: std.fs.Dir,
+    rule: PageRule,
+    page: Page,
     output_dir: std.fs.Dir,
-    index: usize,
 ) !void {
-    const destination_path = state.destination_file_paths.items[index] orelse try unmappedFileError(state);
-    const rule = state.destination_file_rules.items[index] orelse return error.MissingPageRule;
-    const source_path = state.source_files.items[index];
     switch (rule.processing) {
         .ignore => return error.UnexpectedlyAskedToGenerateOutputForIgnoredFile,
         .bootstrap => return error.UnexpectedlyAskedToGenerateOutputForBootstrapRule,
         .none => {
             // I'd like to use the below, but get the following error when I do:
             //     hidden symbol `__dso_handle' isn't defined
-            // try state.source_root.copyFile(source_path, output_dir, destination_path, .{});
+            // try state.source_root.copyFile(source_path, output_dir, output_path, .{});
 
             const buffer = try allocator.alloc(u8, 1024);
-            defer state.allocator.free(buffer);
+            defer allocator.free(buffer);
             var fifo = std.fifo.LinearFifo(u8, .Slice).init(buffer);
             defer fifo.deinit();
 
-            const from_file = try state.source_root.openFile(source_path, .{});
+            const from_file = try source_root.openFile(page.source_path, .{});
             defer from_file.close();
-            const to_file = try output_dir.createFile(destination_path, .{ .truncate = true, .exclusive = true });
+            const to_file = try output_dir.createFile(page.output_path, .{ .truncate = true, .exclusive = true });
             defer to_file.close();
-            for (rule.content) |content_elem| {
+            for (page.content) |content_elem| {
                 switch (content_elem) {
                     .source_contents => try fifo.pump(from_file.reader(), to_file.writer()),
                     .snippet => try to_file.writeAll(content_elem.snippet),
@@ -832,7 +900,7 @@ fn generateSitePath(
         },
         .markdown => {
             // TODO: figure out what to do if markdown files are larger than this.
-            const markdown = try state.source_root.readFileAlloc(allocator, source_path, 1024 * 1024);
+            const markdown = try source_root.readFileAlloc(allocator, page.source_path, 1024 * 1024);
             defer allocator.free(markdown);
             const html = c.cmark_markdown_to_html(
                 @ptrCast(markdown),
@@ -840,9 +908,9 @@ fn generateSitePath(
                 c.CMARK_OPT_DEFAULT | c.CMARK_OPT_UNSAFE,
             ) orelse return error.OutOfMemory;
             defer std.c.free(html);
-            const to_file = try output_dir.createFile(destination_path, .{ .truncate = true, .exclusive = true });
+            const to_file = try output_dir.createFile(page.output_path, .{ .truncate = true, .exclusive = true });
             defer to_file.close();
-            for (rule.content) |xml| {
+            for (page.content) |xml| {
                 switch (xml) {
                     .source_contents => try to_file.writeAll(std.mem.span(html)),
                     .snippet => try to_file.writeAll(xml.snippet),

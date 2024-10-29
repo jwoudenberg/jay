@@ -10,6 +10,7 @@ import PagesInternal
 GlueTypes : {
     a : PagesInternal.PagesInternal,
     b : PagesInternal.Content,
+    c : PagesInternal.Metadata,
 }
 
 mainForHost : GlueTypes

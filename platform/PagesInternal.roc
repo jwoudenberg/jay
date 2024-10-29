@@ -1,11 +1,18 @@
-module [Pages, Content, PagesInternal, wrap, unwrap]
+module [Pages, Content, PagesInternal, Request, Metadata, wrap, unwrap]
 
-Pages a := PagesInternal
+Pages a := Request -> PagesInternal
 
 PagesInternal : {
     patterns : List Str,
     processing : [None, Ignore, Bootstrap, Markdown],
     content : Content,
+}
+
+Request : [PatternsOnly, Content (List Metadata)]
+
+Metadata : {
+    path : Str,
+    frontmatter : List U8,
 }
 
 Content : List
@@ -14,8 +21,8 @@ Content : List
         Snippet (List U8),
     ]
 
-wrap : PagesInternal -> Pages type
-wrap = \xml -> @Pages xml
+wrap : (Request -> PagesInternal) -> Pages type
+wrap = \internal -> @Pages internal
 
-unwrap : Pages type -> PagesInternal
-unwrap = \@Pages xml -> xml
+unwrap : Pages type -> (Request -> PagesInternal)
+unwrap = \@Pages internal -> internal

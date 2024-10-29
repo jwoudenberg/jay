@@ -1,5 +1,6 @@
 module [
     Pages,
+    Metadata,
     bootstrap,
     files,
     ignore,
@@ -15,34 +16,40 @@ import XmlInternal
 
 Markdown := {}
 
+Metadata : PagesInternal.Metadata
+
 Pages a : PagesInternal.Pages a
 
 # Parse directory structure and rewrite main.roc with initial implementation.
 bootstrap : List (Pages type)
-bootstrap = [wrap { patterns: [], processing: Bootstrap, content: [] }]
+bootstrap = [wrap \_ -> { patterns: [], processing: Bootstrap, content: [] }]
 
 files : List Str -> Pages type
-files = \patterns -> wrap { patterns, processing: None, content: [SourceFile] }
+files = \patterns -> wrap \_ -> { patterns, processing: None, content: [SourceFile] }
 
 ignore : List Str -> Pages type
 ignore = \patterns ->
-    wrap { patterns, processing: Ignore, content: [] }
+    wrap \_ -> { patterns, processing: Ignore, content: [] }
 
 fromMarkdown : Pages Markdown -> Pages Html
 fromMarkdown = \pages ->
-    internal = unwrap pages
-    wrap { internal & processing: Markdown }
+    wrap \req ->
+        internal = (unwrap pages) req
+        { internal & processing: Markdown }
 
 wrapHtml : Pages Html, (Html -> Html) -> Pages Html
 wrapHtml = \pages, htmlWrapper ->
-    internal = unwrap pages
-    wrap
-        { internal &
-            content: internal.content
-            |> XmlInternal.wrap
-            |> htmlWrapper
-            |> XmlInternal.unwrap,
-        }
+    wrap \req ->
+        internal = (unwrap pages) req
+        when req is
+            PatternsOnly -> internal
+            Content _meta ->
+                { internal &
+                    content: internal.content
+                    |> XmlInternal.wrap
+                    |> htmlWrapper
+                    |> XmlInternal.unwrap,
+                }
 
 # Replace an HTML element in the passed in pages.
 replaceHtml : Pages Html, Str, ({}attrs, Html -> Html) -> Pages Html

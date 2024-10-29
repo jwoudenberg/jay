@@ -65,16 +65,8 @@ comptime {
     }
 }
 
-extern fn roc__mainForHost_1_exposed_generic(*RocList, *anyopaque) callconv(.C) void;
-
 pub fn main() void {
-    if (run()) {} else |err| {
+    if (lib.run()) {} else |err| {
         lib.failCrudely(err);
     }
-}
-
-fn run() !void {
-    var roc_pages: RocList = RocList{ .bytes = null, .length = 0, .capacity_or_alloc_ptr = 0 };
-    roc__mainForHost_1_exposed_generic(&roc_pages, undefined);
-    return lib.run(roc_pages);
 }

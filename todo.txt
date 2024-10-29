@@ -26,6 +26,7 @@ add support for pagination
 add support for search
 complete Xml module functions
 make Xml module functions take node-specific attributes
++refactor when scanning put files directly into a page rule
 +site for jay project with cookbooks
 +site example of gitbook-like site
 +site example of blog
