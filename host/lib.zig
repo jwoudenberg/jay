@@ -84,7 +84,7 @@ fn run_timed(gpa: *std.heap.GeneralPurposeAllocator(.{})) !void {
         var roc_pages = try allocator.alloc(RocMetadata, rule.pages.items.len);
         for (rule.pages.items, 0..) |page, page_index| {
             roc_pages[page_index] = RocMetadata{
-                .path = RocStr.fromSlice(page.output_path),
+                .path = RocStr.fromSlice(formatOutputPathForRoc(page.output_path)),
                 .frontmatter = RocList.fromSlice(u8, page.frontmatter, false),
             };
         }
@@ -114,6 +114,20 @@ fn run_timed(gpa: *std.heap.GeneralPurposeAllocator(.{})) !void {
 
     // (6) Generate output files.
     try generateSite(gpa.allocator(), &site, output_root);
+}
+
+fn formatOutputPathForRoc(path: []const u8) []const u8 {
+    std.debug.assert(path[0] == '/'); // Path's should have a leading slash.
+    if (std.mem.eql(u8, std.fs.path.basename(path), "index.html")) {
+        return std.fs.path.dirname(path) orelse unreachable;
+    } else {
+        return path;
+    }
+}
+
+test formatOutputPathForRoc {
+    try std.testing.expectEqualStrings("/hi/file.html", formatOutputPathForRoc("/hi/file.html"));
+    try std.testing.expectEqualStrings("/hi", formatOutputPathForRoc("/hi/index.html"));
 }
 
 fn generateCodeForRules(site: *const Site) !void {
