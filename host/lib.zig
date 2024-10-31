@@ -581,8 +581,8 @@ fn addFileToRule(
         const output_path = switch (rule.processing) {
             .ignore => return error.UnexpectedlyAskedToAddIgnoredFile,
             .bootstrap => return error.UnexpectedlyAskedToAddFileForBootstrapRule,
-            .none => source_path,
-            .markdown => try changeMarkdownExtension(allocator, source_path),
+            .none => try std.fmt.allocPrint(allocator, "/{s}", .{source_path}),
+            .markdown => try outputPathForMarkdownFile(allocator, source_path),
         };
 
         try site.rules[index].pages.append(Page{
@@ -761,23 +761,23 @@ fn rocListCopyToOwnedSlice(
     return slice;
 }
 
-fn changeMarkdownExtension(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
+fn outputPathForMarkdownFile(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
     if (!isMarkdown(path)) {
         try failPrettily("You're asking me to process a file as markdown, but it does not have a markdown file extension: {s}", .{path});
     }
     return std.fmt.allocPrint(
         allocator,
-        "{s}.html",
+        "/{s}.html",
         .{path[0..(path.len - std.fs.path.extension(path).len)]},
     );
 }
 
-test changeMarkdownExtension {
-    const actual = try changeMarkdownExtension(std.testing.allocator, "file.md");
+test outputPathForMarkdownFile {
+    const actual = try outputPathForMarkdownFile(std.testing.allocator, "file.md");
     defer std.testing.allocator.free(actual);
-    try std.testing.expectEqualStrings("file.html", actual);
+    try std.testing.expectEqualStrings("/file.html", actual);
 
-    try std.testing.expectError(error.PrettyError, changeMarkdownExtension(
+    try std.testing.expectError(error.PrettyError, outputPathForMarkdownFile(
         std.testing.allocator,
         "file.txt",
     ));
@@ -836,7 +836,7 @@ fn generateSite(
     const allocator = arena.allocator();
     for (site.rules) |rule| {
         for (rule.pages.items) |page| {
-            if (std.fs.path.dirname(page.output_path)) |dir| try output_dir.makePath(dir);
+            if (std.fs.path.dirname(page.output_path[1..])) |dir| try output_dir.makePath(dir);
             try generateSitePath(allocator, site.source_root, rule, page, output_dir);
             _ = arena.reset(.retain_capacity);
         }
@@ -889,7 +889,7 @@ fn generateSitePath(
 
             const from_file = try source_root.openFile(page.source_path, .{});
             defer from_file.close();
-            const to_file = try output_dir.createFile(page.output_path, .{ .truncate = true, .exclusive = true });
+            const to_file = try output_dir.createFile(page.output_path[1..], .{ .truncate = true, .exclusive = true });
             defer to_file.close();
             for (page.content) |content_elem| {
                 switch (content_elem) {
@@ -908,7 +908,7 @@ fn generateSitePath(
                 c.CMARK_OPT_DEFAULT | c.CMARK_OPT_UNSAFE,
             ) orelse return error.OutOfMemory;
             defer std.c.free(html);
-            const to_file = try output_dir.createFile(page.output_path, .{ .truncate = true, .exclusive = true });
+            const to_file = try output_dir.createFile(page.output_path[1..], .{ .truncate = true, .exclusive = true });
             defer to_file.close();
             for (page.content) |xml| {
                 switch (xml) {
