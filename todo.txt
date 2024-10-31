@@ -8,12 +8,12 @@ x implement `wrapHtml`
 x don't scan ingored paths
 x implement `bootstrap`
 x add timing information to output
+x warn if file matched by multiple patterns
 implement `replaceHtml`
 support metadata frontmatter
-watch for source-file changes and rebuild
-watch for roc-file changes and rebuild
+watch for source-file changes and rebuild (using watchman)
+watch for roc-file changes and rebuild (using watchman)
 warn if site contains broken links
-warn if file matched by multiple patterns
 perform partial builds when source file changes
 run local http server
 automatically reload browser when files change
@@ -26,7 +26,12 @@ add support for pagination
 add support for search
 complete Xml module functions
 make Xml module functions take node-specific attributes
-+refactor when scanning put files directly into a page rule
+integration tests
+macos support
+windows support
+provide error output in the browser showing the site preview
+skip running platform a second time when bootstrapping
+provide paths starting with a / to Roc
 +site for jay project with cookbooks
 +site example of gitbook-like site
 +site example of blog

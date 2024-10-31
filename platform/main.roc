@@ -10,13 +10,10 @@ mainForHost = \metadata ->
     ruleCount = List.len main
     metaCount = List.len metadata
     if metaCount == 0 then
-        List.map
-            main
-            \page -> (PagesInternal.unwrap page) PatternsOnly
+        List.map main \page ->
+            (PagesInternal.unwrap page) []
     else if metaCount == ruleCount then
-        List.map2
-            main
-            metadata
-            \page, ruleMeta -> (PagesInternal.unwrap page) (Content ruleMeta)
+        List.map2 main metadata \page, ruleMeta ->
+            (PagesInternal.unwrap page) ruleMeta
     else
         crash "got $(Num.toStr ruleCount) page rules, but received metadata for $(Num.toStr metaCount)"

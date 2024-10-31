@@ -2,7 +2,7 @@
 app [main] { pf: platform "../zig-out/platform/main.roc" }
 
 import pf.Pages
-import pf.Html exposing [Html]
+import pf.Html
 
 main = [
     static,
@@ -23,11 +23,13 @@ posts =
     |> Pages.fromMarkdown
     |> Pages.wrapHtml layout
 
-layout : Html -> Html
-layout = \contents ->
+layout = \contents, { path } ->
     Html.html {} [
         Html.head {} [
             Html.link { href: "/static/main.css", rel: "stylesheet" } [],
         ],
-        Html.body {} [contents],
+        Html.body {} [
+            Html.a { href: path } [Html.h1 {} [Html.text "My Blog"]],
+            contents,
+        ],
     ]

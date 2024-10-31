@@ -95,20 +95,22 @@ fn run_timed(gpa: *std.heap.GeneralPurposeAllocator(.{})) !void {
     // (5) Run platform a second time passing metadata, getting page contents.
     roc__mainForHost_1_exposed_generic(&roc_rules, &roc_metadata);
     var roc_rules_iterator = RocListIterator(RocPages).init(roc_rules);
-    var roc_rules_index: usize = 0;
-    while (roc_rules_iterator.next()) |roc_rule| {
-        const rule = site.rules[roc_rules_index];
-        roc_rules_index += 1;
+    for (site.rules) |rule| {
+        const roc_pages = roc_rules_iterator.next() orelse return error.FewerRocRulesThanExpected;
+        var roc_pages_iterator = RocListIterator(RocList).init(roc_pages.pages);
         for (0..rule.pages.items.len) |page_index| {
+            const roc_page = roc_pages_iterator.next() orelse return error.FewerRocPagesThanExpected;
             rule.pages.items[page_index].content = try rocListMapToOwnedSlice(
                 RocContent,
                 Snippet,
                 fromRocContent,
                 allocator,
-                roc_rule.content,
+                roc_page,
             );
         }
+        if (roc_pages_iterator.next() != null) return error.MoreRocPagesThanExpected;
     }
+    if (roc_rules_iterator.next() != null) return error.MoreRocRulesThanExpected;
 
     // (6) Generate output files.
     try generateSite(gpa.allocator(), &site, output_root);
@@ -162,7 +164,7 @@ fn generateCodeForRules(site: *const Site) !void {
         \\
         \\
         \\import pf.Pages
-        \\import pf.Html exposing [Html]
+        \\import pf.Html
         \\
         \\main = [
         \\
@@ -226,8 +228,7 @@ fn generateCodeForRules(site: *const Site) !void {
                     \\    |> Pages.fromMarkdown
                     \\    |> Pages.wrapHtml layout
                     \\
-                    \\layout : Html -> Html
-                    \\layout = \contents ->
+                    \\layout = \contents, _ ->
                     \\    Html.html {} [
                     \\        Html.head {} [],
                     \\        Html.body {} [contents],
@@ -289,7 +290,7 @@ test generateCodeForRules {
         \\app [main] { pf: platform "some hash here" }
         \\
         \\import pf.Pages
-        \\import pf.Html exposing [Html]
+        \\import pf.Html
         \\
         \\main = [
         \\    markdownFiles,
@@ -302,8 +303,7 @@ test generateCodeForRules {
         \\    |> Pages.fromMarkdown
         \\    |> Pages.wrapHtml layout
         \\
-        \\layout : Html -> Html
-        \\layout = \contents ->
+        \\layout = \contents, _ ->
         \\    Html.html {} [
         \\        Html.head {} [],
         \\        Html.body {} [contents],
@@ -635,7 +635,7 @@ const bootstrap_ignore_patterns = [_][]const u8{
 };
 
 const RocPages = extern struct {
-    content: RocList,
+    pages: RocList,
     patterns: RocList,
     processing: RocProcessing,
 };

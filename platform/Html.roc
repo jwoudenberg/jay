@@ -5,6 +5,7 @@ module [
 
     # elements
     a,
+    h1,
     body,
     head,
     html,
@@ -37,3 +38,5 @@ ul = \attributes, children -> XmlInternal.node "ul" attributes children
 li = \attributes, children -> XmlInternal.node "li" attributes children
 
 a = \attributes, children -> XmlInternal.node "a" attributes children
+
+h1 = \attributes, children -> XmlInternal.node "a" attributes children

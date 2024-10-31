@@ -22,34 +22,37 @@ Pages a : PagesInternal.Pages a
 
 # Parse directory structure and rewrite main.roc with initial implementation.
 bootstrap : List (Pages type)
-bootstrap = [wrap \_ -> { patterns: [], processing: Bootstrap, content: [] }]
+bootstrap = [wrap \_ -> { patterns: [], processing: Bootstrap, pages: [] }]
 
 files : List Str -> Pages type
-files = \patterns -> wrap \_ -> { patterns, processing: None, content: [SourceFile] }
+files = \patterns ->
+    wrap \meta -> {
+        patterns,
+        processing: None,
+        pages: List.map meta \_ -> [SourceFile],
+    }
 
 ignore : List Str -> Pages type
 ignore = \patterns ->
-    wrap \_ -> { patterns, processing: Ignore, content: [] }
+    wrap \_ -> { patterns, processing: Ignore, pages: [] }
 
 fromMarkdown : Pages Markdown -> Pages Html
 fromMarkdown = \pages ->
-    wrap \req ->
-        internal = (unwrap pages) req
+    wrap \meta ->
+        internal = (unwrap pages) meta
         { internal & processing: Markdown }
 
-wrapHtml : Pages Html, (Html -> Html) -> Pages Html
+wrapHtml : Pages Html, (Html, { path : Str } -> Html) -> Pages Html
 wrapHtml = \pages, htmlWrapper ->
-    wrap \req ->
-        internal = (unwrap pages) req
-        when req is
-            PatternsOnly -> internal
-            Content _meta ->
-                { internal &
-                    content: internal.content
-                    |> XmlInternal.wrap
-                    |> htmlWrapper
-                    |> XmlInternal.unwrap,
-                }
+    wrap \meta ->
+        internal = (unwrap pages) meta
+        { internal &
+            pages: List.map2 internal.pages meta \page, { path } ->
+                page
+                |> XmlInternal.wrap
+                |> htmlWrapper { path }
+                |> XmlInternal.unwrap,
+        }
 
 # Replace an HTML element in the passed in pages.
 replaceHtml : Pages Html, Str, ({}attrs, Html -> Html) -> Pages Html
