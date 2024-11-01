@@ -191,12 +191,17 @@ encodeRecord : List { key : Str, value : Encoder HtmlAttributes } -> Encoder Htm
 encodeRecord = \fields ->
     Encode.custom \bytes, fmt ->
         addAttribute = \acc, { key, value } ->
-            acc
-            |> List.concat [' ']
-            |> List.concat (Str.toUtf8 key)
-            |> List.concat ['=', '"']
-            |> Encode.appendWith value fmt
-            |> List.concat ['"']
+            valueEncoded = Encode.appendWith [] value fmt
+            if valueEncoded == [] then
+                acc
+                |> Encode.appendWith value fmt
+            else
+                acc
+                |> List.concat [' ']
+                |> List.concat (Str.toUtf8 key)
+                |> List.concat ['=', '"']
+                |> List.concat valueEncoded
+                |> List.concat ['"']
 
         List.walk fields bytes addAttribute
 

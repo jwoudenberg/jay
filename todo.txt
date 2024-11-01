@@ -10,6 +10,14 @@ x implement `bootstrap`
 x add timing information to output
 x warn if file matched by multiple patterns
 x support metadata frontmatter
+
++html support data attributes
++html put aria attributes in a nested record
++html fix shadowed attributes
++html add doctype
++html figure out what to do with httpEquiv
++html custom attributes
+
 implement `replaceHtml`
 watch for source-file changes and rebuild (using watchman)
 watch for roc-file changes and rebuild (using watchman)
@@ -24,8 +32,6 @@ offer way to get next/previous files
 add changelog
 add support for pagination
 add support for search
-complete Xml module functions
-make Xml module functions take node-specific attributes
 integration tests
 macos support
 windows support
