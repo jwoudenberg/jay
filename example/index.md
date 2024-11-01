@@ -2,8 +2,6 @@
   title: "Home",
 }
 
-# Welcome to my blog!
-
-You can read my posts.
+Welcome to my blog! I hope you enjoy my posts.
 
 <post-list/>

@@ -13,6 +13,7 @@ module [
 import PagesInternal exposing [wrap, unwrap]
 import Html exposing [Html]
 import XmlInternal
+import Rvn
 
 Markdown := {}
 
@@ -42,15 +43,22 @@ fromMarkdown = \pages ->
         internal = (unwrap pages) meta
         { internal & processing: Markdown }
 
-wrapHtml : Pages Html, (Html, { path : Str } -> Html) -> Pages Html
+wrapHtml : Pages Html, (Html, { path : Str, metadata : {}a } -> Html) -> Pages Html where a implements Decoding
 wrapHtml = \pages, htmlWrapper ->
     wrap \meta ->
         internal = (unwrap pages) meta
         { internal &
-            pages: List.map2 internal.pages meta \page, { path } ->
+            pages: List.map2 internal.pages meta \page, { path, frontmatter } ->
+                metadata =
+                    when Decode.fromBytes frontmatter Rvn.compact is
+                        Ok x -> x
+                        Err _ ->
+                            when Str.fromUtf8 frontmatter is
+                                Ok str -> crash "@$%^&.jayerror*0*$(str)"
+                                Err _ -> crash "frontmatter bytes not UTF8-encoded"
                 page
                 |> XmlInternal.wrap
-                |> htmlWrapper { path }
+                |> htmlWrapper { path, metadata }
                 |> XmlInternal.unwrap,
         }
 

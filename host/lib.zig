@@ -35,12 +35,54 @@ extern fn roc__getMetadataLengthForHost_1_exposed_generic(*u64, *const RocList) 
 pub fn run() !void {
     var timer = try std.time.Timer.start();
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    try run_timed(&gpa);
+    try runTimed(&gpa);
     const stdout = std.io.getStdOut().writer();
     try stdout.print("Generated site in {d}ms\n", .{timer.read() / 1_000_000});
 }
 
-fn run_timed(gpa: *std.heap.GeneralPurposeAllocator(.{})) !void {
+// The platform code uses 'crash' to 'throw' an error to the host in certain
+// situations. We can kind of get away with it because compile-time and
+// runtime are essentially the same time for this program, and so runtime
+// errors have fewer downsides then they might have in other platforms.
+//
+// To distinguish platform panics from user panics, we prefix platform panics
+// with a ridiculous string that hopefully never will attempt to copy.
+const panic_prefix = "@$%^&.jayerror*";
+pub fn handlePanic(roc_msg: *RocStr, tag_id: u32) void {
+    const msg = roc_msg.asSlice();
+    if (!std.mem.startsWith(u8, msg, panic_prefix)) {
+        failPrettily(
+            \\
+            \\Roc crashed with the following error:
+            \\MSG:{s}
+            \\TAG:{d}
+            \\
+            \\Shutting down
+            \\
+        , .{ msg, tag_id }) catch {};
+        std.process.exit(1);
+    }
+
+    const code = msg[panic_prefix.len];
+    const details = msg[panic_prefix.len + 2 ..];
+    switch (code) {
+        '0' => {
+            failPrettily(
+                \\I ran into an error attempting to decode the following metadata:
+                \\
+                \\{s}
+                \\
+            , .{details}) catch {};
+            std.process.exit(1);
+        },
+        else => {
+            failPrettily("Unknown panic error code: {d}", .{code}) catch {};
+            std.process.exit(1);
+        },
+    }
+}
+
+fn runTimed(gpa: *std.heap.GeneralPurposeAllocator(.{})) !void {
     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -606,15 +648,30 @@ fn addFileToRule(
             .bootstrap => return error.UnexpectedlyAskedToAddFileForBootstrapRule,
             .none => "{}",
             .markdown => blk: {
-                // TODO: only parse metadata if it starts with a '{'.
-                // TODO: fail with explicit error if markdown file starts with
-                // a '{', but no metadata was parsed.
                 const bytes = try site.source_root.readFileAlloc(gpa_allocator, source_path, 1024 * 1024);
+                if (firstNonWhitespaceByte(bytes) != '{') break :blk "{}";
+
                 defer gpa_allocator.free(bytes);
                 const roc_bytes = RocList.fromSlice(u8, bytes, false);
                 var meta_len: u64 = undefined;
                 roc__getMetadataLengthForHost_1_exposed_generic(&meta_len, &roc_bytes);
-                break :blk try allocator.dupe(u8, bytes[0..meta_len]);
+
+                // Markdown headers start with #, just like Roc comments. RVN
+                // supports comments, so if there's a header below the page
+                // frontmatter it is parsed as well. We'll peel these off.
+                const meta_bytes = dropTrailingHeaderLines(bytes[0..meta_len]);
+
+                if (meta_bytes.len == 0) {
+                    try failPrettily(
+                        \\I ran into an error attempting to decode the metadata
+                        \\at the start of this file:
+                        \\
+                        \\    {s}
+                        \\
+                    , .{source_path});
+                }
+
+                break :blk try allocator.dupe(u8, meta_bytes);
             },
         };
 
@@ -643,6 +700,70 @@ fn addFileToRule(
             , .{ source_path, matched_rules.items });
         },
     }
+}
+
+fn firstNonWhitespaceByte(bytes: []const u8) ?u8 {
+    if (std.mem.indexOfNone(u8, bytes, &std.ascii.whitespace)) |index| {
+        return bytes[index];
+    } else {
+        return null;
+    }
+}
+
+test firstNonWhitespaceByte {
+    try std.testing.expectEqual('x', firstNonWhitespaceByte("x"));
+    try std.testing.expectEqual('x', firstNonWhitespaceByte(" x"));
+    try std.testing.expectEqual('x', firstNonWhitespaceByte("\tx"));
+    try std.testing.expectEqual('x', firstNonWhitespaceByte("\nx"));
+    try std.testing.expectEqual('x', firstNonWhitespaceByte("x y"));
+    try std.testing.expectEqual('x', firstNonWhitespaceByte("\n \tx"));
+    try std.testing.expectEqual('x', firstNonWhitespaceByte("xy"));
+    try std.testing.expectEqual(null, firstNonWhitespaceByte(" "));
+    try std.testing.expectEqual(null, firstNonWhitespaceByte(""));
+}
+
+fn dropTrailingHeaderLines(bytes: []const u8) []const u8 {
+    if (bytes.len == 0) return bytes;
+
+    var end = bytes.len;
+    var ahead_of_header = false;
+    var whitespace_only = true;
+    for (1..1 + bytes.len) |index| {
+        switch (bytes[bytes.len - index]) {
+            '\n' => {
+                if (!(ahead_of_header or whitespace_only)) break;
+                end = bytes.len - index;
+                ahead_of_header = false;
+                whitespace_only = true;
+            },
+            '#' => {
+                ahead_of_header = true;
+            },
+            else => |byte| {
+                if (std.mem.indexOfScalar(u8, &std.ascii.whitespace, byte)) |_| continue;
+                if (ahead_of_header) break;
+                whitespace_only = false;
+            },
+        }
+    }
+    return bytes[0..end];
+}
+
+test dropTrailingHeaderLines {
+    try std.testing.expectEqualStrings("{\n}", dropTrailingHeaderLines("{\n}\n"));
+    try std.testing.expectEqualStrings("{\n}", dropTrailingHeaderLines("{\n}\n#foo"));
+    try std.testing.expectEqualStrings("{\n}", dropTrailingHeaderLines("{\n}\n# foo"));
+    try std.testing.expectEqualStrings("{\n}", dropTrailingHeaderLines("{\n}\n#\tfoo"));
+    try std.testing.expectEqualStrings("{\n}", dropTrailingHeaderLines("{\n}\n# foo"));
+    try std.testing.expectEqualStrings("{\n}", dropTrailingHeaderLines("{\n}\n##foo\n"));
+    try std.testing.expectEqualStrings("{\n}", dropTrailingHeaderLines("{\n}\n\n#foo"));
+    try std.testing.expectEqualStrings("{\n}", dropTrailingHeaderLines("{\n}\n#foo\n"));
+    try std.testing.expectEqualStrings("{\n}", dropTrailingHeaderLines("{\n}\n#foo\n##bar"));
+
+    // This is not a markdown header but a trailing comment
+    try std.testing.expectEqualStrings("{\n} #foo", dropTrailingHeaderLines("{\n} #foo"));
+    try std.testing.expectEqualStrings("{\n}\t#foo", dropTrailingHeaderLines("{\n}\t#foo"));
+    try std.testing.expectEqualStrings("{\n}#foo", dropTrailingHeaderLines("{\n}#foo\n#bar"));
 }
 
 // Read ignore patterns out of the page rules read from code.

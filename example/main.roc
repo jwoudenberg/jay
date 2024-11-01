@@ -23,13 +23,14 @@ posts =
     |> Pages.fromMarkdown
     |> Pages.wrapHtml layout
 
-layout = \contents, { path } ->
+layout = \contents, { path, metadata } ->
     Html.html {} [
         Html.head {} [
             Html.link { href: "/static/main.css", rel: "stylesheet" } [],
         ],
         Html.body {} [
-            Html.a { href: path } [Html.h1 {} [Html.text "My Blog"]],
+            Html.h1 {} [Html.text "My Blog"],
+            Html.a { href: path } [Html.h2 {} [Html.text metadata.title]],
             contents,
         ],
     ]

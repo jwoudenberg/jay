@@ -21,8 +21,7 @@ export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
 }
 
 export fn roc_panic(msg: *RocStr, tag_id: u32) callconv(.C) void {
-    lib.failPrettily("\n\nRoc crashed with the following error;\nMSG:{s}\nTAG:{d}\n\nShutting down\n", .{ msg.asSlice(), tag_id }) catch {};
-    std.process.exit(1);
+    lib.handlePanic(msg, tag_id);
 }
 
 export fn roc_dbg(loc: *RocStr, msg: *RocStr, src: *RocStr) callconv(.C) void {

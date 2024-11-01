@@ -9,8 +9,8 @@ x don't scan ingored paths
 x implement `bootstrap`
 x add timing information to output
 x warn if file matched by multiple patterns
+x support metadata frontmatter
 implement `replaceHtml`
-support metadata frontmatter
 watch for source-file changes and rebuild (using watchman)
 watch for roc-file changes and rebuild (using watchman)
 warn if site contains broken links
@@ -31,6 +31,7 @@ macos support
 windows support
 provide error output in the browser showing the site preview
 skip running platform a second time when bootstrapping
+pretty errors
 +site for jay project with cookbooks
 +site example of gitbook-like site
 +site example of blog
