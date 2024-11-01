@@ -1,3 +1,5 @@
-# Zig is pretty awesome
+{
+  title: "Zig is pretty awesome",
+}
 
 Amazing tooling!

@@ -30,6 +30,7 @@ const Page = struct {
 const output_root = "output";
 
 extern fn roc__mainForHost_1_exposed_generic(*RocList, *const RocList) callconv(.C) void;
+extern fn roc__getMetadataLengthForHost_1_exposed_generic(*u64, *const RocList) callconv(.C) void;
 
 pub fn run() !void {
     var timer = try std.time.Timer.start();
@@ -75,7 +76,7 @@ fn run_timed(gpa: *std.heap.GeneralPurposeAllocator(.{})) !void {
         try bootstrapPageRules(&site);
         try generateCodeForRules(&site);
     } else {
-        try scanSourceFiles(&site);
+        try scanSourceFiles(gpa.allocator(), &site);
     }
 
     // (4) Gather page metadata into a Roc datastructure.
@@ -551,7 +552,7 @@ const SourceFileWalker = struct {
     }
 };
 
-fn scanSourceFiles(site: *Site) !void {
+fn scanSourceFiles(gpa_allocator: std.mem.Allocator, site: *Site) !void {
     const allocator = site.arena.allocator();
     const explicit_ignores = try getRuleIgnorePatterns(allocator, site.rules);
     var source_iterator = try SourceFileWalker.init(
@@ -568,7 +569,7 @@ fn scanSourceFiles(site: *Site) !void {
             continue;
         } else {
             const path = try allocator.dupe(u8, entry.path);
-            try addFileToRule(site, path, &unmatched_paths);
+            try addFileToRule(gpa_allocator, site, path, &unmatched_paths);
         }
     }
 
@@ -578,6 +579,7 @@ fn scanSourceFiles(site: *Site) !void {
 }
 
 fn addFileToRule(
+    gpa_allocator: std.mem.Allocator,
     site: *Site,
     source_path: []const u8,
     unmatched_paths: *std.ArrayList([]const u8),
@@ -599,10 +601,27 @@ fn addFileToRule(
             .markdown => try outputPathForMarkdownFile(allocator, source_path),
         };
 
+        const frontmatter = switch (rule.processing) {
+            .ignore => return error.UnexpectedlyAskedToAddIgnoredFile,
+            .bootstrap => return error.UnexpectedlyAskedToAddFileForBootstrapRule,
+            .none => "{}",
+            .markdown => blk: {
+                // TODO: only parse metadata if it starts with a '{'.
+                // TODO: fail with explicit error if markdown file starts with
+                // a '{', but no metadata was parsed.
+                const bytes = try site.source_root.readFileAlloc(gpa_allocator, source_path, 1024 * 1024);
+                defer gpa_allocator.free(bytes);
+                const roc_bytes = RocList.fromSlice(u8, bytes, false);
+                var meta_len: u64 = undefined;
+                roc__getMetadataLengthForHost_1_exposed_generic(&meta_len, &roc_bytes);
+                break :blk try allocator.dupe(u8, bytes[0..meta_len]);
+            },
+        };
+
         try site.rules[index].pages.append(Page{
             .source_path = source_path,
             .output_path = output_path,
-            .frontmatter = &.{}, // TODO: perform frontmatter parsing.
+            .frontmatter = frontmatter,
             .content = &.{},
         });
     }
@@ -914,7 +933,12 @@ fn generateSitePath(
         },
         .markdown => {
             // TODO: figure out what to do if markdown files are larger than this.
-            const markdown = try source_root.readFileAlloc(allocator, page.source_path, 1024 * 1024);
+            const markdown_with_frontmatter = try source_root.readFileAlloc(
+                allocator,
+                page.source_path,
+                1024 * 1024,
+            );
+            const markdown = markdown_with_frontmatter[page.frontmatter.len..];
             defer allocator.free(markdown);
             const html = c.cmark_markdown_to_html(
                 @ptrCast(markdown),
