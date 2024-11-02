@@ -33,7 +33,7 @@ node : Str, {}attributes, List Xml -> Xml where attributes implements Encoding
 node = \tagName, attributes, children ->
     openTag =
         Str.toUtf8 "<$(tagName)"
-        |> Encode.append attributes (@HtmlAttributes {})
+        |> Encode.append attributes (@HtmlAttributes { attrWords: [] })
         |> List.concatUtf8 ">"
 
     closeTag =
@@ -45,19 +45,26 @@ node = \tagName, attributes, children ->
     |> wrap
 
 expect
-    attrs = { class: "green", id: "key-point" }
-    children = [
-        @Xml [Snippet (Str.toUtf8 "cats")],
-        @Xml [Snippet (Str.toUtf8 "kill")],
-    ]
+    # Encode node without attributes.
+    xml = xmlToStrForTests (node "span" {} [])
+    xml == "<span></span>"
 
-    unwrap (node "span" attrs children)
-    == [
-        Snippet (Str.toUtf8 "<span class=\"green\" id=\"key-point\">"),
-        Snippet (Str.toUtf8 "cats"),
-        Snippet (Str.toUtf8 "kill"),
-        Snippet (Str.toUtf8 "</span>"),
-    ]
+expect
+    # Don't include empty attributes.
+    xml = xmlToStrForTests (node "span" { empty: "" } [])
+    xml == "<span></span>"
+
+expect
+    # Encode node with multiple attributes.
+    attrs = { class: "green", id: "key-point" }
+    children = [text "cats", text "kill"]
+    xml = xmlToStrForTests (node "span" attrs children)
+    xml == "<span class=\"green\" id=\"key-point\">catskill</span>"
+
+expect
+    # Encode nested records as hyphen-separated attributes.
+    xml = xmlToStrForTests (node "button" { aria: { disabled: "true" } } [])
+    xml == "<button aria-disabled=\"true\"></button>"
 
 text : Str -> Xml
 text = \str ->
@@ -98,6 +105,20 @@ escape = \unescaped, escapeByte ->
     |> copySlice
     |> .escaped
 
+xmlToStrForTests : Xml -> Str
+xmlToStrForTests = \xml ->
+    unwrap xml
+    |> List.map \snippet ->
+        when snippet is
+            Snippet bytes ->
+                when Str.fromUtf8 bytes is
+                    Ok str -> str
+                    Err err -> crash "Failed to convert bytes to Str: $(Inspect.toStr err)"
+
+            SourceFile ->
+                "{SOURCEFILE}"
+    |> Str.joinWith ""
+
 expect
     actual = escape (Str.toUtf8 "abXcdXXef") \byte ->
         when byte is
@@ -106,7 +127,21 @@ expect
 
     Str.fromUtf8 actual == Ok "ab**cd****ef"
 
-HtmlAttributes := {}
+# Formatter used for encoding HTML attributes. It currently expects records
+# with string fields as an input.
+#
+# Records can be nested. This:
+#
+#     { aria: { disabled: "true" } }
+#
+# Gets encoded as:
+#
+#     aria-disabled="true"
+#
+# The attrWords property in the formatter keeps track growing attribute name as
+# the decoder moves deeper into a nested record.
+#
+HtmlAttributes := { attrWords : List Str }
     implements [
         EncoderFormatting {
             u8: encodeU8,
@@ -175,35 +210,35 @@ encodeBool = \_ -> crash "can't encode Bool"
 
 encodeString : Str -> Encoder HtmlAttributes
 encodeString = \str ->
-    Encode.custom \bytes, @HtmlAttributes _ ->
-        escaped = escape (Str.toUtf8 str) \byte ->
-            when byte is
-                '<' -> Replace ['&', 'l', 't', ';']
-                '&' -> Replace ['&', 'a', 'm', 'p', ';']
-                '"' -> Replace ['&', 'q', 'u', 'o', 't', ';']
-                _ -> Keep
-        List.concat bytes escaped
+    Encode.custom \bytes, @HtmlAttributes { attrWords } ->
+        if Str.isEmpty str then
+            bytes
+        else
+            escaped = escape (Str.toUtf8 str) \byte ->
+                when byte is
+                    '<' -> Replace ['&', 'l', 't', ';']
+                    '&' -> Replace ['&', 'a', 'm', 'p', ';']
+                    '"' -> Replace ['&', 'q', 'u', 'o', 't', ';']
+                    _ -> Keep
+
+            key = Str.joinWith attrWords "-"
+
+            bytes
+            |> List.concat [' ']
+            |> List.concat (Str.toUtf8 key)
+            |> List.concat ['=', '"']
+            |> List.concat escaped
+            |> List.concat ['"']
 
 encodeList : List elem, (elem -> Encoder HtmlAttributes) -> Encoder HtmlAttributes
 encodeList = \_, _ -> crash "can't encode List"
 
 encodeRecord : List { key : Str, value : Encoder HtmlAttributes } -> Encoder HtmlAttributes
 encodeRecord = \fields ->
-    Encode.custom \bytes, fmt ->
-        addAttribute = \acc, { key, value } ->
-            valueEncoded = Encode.appendWith [] value fmt
-            if valueEncoded == [] then
-                acc
-                |> Encode.appendWith value fmt
-            else
-                acc
-                |> List.concat [' ']
-                |> List.concat (Str.toUtf8 key)
-                |> List.concat ['=', '"']
-                |> List.concat valueEncoded
-                |> List.concat ['"']
-
-        List.walk fields bytes addAttribute
+    Encode.custom \bytes, @HtmlAttributes fmt ->
+        List.walk fields bytes \acc, { key, value } ->
+            newFmt = @HtmlAttributes { fmt & attrWords: List.append fmt.attrWords key }
+            Encode.appendWith acc value newFmt
 
 encodeTuple : List (Encoder HtmlAttributes) -> Encoder HtmlAttributes
 encodeTuple = \_ -> crash "can't encode Tuple"
