@@ -38,6 +38,7 @@ windows support
 provide error output in the browser showing the site preview
 skip running platform a second time when bootstrapping
 pretty errors
+Xml modules support other types of 'attribute-construction' rules than hypen-separated
 +site for jay project with cookbooks
 +site example of gitbook-like site
 +site example of blog

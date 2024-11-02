@@ -24,7 +24,7 @@ const Page = struct {
     source_path: []const u8,
     output_path: []const u8,
     frontmatter: []const u8,
-    content: []const Snippet,
+    content: []const Slice,
 };
 
 const output_root = "output";
@@ -129,6 +129,8 @@ fn runTimed(gpa: *std.heap.GeneralPurposeAllocator(.{})) !void {
             roc_pages[page_index] = RocMetadata{
                 .path = RocStr.fromSlice(formatOutputPathForRoc(page.output_path)),
                 .frontmatter = RocList.fromSlice(u8, page.frontmatter, false),
+                .replacements = RocList.empty(), // TODO: pass real value
+                .source = RocList.empty(), // TODO: pass real value
             };
         }
         roc_metadata_slice[rule_index] = RocList.fromSlice(RocMetadata, roc_pages, false);
@@ -144,9 +146,9 @@ fn runTimed(gpa: *std.heap.GeneralPurposeAllocator(.{})) !void {
         for (0..rule.pages.items.len) |page_index| {
             const roc_page = roc_pages_iterator.next() orelse return error.FewerRocPagesThanExpected;
             rule.pages.items[page_index].content = try rocListMapToOwnedSlice(
-                RocContent,
-                Snippet,
-                fromRocContent,
+                RocSlice,
+                Slice,
+                fromRocSlice,
                 allocator,
                 roc_page,
             );
@@ -791,6 +793,7 @@ const bootstrap_ignore_patterns = [_][]const u8{
 const RocPages = extern struct {
     pages: RocList,
     patterns: RocList,
+    replaceTags: RocList,
     processing: RocProcessing,
 };
 
@@ -804,23 +807,25 @@ const RocProcessing = enum(u8) {
 const RocMetadata = extern struct {
     frontmatter: RocList,
     path: RocStr,
+    replacements: RocList,
+    source: RocList,
 };
 
-const Snippet = union(enum) {
-    snippet: []const u8,
-    source_contents: void,
+const Slice = union(enum) {
+    from_source: u64,
+    slice: []const u8,
 };
 
-const RocContent = extern struct { payload: RocContentPayload, tag: RocContentTag };
+const RocSlice = extern struct { payload: RocSlicePayload, tag: RocSliceTag };
 
-const RocContentPayload = extern union {
-    snippet: RocList,
-    source_contents: void,
+const RocSlicePayload = extern union {
+    from_source: u64,
+    slice: RocList,
 };
 
-const RocContentTag = enum(u8) {
-    RocSnippet = 0,
-    RocSourceFile = 1,
+const RocSliceTag = enum(u8) {
+    RocFromSource = 0,
+    RocSlice = 1,
 };
 
 fn rocPagesToPageRule(allocator: std.mem.Allocator, pages: RocPages) !PageRule {
@@ -841,16 +846,16 @@ fn fromRocPattern(allocator: std.mem.Allocator, roc_pattern: RocStr) ![]const u8
     return try allocator.dupe(u8, roc_pattern.asSlice());
 }
 
-fn fromRocContent(allocator: std.mem.Allocator, roc_content: RocContent) !Snippet {
+fn fromRocSlice(allocator: std.mem.Allocator, roc_content: RocSlice) !Slice {
     return switch (roc_content.tag) {
-        .RocSourceFile => .source_contents,
-        .RocSnippet => {
-            const snippet = try rocListCopyToOwnedSlice(
+        .RocFromSource => .{ .from_source = roc_content.payload.from_source },
+        .RocSlice => {
+            const slice = try rocListCopyToOwnedSlice(
                 u8,
                 allocator,
-                roc_content.payload.snippet,
+                roc_content.payload.slice,
             );
-            return .{ .snippet = snippet };
+            return .{ .slice = slice };
         },
     };
 }
@@ -1047,8 +1052,8 @@ fn generateSitePath(
             defer to_file.close();
             for (page.content) |content_elem| {
                 switch (content_elem) {
-                    .source_contents => try fifo.pump(from_file.reader(), to_file.writer()),
-                    .snippet => try to_file.writeAll(content_elem.snippet),
+                    .from_source => try fifo.pump(from_file.reader(), to_file.writer()),
+                    .slice => try to_file.writeAll(content_elem.slice),
                 }
             }
         },
@@ -1071,8 +1076,8 @@ fn generateSitePath(
             defer to_file.close();
             for (page.content) |xml| {
                 switch (xml) {
-                    .source_contents => try to_file.writeAll(std.mem.span(html)),
-                    .snippet => try to_file.writeAll(xml.snippet),
+                    .from_source => try to_file.writeAll(std.mem.span(html)),
+                    .slice => try to_file.writeAll(xml.slice),
                 }
             }
         },

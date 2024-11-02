@@ -9,7 +9,7 @@ import PagesInternal
 
 GlueTypes : {
     a : PagesInternal.PagesInternal,
-    b : PagesInternal.Content,
+    b : PagesInternal.Slice,
     c : PagesInternal.Metadata,
 }
 

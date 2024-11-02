@@ -58,9 +58,11 @@ pub fn build(b: *std.Build) !void {
     // way zig will know to rerun the roc commands when .roc files change.
     var platform_dir = try std.fs.cwd().openDir("platform", .{ .iterate = true });
     defer platform_dir.close();
-    var platform_iter = platform_dir.iterate();
-    while (try platform_iter.next()) |roc_file| {
-        const roc_path = b.path("platform").path(b, roc_file.name);
+    var platform_walker = try platform_dir.walk(b.allocator);
+    defer platform_walker.deinit();
+    while (try platform_walker.next()) |entry| {
+        if (entry.kind != .file) continue;
+        const roc_path = b.path("platform").path(b, entry.path);
         build_libapp.addFileInput(roc_path);
         build_host.addFileInput(roc_path);
     }

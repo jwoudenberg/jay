@@ -312,12 +312,12 @@ pub fn print(writer: std.fs.File.Writer) !void {
     try writer.writeAll(
         \\]
         \\
-        \\import XmlInternal
+        \\import Xml.Internal
         \\
-        \\Html : XmlInternal.Xml
+        \\Html : Xml.Internal.Xml
         \\
         \\text : Str -> Html
-        \\text = XmlInternal.text
+        \\text = Xml.Internal.text
         \\
         \\
     );
@@ -329,7 +329,7 @@ pub fn print(writer: std.fs.File.Writer) !void {
             \\{s} = \{{
         , .{tag.name});
         try printAttrs("{s} ? \"\"", ", {s} ? \"\"", writer, tag.attrs);
-        try writer.print(" }}, children -> XmlInternal.node \"{s}\" {{ ", .{tag.name});
+        try writer.print(" }}, children -> Xml.Internal.node \"{s}\" {{ ", .{tag.name});
         try printAttrs("{s}", ", {s}", writer, tag.attrs);
         try writer.writeAll(" } children\n\n");
     }
