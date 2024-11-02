@@ -234,56 +234,57 @@ const global_attributes = [_][]const u8{
     "ontoggle",
     "onvolumechange",
     "onwaiting",
+};
 
-    // ARIA
-    "ariaAutocomplete",
-    "ariaChecked",
-    "ariaDisabled",
-    "ariaErrorMessage",
-    "ariaExpanded",
-    "ariaHaspopup",
-    "ariaHidden",
-    "ariaInvalid",
-    "ariaLabel",
-    "ariaLevel",
-    "ariaModal",
-    "ariaMultiline",
-    "ariaMultiselectable",
-    "ariaOrientation",
-    "ariaPlaceholder",
-    "ariaPressed",
-    "ariaReadonly",
-    "ariaRequired",
-    "ariaSelected",
-    "ariaSort",
-    "ariaValuemax",
-    "ariaValuemin",
-    "ariaValuenow",
-    "ariaValuetext",
-    "ariaBusy",
-    "ariaLive",
-    "ariaRelevant",
-    "ariaAtomic",
-    "ariaDropeffect",
-    "ariaGrabbed",
-    "ariaActivedescendant",
-    "ariaColcount",
-    "ariaColindex",
-    "ariaColspan",
-    "ariaControls",
-    "ariaDescribedby",
-    "ariaDescription",
-    "ariaDetails",
-    "ariaFlowto",
-    "ariaLabelledby",
-    "ariaOwns",
-    "ariaPosinset",
-    "ariaRowcount",
-    "ariaRowindex",
-    "ariaRowspan",
-    "ariaSetsize",
-    "ariaKeyshortcuts",
-    "ariaRoledescription",
+const aria_attributes = [_][]const u8{
+    "autocomplete",
+    "checked",
+    "disabled",
+    "errorMessage",
+    "expanded",
+    "haspopup",
+    "hidden",
+    "invalid",
+    "label",
+    "level",
+    "modal",
+    "multiline",
+    "multiselectable",
+    "orientation",
+    "placeholder",
+    "pressed",
+    "readonly",
+    "required",
+    "selected",
+    "sort",
+    "valuemax",
+    "valuemin",
+    "valuenow",
+    "valuetext",
+    "busy",
+    "live",
+    "relevant",
+    "atomic",
+    "dropeffect",
+    "grabbed",
+    "activedescendant",
+    "colcount",
+    "colindex",
+    "colspan",
+    "controls",
+    "describedby",
+    "description",
+    "details",
+    "flowto",
+    "labelledby",
+    "owns",
+    "posinset",
+    "rowcount",
+    "rowindex",
+    "rowspan",
+    "setsize",
+    "keyshortcuts",
+    "roledescription",
 };
 
 pub fn main() !void {
@@ -321,16 +322,38 @@ pub fn print(writer: std.fs.File.Writer) !void {
         \\
         \\
     );
+
+    // AriaAttributes : { .. }
+    try writer.writeAll("AriaAttributes : {\n");
+    for (aria_attributes) |attr| {
+        try writer.print("    {s} ? Str,\n", .{attr});
+    }
+    try writer.writeAll("}\n\n");
+
+    // defaultsForAriaAttributes = \{ .. } -> { .. }
+    try writer.writeAll("defaultsForAriaAttributes = \\{ ");
+    try printAttrs("{s} ? \"\"", ", {s} ? \"\"", writer, &aria_attributes);
+    try writer.writeAll(" } -> { ");
+    try printAttrs("{s}", ", {s}", writer, &aria_attributes);
+    try writer.writeAll(" }\n\n");
+
+    // sometag = \{ .. }, children -> XmlInternal.node "sometag" { .. } children
     for (tags) |tag| {
         try writer.print("{s} : {{ ", .{tag.name});
-        try printAttrs("{s} ? Str", ", {s} ? Str", writer, tag.attrs);
+        try printAttrs("{s} ? Str", ", {s} ? Str", writer, &global_attributes);
+        try printAttrs(", {s} ? Str", ", {s} ? Str", writer, tag.attrs);
+        try writer.writeAll(", aria : AriaAttributes");
         try writer.print(
             \\}}, List Html -> Html
             \\{s} = \{{
         , .{tag.name});
-        try printAttrs("{s} ? \"\"", ", {s} ? \"\"", writer, tag.attrs);
+        try printAttrs("{s} ? \"\"", ", {s} ? \"\"", writer, &global_attributes);
+        try printAttrs(", {s} ? \"\"", ", {s} ? \"\"", writer, tag.attrs);
+        try writer.writeAll(", aria");
         try writer.print(" }}, children -> XmlInternal.node \"{s}\" {{ ", .{tag.name});
-        try printAttrs("{s}", ", {s}", writer, tag.attrs);
+        try printAttrs("{s}", ", {s}", writer, &global_attributes);
+        try printAttrs(", {s}", ", {s}", writer, tag.attrs);
+        try writer.writeAll(", aria: defaultsForAriaAttributes aria");
         try writer.writeAll(" } children\n\n");
     }
 }
@@ -341,31 +364,33 @@ fn printAttrs(
     writer: std.fs.File.Writer,
     attrs: []const []const u8,
 ) !void {
-    try writer.print(first, .{global_attributes[0]});
-    for (global_attributes[1..]) |attr| {
-        if (!skipAttr(attr)) continue;
-        try writer.print(rest, .{attr});
+    var start: usize = 0;
+    while (start < attrs.len and skipAttr(attrs[start])) {
+        start += 1;
     }
-    for (attrs) |attr| {
-        if (!skipAttr(attr)) continue;
+    if (start >= attrs.len) return;
+    try writer.print(first, .{attrs[start]});
+    for (attrs[start + 1 ..]) |attr| {
+        if (skipAttr(attr)) continue;
         try writer.print(rest, .{attr});
     }
 }
 
 // TODO: figure out a way not to skip any attributes
 fn skipAttr(attr: []const u8) bool {
-    if (std.mem.eql(u8, attr, "abbr")) return false; // conflicts with element of same name.
-    if (std.mem.eql(u8, attr, "accept-charset")) return false; // name contains invalid byte.
-    if (std.mem.eql(u8, attr, "as")) return false; // reserved keyword.
-    if (std.mem.eql(u8, attr, "cite")) return false; // conflicts with element of same name.
-    if (std.mem.eql(u8, attr, "data")) return false; // conflicts with element of same name.
-    if (std.mem.eql(u8, attr, "form")) return false; // conflicts with element of same name.
-    if (std.mem.eql(u8, attr, "http-equiv")) return false; // name contains invalid byte.
-    if (std.mem.eql(u8, attr, "is")) return false; // reserved keyword.
-    if (std.mem.eql(u8, attr, "label")) return false; // conflicts with element of same name.
-    if (std.mem.eql(u8, attr, "slot")) return false; // conflicts with element of same name.
-    if (std.mem.eql(u8, attr, "span")) return false; // conflicts with element of same name.
-    if (std.mem.eql(u8, attr, "style")) return false; // conflicts with element of same name.
-    if (std.mem.eql(u8, attr, "title")) return false; // conflicts with element of same name.
-    return true;
+    if (std.mem.eql(u8, attr, "abbr")) return true; // conflicts with element of same name.
+    if (std.mem.eql(u8, attr, "accept-charset")) return true; // name contains invalid byte.
+    if (std.mem.eql(u8, attr, "as")) return true; // reserved keyword.
+    if (std.mem.eql(u8, attr, "cite")) return true; // conflicts with element of same name.
+    if (std.mem.eql(u8, attr, "data")) return true; // conflicts with element of same name.
+    if (std.mem.eql(u8, attr, "details")) return true; // conflicts with element of same name.
+    if (std.mem.eql(u8, attr, "form")) return true; // conflicts with element of same name.
+    if (std.mem.eql(u8, attr, "http-equiv")) return true; // name contains invalid byte.
+    if (std.mem.eql(u8, attr, "is")) return true; // reserved keyword.
+    if (std.mem.eql(u8, attr, "label")) return true; // conflicts with element of same name.
+    if (std.mem.eql(u8, attr, "slot")) return true; // conflicts with element of same name.
+    if (std.mem.eql(u8, attr, "span")) return true; // conflicts with element of same name.
+    if (std.mem.eql(u8, attr, "style")) return true; // conflicts with element of same name.
+    if (std.mem.eql(u8, attr, "title")) return true; // conflicts with element of same name.
+    return false;
 }

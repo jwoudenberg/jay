@@ -12,10 +12,8 @@ x warn if file matched by multiple patterns
 x support metadata frontmatter
 
 +html support data attributes
-+html put aria attributes in a nested record
-+html fix shadowed attributes
++html fix ignored
 +html add doctype
-+html figure out what to do with httpEquiv
 +html custom attributes
 
 implement `replaceHtml`
