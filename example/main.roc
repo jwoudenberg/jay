@@ -16,6 +16,7 @@ static = Pages.files ["/static"]
 pages =
     Pages.files ["*.md"]
     |> Pages.fromMarkdown
+    |> Pages.replaceHtml "post-list" postList
     |> Pages.wrapHtml layout
 
 posts =
@@ -23,14 +24,20 @@ posts =
     |> Pages.fromMarkdown
     |> Pages.wrapHtml layout
 
-layout = \contents, { path, metadata } ->
+layout = \{ content, path, meta } ->
     Html.html {} [
         Html.head {} [
+            Html.title {} [Html.text "My Blog"],
             Html.link { href: "/static/main.css", rel: "stylesheet" } [],
         ],
         Html.body {} [
             Html.h1 {} [Html.text "My Blog"],
-            Html.a { href: path } [Html.h2 {} [Html.text metadata.title]],
-            contents,
+            Html.a { href: path } [Html.h2 {} [Html.text meta.title]],
+            content,
         ],
+    ]
+
+postList = \_ ->
+    Html.ul {} [
+        Html.li {} [Html.text "TODO: show posts here"],
     ]

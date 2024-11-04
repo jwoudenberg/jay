@@ -334,12 +334,12 @@ expect
             formatter
     result == Ok { elm: "leafy", pine: "needly" }
 
-whitespace : Set U8
-whitespace = Set.fromList [' ', '\t', '\n']
+xmlWhitespace : Set U8
+xmlWhitespace = Set.fromList [' ', '\t', '\n', '\r']
 
 skipWhitespace : List U8 -> List U8
 skipWhitespace = \bytes ->
-    List.dropIf bytes \byte -> Set.contains whitespace byte
+    List.dropIf bytes \byte -> Set.contains xmlWhitespace byte
 
 expect
     result = skipWhitespace []

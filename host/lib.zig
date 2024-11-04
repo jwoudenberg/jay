@@ -3,6 +3,9 @@ const builtin = @import("builtin");
 const RocStr = @import("roc/str.zig").RocStr;
 const RocList = @import("roc/list.zig").RocList;
 const glob = @import("glob.zig");
+comptime {
+    _ = @import("xml.zig");
+}
 const c = @cImport({
     @cInclude("cmark-gfm.h");
 });
@@ -1074,10 +1077,10 @@ fn generateSitePath(
             defer std.c.free(html);
             const to_file = try output_dir.createFile(page.output_path[1..], .{ .truncate = true, .exclusive = true });
             defer to_file.close();
-            for (page.content) |xml| {
-                switch (xml) {
+            for (page.content) |snippet| {
+                switch (snippet) {
                     .from_source => try to_file.writeAll(std.mem.span(html)),
-                    .slice => try to_file.writeAll(xml.slice),
+                    .slice => try to_file.writeAll(snippet.slice),
                 }
             }
         },
