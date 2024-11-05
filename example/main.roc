@@ -16,7 +16,7 @@ static = Pages.files ["/static"]
 pages =
     Pages.files ["*.md"]
     |> Pages.fromMarkdown
-    |> Pages.replaceHtml "post-list" postList
+    |> Pages.replaceHtml "page-list" postList
     |> Pages.wrapHtml layout
 
 posts =
@@ -37,7 +37,7 @@ layout = \{ content, path, meta } ->
         ],
     ]
 
-postList = \_ ->
+postList = \{ attrs: { pattern } } ->
     Html.ul {} [
-        Html.li {} [Html.text "TODO: show posts here"],
+        Html.li {} [Html.text "TODO: show posts matching $(pattern) here"],
     ]

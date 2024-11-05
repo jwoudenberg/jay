@@ -19,6 +19,7 @@ x support metadata frontmatter
 +html custom attributes
 
 implement `replaceHtml`
+implement fromHtml
 watch for source-file changes and rebuild (using watchman)
 watch for roc-file changes and rebuild (using watchman)
 warn if site contains broken links

@@ -299,7 +299,7 @@ decodeRecord =
             loop : RecordState state -> DecodeResult state
             loop = \{ rest, state } ->
                 when skipWhitespace rest is
-                    ['>', ..] -> { rest, result: Ok state }
+                    [] -> { rest, result: Ok state }
                     after ->
                         result = parseAttribute { rest: after, state }
                         when result.result is
@@ -328,9 +328,20 @@ decodeTuple =
         Decode.custom \_bytes, @Attributes _ -> crash "can't decode Tuple"
 
 expect
+    # Decode empty attribute list to empty record
+    { result } = Decode.fromBytesPartial [] formatter
+    result == Ok {}
+
+expect
+    # Decode string containing just whitespace to empty record
+    { result } = Decode.fromBytesPartial [' ', '\n'] formatter
+    result == Ok {}
+
+expect
+    # Decode multiple attributes
     { result } =
         Decode.fromBytesPartial
-            (Str.toUtf8 " elm='leafy' \n pine=\"needly\"  >")
+            (Str.toUtf8 " elm='leafy' \n pine=\"needly\" ")
             formatter
     result == Ok { elm: "leafy", pine: "needly" }
 

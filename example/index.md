@@ -4,4 +4,4 @@
 
 Welcome to my blog! I hope you enjoy my posts.
 
-<post-list/>
+<page-list pattern="posts/" />

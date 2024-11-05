@@ -8,9 +8,11 @@ platform "glue-types"
 import PagesInternal
 
 GlueTypes : {
-    a : PagesInternal.PagesInternal,
-    b : PagesInternal.Slice,
-    c : PagesInternal.Metadata,
+    a : PagesInternal.PageRule,
+    b : PagesInternal.HostPage,
+    c : PagesInternal.HostTag,
+    d : PagesInternal.Xml,
+    e : PagesInternal.SourceLoc,
 }
 
 mainForHost : GlueTypes

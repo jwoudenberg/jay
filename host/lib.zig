@@ -290,10 +290,10 @@ fn generateCodeForRules(site: *const Site) !void {
                     \\    |> Pages.fromMarkdown
                     \\    |> Pages.wrapHtml layout
                     \\
-                    \\layout = \contents, _ ->
+                    \\layout = \{ content } ->
                     \\    Html.html {} [
                     \\        Html.head {} [],
-                    \\        Html.body {} [contents],
+                    \\        Html.body {} [content],
                     \\    ]
                     \\
                 );

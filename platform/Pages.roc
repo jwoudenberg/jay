@@ -1,16 +1,14 @@
 module [
     Pages,
-    Metadata,
     bootstrap,
     files,
     ignore,
     fromMarkdown,
     wrapHtml,
     replaceHtml,
-    toHtml,
 ]
 
-import PagesInternal exposing [wrap, unwrap]
+import PagesInternal exposing [wrap, unwrap, Xml]
 import Html exposing [Html]
 import Xml.Internal
 import Xml.Attributes
@@ -18,115 +16,400 @@ import Rvn
 
 Markdown := {}
 
-Metadata : PagesInternal.Metadata
-
 Pages a : PagesInternal.Pages a
 
 # Parse directory structure and rewrite main.roc with initial implementation.
 bootstrap : List (Pages type)
 bootstrap = [
-    wrap \_ -> {
+    wrap {
         patterns: [],
         processing: Bootstrap,
-        pages: [],
         replaceTags: [],
+        pipeline: \content, _ -> content,
     },
 ]
 
 files : List Str -> Pages type
 files = \patterns ->
-    wrap \meta -> {
+    wrap {
         patterns,
         processing: None,
         replaceTags: [],
-        pages: List.map meta \_ -> [FromSource 0],
+        pipeline: \content, _ -> content,
     }
 
 ignore : List Str -> Pages type
 ignore = \patterns ->
-    wrap \_ -> { patterns, processing: Ignore, pages: [], replaceTags: [] }
+    wrap {
+        patterns,
+        processing: Ignore,
+        replaceTags: [],
+        pipeline: \content, _ -> content,
+    }
 
 fromMarkdown : Pages Markdown -> Pages Html
 fromMarkdown = \pages ->
-    wrap \meta ->
-        internal = (unwrap pages) meta
-        { internal & processing: Markdown }
+    internal = unwrap pages
+    wrap { internal & processing: Markdown }
 
-wrapHtml : Pages Html, (Html, { path : Str, metadata : {}a } -> Html) -> Pages Html where a implements Decoding
-wrapHtml = \pages, htmlWrapper ->
-    wrap \meta ->
-        internal = (unwrap pages) meta
-        { internal &
-            pages: List.map2 internal.pages meta \page, { path, frontmatter } ->
-                metadata =
-                    when Decode.fromBytes frontmatter Rvn.compact is
-                        Ok x -> x
-                        Err _ ->
-                            when Str.fromUtf8 frontmatter is
-                                Ok str -> crash "@$%^&.jayerror*0*$(str)"
-                                Err _ -> crash "frontmatter bytes not UTF8-encoded"
-                page
-                |> Xml.Internal.wrap
-                |> htmlWrapper { path, metadata }
-                |> Xml.Internal.unwrap,
-        }
+wrapHtml : Pages Html, ({ content : Html, path : Str, meta : {}a } -> Html) -> Pages Html where a implements Decoding
+wrapHtml = \pages, userWrapper ->
+    internal = unwrap pages
+
+    wrapper : Xml, PagesInternal.HostPage -> Xml
+    wrapper = \content, page ->
+        meta =
+            when Decode.fromBytes page.meta Rvn.compact is
+                Ok x -> x
+                Err _ ->
+                    when Str.fromUtf8 page.meta is
+                        Ok str -> crash "@$%^&.jayerror*0*$(str)"
+                        Err _ -> crash "frontmatter bytes not UTF8-encoded"
+
+        userWrapper { content: Xml.Internal.wrap content, path: page.path, meta }
+        |> Xml.Internal.unwrap
+
+    wrap {
+        patterns: internal.patterns,
+        processing: if internal.processing == None then Xml else internal.processing,
+        replaceTags: internal.replaceTags,
+        pipeline: \content, hostPage ->
+            internal.pipeline content hostPage
+            |> wrapper hostPage,
+    }
 
 # Replace an HTML element in the passed in pages.
 replaceHtml :
     Pages Html,
     Str,
-    ({ content : Html, attributes : {}attrs, path : Str, metadata : {}a } -> Html)
+    ({ content : Html, attrs : {}attrs, path : Str, meta : {}a } -> Html)
     -> Pages Html
-replaceHtml = \pages, tag, replaceTag ->
-    wrap \meta ->
-        internal = (unwrap pages) meta
-        replacerIndex = List.len internal.replaceTags
-        { internal &
-            replaceTags: List.append internal.replaceTags tag,
-            pages: List.map2 internal.pages meta \page, { path, frontmatter, replacements } ->
-                metadata =
-                    when Decode.fromBytes frontmatter Rvn.compact is
+replaceHtml = \pages, name, userReplacer ->
+    internal = unwrap pages
+
+    replacer : Xml, PagesInternal.HostPage -> Xml
+    replacer = \original, page ->
+        meta =
+            when Decode.fromBytes page.meta Rvn.compact is
+                Ok x -> x
+                Err _ ->
+                    when Str.fromUtf8 page.meta is
+                        Ok str -> crash "@$%^&.jayerror*0*$(str)"
+                        Err _ -> crash "frontmatter bytes not UTF8-encoded"
+
+        List.walk page.tags original \content, tag ->
+            if Num.intCast tag.index == List.len internal.replaceTags then
+                attrs =
+                    when Decode.fromBytes tag.attributes Xml.Attributes.formatter is
                         Ok x -> x
                         Err _ ->
-                            when Str.fromUtf8 frontmatter is
-                                Ok str -> crash "@$%^&.jayerror*0*$(str)"
-                                Err _ -> crash "frontmatter bytes not UTF8-encoded"
+                            when Str.fromUtf8 tag.attributes is
+                                Ok str -> crash "@$%^&.jayerror*1*$(str)"
+                                Err _ -> crash "attribute bytes not UTF8-encoded"
 
-                matches =
-                    when List.get replacements replacerIndex is
-                        Ok x -> x
-                        Err OutOfBounds -> crash "@$%^&.jayerror*z*replacers shorter than expected"
+                replaceTag content tag \nested ->
+                    userReplacer {
+                        content: Xml.Internal.wrap nested,
+                        path: page.path,
+                        attrs,
+                        meta,
+                    }
+                    |> Xml.Internal.unwrap
+            else
+                original
 
-                List.walk page { acc: [], matchIndex: 0 } \{ acc, matchIndex }, slice ->
-                    when slice is
-                        FromSource index if index == replacerIndex ->
-                            attributeBytes =
-                                when List.get matches matchIndex is
-                                    Ok x -> x
-                                    Err OutOfBounds -> crash "@$%^&.jayerror*z*replacements shorter than expected"
-                            attributes =
-                                when Decode.fromBytes attributeBytes Xml.Attributes.formatter is
-                                    Ok x -> x
-                                    Err _ -> crash "@$%^&.jayerror*z*failed decoding attributes"
+    wrap {
+        patterns: internal.patterns,
+        processing: if internal.processing == None then Xml else internal.processing,
+        replaceTags: List.append internal.replaceTags name,
+        pipeline: \content, hostPage ->
+            internal.pipeline content hostPage
+            |> replacer hostPage,
+    }
 
-                            content = Xml.Internal.wrap [slice]
+replaceTag : Xml, PagesInternal.HostTag, (Xml -> Xml) -> Xml
+replaceTag = \content, tag, replace ->
+    { before, after, nested } =
+        List.walk content { before: [], nested: [], after: [] } \acc, slice ->
+            when slice is
+                RocGenerated _ ->
+                    if !(List.isEmpty acc.after) then
+                        { acc & after: List.append acc.after slice }
+                    else if !(List.isEmpty acc.nested) then
+                        { acc & nested: List.append acc.nested slice }
+                    else
+                        { acc & before: List.append acc.before slice }
 
-                            replacement = replaceTag { content, path, attributes, metadata }
+                FromSource { start, end } ->
+                    if tag.outerEnd <= start then
+                        # <tag /> [ slice ]
+                        { acc & after: List.append acc.after slice }
+                    else if tag.outerStart >= end then
+                        # [ slice ] <tag />
+                        { acc & before: List.append acc.before slice }
+                    else if tag.outerStart <= start && tag.outerEnd >= end then
+                        # <tag [ slice ] />
+                        { acc &
+                            nested: List.append
+                                acc.nested
+                                (
+                                    FromSource {
+                                        start: clamp tag.innerStart start tag.innerEnd,
+                                        end: clamp tag.innerStart end tag.innerEnd,
+                                    }
+                                ),
+                        }
+                    else if tag.outerStart < start && tag.outerEnd < end then
+                        # <tag [ /> slice ]
+                        { acc &
+                            nested: List.append
+                                acc.nested
+                                (
+                                    FromSource {
+                                        start: clamp tag.innerStart start tag.innerEnd,
+                                        end: tag.innerEnd,
+                                    }
+                                ),
+                            after: List.append
+                                acc.after
+                                (FromSource { start: tag.outerEnd, end }),
+                        }
+                    else if tag.outerStart > start && tag.outerEnd > end then
+                        # [ slice <tag ] />
+                        { acc &
+                            before: List.append
+                                acc.before
+                                (FromSource { start, end: tag.outerStart }),
+                            nested: List.append
+                                acc.nested
+                                (
+                                    FromSource {
+                                        start: tag.innerStart,
+                                        end: clamp tag.innerStart end tag.innerEnd,
+                                    }
+                                ),
+                        }
+                    else
+                        # [ slice <tag /> ]
+                        { acc &
+                            before: List.append
+                                acc.before
+                                (FromSource { start, end: tag.outerStart }),
+                            nested: List.append
+                                acc.nested
+                                (FromSource { start: tag.innerStart, end: tag.innerEnd }),
+                            after: List.append
+                                acc.after
+                                (FromSource { start: tag.outerEnd, end }),
+                        }
 
-                            {
-                                matchIndex: matchIndex + 1,
-                                acc: List.concat acc (Xml.Internal.unwrap replacement),
-                            }
+    before
+    |> List.concat (replace nested)
+    |> List.concat after
 
-                        _ -> { acc: List.append acc slice, matchIndex } # TODO: check matchIndex equals replacements length
-                |> .acc,
-        }
+parseTagForTest : List U8 -> PagesInternal.HostTag
+parseTagForTest = \bytes ->
+    ok = \result ->
+        when result is
+            Ok x -> Num.intCast x
+            Err _ -> crash "oops"
 
-# Advanced: Used to implement functions like 'fromMarkdown'
-toHtml :
     {
-        extension : Str,
-        parser : List U8 -> (Html, {}meta),
-    },
-    Pages type
-    -> Pages Html
+        index: 0,
+        outerStart: List.findFirstIndex bytes (\b -> b == '<') |> ok,
+        outerEnd: 1 + (List.findLastIndex bytes (\b -> b == '>') |> ok),
+        innerStart: 1 + (List.findFirstIndex bytes (\b -> b == '>') |> ok),
+        innerEnd: List.findLastIndex bytes (\b -> b == '<') |> ok,
+        attributes: [],
+    }
+
+# Mark some XML to make it recognizable in test output
+markForTest : Xml -> Xml
+markForTest = \xml ->
+    List.map xml \slice ->
+        when slice is
+            FromSource { start, end } -> FromSource { start: 1000 + start, end: 1000 + end }
+            RocGenerated bytes -> RocGenerated (['!'] |> List.concat bytes |> List.append '!')
+
+expect
+    content = Str.toUtf8 "    <tag>hi</tag>   "
+    #              index:  123456789 123456789
+    #              slice:  []
+    tag = parseTagForTest content
+    actual =
+        [FromSource { start: 0, end: 2 }]
+        |> replaceTag tag markForTest
+    [FromSource { start: 0, end: 2 }]
+    == actual
+
+expect
+    content = Str.toUtf8 "    <tag>hi</tag>   "
+    #              index:  123456789 123456789
+    #              slice: [    ]
+    tag = parseTagForTest content
+    actual =
+        [FromSource { start: 0, end: 6 }]
+        |> replaceTag tag markForTest
+    [
+        FromSource { start: 0, end: 4 },
+        FromSource { start: 1009, end: 1009 },
+    ]
+    == actual
+
+expect
+    content = Str.toUtf8 "    <tag>hi</tag>   "
+    #              index:  123456789 123456789
+    #              slice: [        ]
+    tag = parseTagForTest content
+    actual =
+        [FromSource { start: 0, end: 10 }]
+        |> replaceTag tag markForTest
+    [
+        FromSource { start: 0, end: 4 },
+        FromSource { start: 1009, end: 1010 },
+    ]
+    == actual
+
+expect
+    content = Str.toUtf8 "    <tag>hi</tag>   "
+    #              index:  123456789 123456789
+    #              slice: [            ]
+    tag = parseTagForTest content
+    actual =
+        [FromSource { start: 0, end: 14 }]
+        |> replaceTag tag markForTest
+    [
+        FromSource { start: 0, end: 4 },
+        FromSource { start: 1009, end: 1011 },
+    ]
+    == actual
+
+expect
+    content = Str.toUtf8 "    <tag>hi</tag>   "
+    #              index:  123456789 123456789
+    #              slice: [                  ]
+    tag = parseTagForTest content
+    actual =
+        [FromSource { start: 0, end: 20 }]
+        |> replaceTag tag markForTest
+    [
+        FromSource { start: 0, end: 4 },
+        FromSource { start: 1009, end: 1011 },
+        FromSource { start: 17, end: 20 },
+    ]
+    == actual
+
+expect
+    content = Str.toUtf8 "    <tag>hi</tag>   "
+    #              index:  123456789 123456789
+    #              slice:       [            ]
+    tag = parseTagForTest content
+    actual =
+        [FromSource { start: 6, end: 20 }]
+        |> replaceTag tag markForTest
+    [
+        FromSource { start: 1009, end: 1011 },
+        FromSource { start: 17, end: 20 },
+    ]
+    == actual
+
+expect
+    content = Str.toUtf8 "    <tag>hi</tag>   "
+    #              index:  123456789 123456789
+    #              slice:           [        ]
+    tag = parseTagForTest content
+    actual =
+        [FromSource { start: 10, end: 20 }]
+        |> replaceTag tag markForTest
+    [
+        FromSource { start: 1010, end: 1011 },
+        FromSource { start: 17, end: 20 },
+    ]
+    == actual
+
+expect
+    content = Str.toUtf8 "    <tag>hi</tag>   "
+    #              index:  123456789 123456789
+    #              slice:               [    ]
+    tag = parseTagForTest content
+    actual =
+        [FromSource { start: 14, end: 20 }]
+        |> replaceTag tag markForTest
+    [
+        FromSource { start: 1011, end: 1011 },
+        FromSource { start: 17, end: 20 },
+    ]
+    == actual
+
+expect
+    content = Str.toUtf8 "    <tag>hi</tag>   "
+    #              index:  123456789 123456789
+    #              slice:                   []
+    tag = parseTagForTest content
+    actual =
+        [FromSource { start: 18, end: 20 }]
+        |> replaceTag tag markForTest
+    [
+        FromSource { start: 18, end: 20 },
+    ]
+    == actual
+
+expect
+    # Generated content before the tag is not included in replaced contents.
+    content = Str.toUtf8 "    <tag>hi</tag>   "
+    #              index:  123456789 123456789
+    #              slice: [ ]X
+    tag = parseTagForTest content
+    actual =
+        [FromSource { start: 0, end: 3 }, RocGenerated ['X']]
+        |> replaceTag tag markForTest
+    [
+        FromSource { start: 0, end: 3 },
+        RocGenerated ['X'],
+    ]
+    == actual
+
+expect
+    # Generated content in the tag is included in replaced contents.
+    content = Str.toUtf8 "    <tag>hi</tag>   "
+    #              index:  123456789 123456789
+    #              slice: [        ]X
+    tag = parseTagForTest content
+    actual =
+        [FromSource { start: 0, end: 10 }, RocGenerated ['X']]
+        |> replaceTag tag markForTest
+    [
+        FromSource { start: 0, end: 4 },
+        FromSource { start: 1009, end: 1010 },
+        RocGenerated ['!', 'X', '!'],
+    ]
+    == actual
+
+expect
+    # Generated content after the tag is not included in replaced contents.
+    content = Str.toUtf8 "    <tag>hi</tag>   "
+    #              index:  123456789 123456789
+    #              slice: [               ]X
+    tag = parseTagForTest content
+    actual =
+        [FromSource { start: 0, end: 17 }, RocGenerated ['X']]
+        |> replaceTag tag markForTest
+    [
+        FromSource { start: 0, end: 4 },
+        FromSource { start: 1009, end: 1011 },
+        FromSource { start: 17, end: 17 },
+        RocGenerated ['X'],
+    ]
+    == actual
+
+clamp : Int a, Int a, Int a -> Int a
+clamp = \lower, number, upper ->
+    number
+    |> Num.max lower
+    |> Num.min upper
+
+expect clamp 2 1 6 == 2
+expect clamp 2 8 6 == 6
+expect clamp 2 5 6 == 5
+expect clamp 2 2 6 == 2
+expect clamp 2 6 6 == 6
