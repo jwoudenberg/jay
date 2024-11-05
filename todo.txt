@@ -10,16 +10,17 @@ x implement `bootstrap`
 x add timing information to output
 x warn if file matched by multiple patterns
 x support metadata frontmatter
+x implement `replaceHtml`
 
 +html support data attributes
-+html put aria attributes in a nested record
 +html fix shadowed attributes
 +html add doctype
 +html figure out what to do with httpEquiv
 +html custom attributes
 
-implement `replaceHtml`
 implement fromHtml
+implement list
+assert/convert html input files to ensure utf8 encoding of output
 watch for source-file changes and rebuild (using watchman)
 watch for roc-file changes and rebuild (using watchman)
 warn if site contains broken links
@@ -28,6 +29,7 @@ run local http server
 automatically reload browser when files change
 generate site in remote cache location
 provide --output flag for production builds
+support 'break' in a markdown post (introduction shown on index page)
 rss support
 offer way to get next/previous files
 add changelog
@@ -44,3 +46,4 @@ Xml modules support other types of 'attribute-construction' rules than hypen-sep
 +site example of gitbook-like site
 +site example of blog
 +site example of recipe site
++site example of site with multi-language support

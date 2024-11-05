@@ -3,12 +3,14 @@ const builtin = @import("builtin");
 const RocStr = @import("roc/str.zig").RocStr;
 const RocList = @import("roc/list.zig").RocList;
 const glob = @import("glob.zig");
-comptime {
-    _ = @import("xml.zig");
-}
+const xml = @import("xml.zig");
 const c = @cImport({
     @cInclude("cmark-gfm.h");
 });
+comptime {
+    // To get tests from xml.zig to be included in runs.
+    _ = @import("xml.zig");
+}
 
 const Site = struct {
     arena: *std.heap.ArenaAllocator,
@@ -19,6 +21,7 @@ const Site = struct {
 
 const PageRule = struct {
     patterns: []const []const u8,
+    replaceTags: []const []const u8,
     processing: RocProcessing,
     pages: std.ArrayList(Page),
 };
@@ -27,13 +30,13 @@ const Page = struct {
     source_path: []const u8,
     output_path: []const u8,
     frontmatter: []const u8,
-    content: []const Slice,
 };
 
 const output_root = "output";
 
-extern fn roc__mainForHost_1_exposed_generic(*RocList, *const RocList) callconv(.C) void;
+extern fn roc__mainForHost_1_exposed_generic(*RocList, *const void) callconv(.C) void;
 extern fn roc__getMetadataLengthForHost_1_exposed_generic(*u64, *const RocList) callconv(.C) void;
+extern fn roc__runPipelineForHost_1_exposed_generic(*RocList, *const RocPage) callconv(.C) void;
 
 pub fn run() !void {
     var timer = try std.time.Timer.start();
@@ -78,6 +81,15 @@ pub fn handlePanic(roc_msg: *RocStr, tag_id: u32) void {
             , .{details}) catch {};
             std.process.exit(1);
         },
+        '1' => {
+            failPrettily(
+                \\I ran into an error attempting to decode the following attributes:
+                \\
+                \\{s}
+                \\
+            , .{details}) catch {};
+            std.process.exit(1);
+        },
         else => {
             failPrettily("Unknown panic error code: {d}", .{code}) catch {};
             std.process.exit(1);
@@ -99,16 +111,15 @@ fn runTimed(gpa: *std.heap.GeneralPurposeAllocator(.{})) !void {
         try failPrettily("Cannot access directory containing {s}: '{}'\n", .{ source_root_path, err });
     };
 
-    // (2) Call platform first time to get page rules.
-    var roc_metadata = RocList.empty();
+    // (2) Call platform to get page rules.
     var roc_rules = RocList.empty();
-    roc__mainForHost_1_exposed_generic(&roc_rules, &roc_metadata);
+    roc__mainForHost_1_exposed_generic(&roc_rules, &void{});
     var site = Site{
         .arena = &arena,
         .source_root = source_root,
         .roc_main = std.fs.path.basename(argv0),
         .rules = try rocListMapToOwnedSlice(
-            RocPages,
+            RocPageRule,
             PageRule,
             rocPagesToPageRule,
             allocator,
@@ -124,43 +135,7 @@ fn runTimed(gpa: *std.heap.GeneralPurposeAllocator(.{})) !void {
         try scanSourceFiles(gpa.allocator(), &site);
     }
 
-    // (4) Gather page metadata into a Roc datastructure.
-    var roc_metadata_slice = try allocator.alloc(RocList, site.rules.len);
-    for (site.rules, 0..) |rule, rule_index| {
-        var roc_pages = try allocator.alloc(RocMetadata, rule.pages.items.len);
-        for (rule.pages.items, 0..) |page, page_index| {
-            roc_pages[page_index] = RocMetadata{
-                .path = RocStr.fromSlice(formatOutputPathForRoc(page.output_path)),
-                .frontmatter = RocList.fromSlice(u8, page.frontmatter, false),
-                .replacements = RocList.empty(), // TODO: pass real value
-                .source = RocList.empty(), // TODO: pass real value
-            };
-        }
-        roc_metadata_slice[rule_index] = RocList.fromSlice(RocMetadata, roc_pages, false);
-    }
-    roc_metadata = RocList.fromSlice(RocList, roc_metadata_slice, false);
-
-    // (5) Run platform a second time passing metadata, getting page contents.
-    roc__mainForHost_1_exposed_generic(&roc_rules, &roc_metadata);
-    var roc_rules_iterator = RocListIterator(RocPages).init(roc_rules);
-    for (site.rules) |rule| {
-        const roc_pages = roc_rules_iterator.next() orelse return error.FewerRocRulesThanExpected;
-        var roc_pages_iterator = RocListIterator(RocList).init(roc_pages.pages);
-        for (0..rule.pages.items.len) |page_index| {
-            const roc_page = roc_pages_iterator.next() orelse return error.FewerRocPagesThanExpected;
-            rule.pages.items[page_index].content = try rocListMapToOwnedSlice(
-                RocSlice,
-                Slice,
-                fromRocSlice,
-                allocator,
-                roc_page,
-            );
-        }
-        if (roc_pages_iterator.next() != null) return error.MoreRocPagesThanExpected;
-    }
-    if (roc_rules_iterator.next() != null) return error.MoreRocRulesThanExpected;
-
-    // (6) Generate output files.
+    // (4) Generate output files.
     try generateSite(gpa.allocator(), &site, output_root);
 }
 
@@ -265,6 +240,7 @@ fn generateCodeForRules(site: *const Site) !void {
                 );
             },
             .bootstrap => unreachable,
+            .xml => unreachable,
         }
     }
     try writer.writeAll(
@@ -300,6 +276,7 @@ fn generateCodeForRules(site: *const Site) !void {
             },
             .none => {},
             .ignore => {},
+            .xml => {},
             .bootstrap => unreachable,
         }
     }
@@ -322,16 +299,19 @@ test generateCodeForRules {
         PageRule{
             .processing = .markdown,
             .patterns = ([_][]const u8{ "posts/*.md", "*.md" })[0..],
+            .replaceTags = &[_][]const u8{},
             .pages = std.ArrayList(Page).init(std.testing.allocator),
         },
         PageRule{
             .processing = .none,
             .patterns = ([_][]const u8{"static"})[0..],
+            .replaceTags = &[_][]const u8{},
             .pages = std.ArrayList(Page).init(std.testing.allocator),
         },
         PageRule{
             .processing = .ignore,
             .patterns = ([_][]const u8{ ".git", ".gitignore" })[0..],
+            .replaceTags = &[_][]const u8{},
             .pages = std.ArrayList(Page).init(std.testing.allocator),
         },
     };
@@ -365,10 +345,10 @@ test generateCodeForRules {
         \\    |> Pages.fromMarkdown
         \\    |> Pages.wrapHtml layout
         \\
-        \\layout = \contents, _ ->
+        \\layout = \{ content } ->
         \\    Html.html {} [
         \\        Html.head {} [],
-        \\        Html.body {} [contents],
+        \\        Html.body {} [content],
         \\    ]
         \\
     );
@@ -388,6 +368,7 @@ fn bootstrapPageRules(site: *Site) !void {
         &bootstrap_ignore_patterns,
     );
     defer source_iterator.deinit();
+    // TODO: don't just collect patterns, also populate .pages field.
     while (try source_iterator.next()) |entry| {
         if (entry.ignore) {
             try ignore_patterns.put(try allocator.dupe(u8, entry.path), void{});
@@ -417,12 +398,14 @@ fn updateSiteForPatterns(
 ) !void {
     const allocator = site.arena.allocator();
     var rules = try std.ArrayList(PageRule).initCapacity(allocator, 3);
+    errdefer rules.deinit();
 
     if (markdown_patterns.count() > 0) {
         try rules.append(PageRule{
             .patterns = try getHashMapKeys(allocator, markdown_patterns),
             .processing = .markdown,
             .pages = std.ArrayList(Page).init(allocator),
+            .replaceTags = &[_][]u8{},
         });
     }
     if (static_patterns.count() > 0) {
@@ -430,12 +413,14 @@ fn updateSiteForPatterns(
             .patterns = try getHashMapKeys(allocator, static_patterns),
             .processing = .none,
             .pages = std.ArrayList(Page).init(allocator),
+            .replaceTags = &[_][]u8{},
         });
     }
     try rules.append(PageRule{
         .patterns = try getHashMapKeys(allocator, ignore_patterns),
         .processing = .ignore,
         .pages = std.ArrayList(Page).init(allocator),
+        .replaceTags = &[_][]u8{},
     });
 
     site.rules = try rules.toOwnedSlice();
@@ -644,19 +629,19 @@ fn addFileToRule(
         const output_path = switch (rule.processing) {
             .ignore => return error.UnexpectedlyAskedToAddIgnoredFile,
             .bootstrap => return error.UnexpectedlyAskedToAddFileForBootstrapRule,
-            .none => try std.fmt.allocPrint(allocator, "/{s}", .{source_path}),
+            .xml, .none => try std.fmt.allocPrint(allocator, "/{s}", .{source_path}),
             .markdown => try outputPathForMarkdownFile(allocator, source_path),
         };
 
         const frontmatter = switch (rule.processing) {
             .ignore => return error.UnexpectedlyAskedToAddIgnoredFile,
             .bootstrap => return error.UnexpectedlyAskedToAddFileForBootstrapRule,
-            .none => "{}",
+            .xml, .none => "{}",
             .markdown => blk: {
                 const bytes = try site.source_root.readFileAlloc(gpa_allocator, source_path, 1024 * 1024);
+                defer gpa_allocator.free(bytes);
                 if (firstNonWhitespaceByte(bytes) != '{') break :blk "{}";
 
-                defer gpa_allocator.free(bytes);
                 const roc_bytes = RocList.fromSlice(u8, bytes, false);
                 var meta_len: u64 = undefined;
                 roc__getMetadataLengthForHost_1_exposed_generic(&meta_len, &roc_bytes);
@@ -684,7 +669,6 @@ fn addFileToRule(
             .source_path = source_path,
             .output_path = output_path,
             .frontmatter = frontmatter,
-            .content = &.{},
         });
     }
 
@@ -793,8 +777,7 @@ const bootstrap_ignore_patterns = [_][]const u8{
     "README*",
 };
 
-const RocPages = extern struct {
-    pages: RocList,
+const RocPageRule = extern struct {
     patterns: RocList,
     replaceTags: RocList,
     processing: RocProcessing,
@@ -805,47 +788,73 @@ const RocProcessing = enum(u8) {
     ignore = 1,
     markdown = 2,
     none = 3,
+    xml = 4,
 };
 
-const RocMetadata = extern struct {
-    frontmatter: RocList,
+const RocPage = extern struct {
+    meta: RocList,
     path: RocStr,
-    replacements: RocList,
-    source: RocList,
+    tags: RocList,
+    len: u32,
+    ruleIndex: u32,
+};
+
+const RocTag = extern struct {
+    attributes: RocList,
+    index: u32,
+    innerEnd: u32,
+    innerStart: u32,
+    outerEnd: u32,
+    outerStart: u32,
 };
 
 const Slice = union(enum) {
     from_source: u64,
-    slice: []const u8,
+    roc_generated: []const u8,
 };
 
-const RocSlice = extern struct { payload: RocSlicePayload, tag: RocSliceTag };
+const RocSlice = extern struct {
+    payload: RocSlicePayload,
+    tag: RocSliceTag,
+};
 
 const RocSlicePayload = extern union {
-    from_source: u64,
-    slice: RocList,
+    from_source: RocSourceLoc,
+    roc_generated: RocList,
 };
 
 const RocSliceTag = enum(u8) {
-    RocFromSource = 0,
-    RocSlice = 1,
+    from_source = 0,
+    roc_generated = 1,
 };
 
-fn rocPagesToPageRule(allocator: std.mem.Allocator, pages: RocPages) !PageRule {
+const RocSourceLoc = extern struct {
+    end: u32,
+    start: u32,
+};
+
+fn rocPagesToPageRule(allocator: std.mem.Allocator, pages: RocPageRule) !PageRule {
     return .{
         .patterns = try rocListMapToOwnedSlice(
             RocStr,
             []const u8,
-            fromRocPattern,
+            fromRocStr,
             allocator,
             pages.patterns,
+        ),
+        .replaceTags = try rocListMapToOwnedSlice(
+            RocStr,
+            []const u8,
+            fromRocStr,
+            allocator,
+            pages.replaceTags,
         ),
         .processing = pages.processing,
         .pages = std.ArrayList(Page).init(allocator),
     };
 }
 
-fn fromRocPattern(allocator: std.mem.Allocator, roc_pattern: RocStr) ![]const u8 {
+fn fromRocStr(allocator: std.mem.Allocator, roc_pattern: RocStr) ![]const u8 {
     return try allocator.dupe(u8, roc_pattern.asSlice());
 }
 
@@ -996,10 +1005,17 @@ fn generateSite(
     var arena = std.heap.ArenaAllocator.init(gpa_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
-    for (site.rules) |rule| {
+    for (site.rules, 0..) |rule, rule_index| {
         for (rule.pages.items) |page| {
             if (std.fs.path.dirname(page.output_path[1..])) |dir| try output_dir.makePath(dir);
-            try generateSitePath(allocator, site.source_root, rule, page, output_dir);
+            try generateSitePath(
+                allocator,
+                site.source_root,
+                rule,
+                rule_index,
+                page,
+                output_dir,
+            );
             _ = arena.reset(.retain_capacity);
         }
     }
@@ -1033,9 +1049,14 @@ fn generateSitePath(
     allocator: std.mem.Allocator,
     source_root: std.fs.Dir,
     rule: PageRule,
+    rule_index: usize,
     page: Page,
     output_dir: std.fs.Dir,
 ) !void {
+    const output = try output_dir.createFile(page.output_path[1..], .{ .truncate = true, .exclusive = true });
+    defer output.close();
+    var writer = output.writer();
+
     switch (rule.processing) {
         .ignore => return error.UnexpectedlyAskedToGenerateOutputForIgnoredFile,
         .bootstrap => return error.UnexpectedlyAskedToGenerateOutputForBootstrapRule,
@@ -1049,25 +1070,26 @@ fn generateSitePath(
             var fifo = std.fifo.LinearFifo(u8, .Slice).init(buffer);
             defer fifo.deinit();
 
-            const from_file = try source_root.openFile(page.source_path, .{});
-            defer from_file.close();
-            const to_file = try output_dir.createFile(page.output_path[1..], .{ .truncate = true, .exclusive = true });
-            defer to_file.close();
-            for (page.content) |content_elem| {
-                switch (content_elem) {
-                    .from_source => try fifo.pump(from_file.reader(), to_file.writer()),
-                    .slice => try to_file.writeAll(content_elem.slice),
-                }
-            }
+            const source = try source_root.openFile(page.source_path, .{});
+            defer source.close();
+            try fifo.pump(source.reader(), output.writer());
+        },
+        .xml => {
+            // TODO: figure out what to do with files larger than this.
+            const source = try source_root.readFileAlloc(allocator, page.source_path, 1024 * 1024);
+            defer allocator.free(source);
+            const contents = try runPageTransforms(allocator, source, rule, rule_index, page);
+            try writeRocContents(contents, source, &writer);
         },
         .markdown => {
-            // TODO: figure out what to do if markdown files are larger than this.
-            const markdown_with_frontmatter = try source_root.readFileAlloc(
+            // TODO: figure out what to do with files larger than this.
+            const raw_source = try source_root.readFileAlloc(
                 allocator,
                 page.source_path,
                 1024 * 1024,
             );
-            const markdown = markdown_with_frontmatter[page.frontmatter.len..];
+            defer allocator.free(raw_source);
+            const markdown = raw_source[page.frontmatter.len..];
             defer allocator.free(markdown);
             const html = c.cmark_markdown_to_html(
                 @ptrCast(markdown),
@@ -1075,14 +1097,71 @@ fn generateSitePath(
                 c.CMARK_OPT_DEFAULT | c.CMARK_OPT_UNSAFE,
             ) orelse return error.OutOfMemory;
             defer std.c.free(html);
-            const to_file = try output_dir.createFile(page.output_path[1..], .{ .truncate = true, .exclusive = true });
-            defer to_file.close();
-            for (page.content) |snippet| {
-                switch (snippet) {
-                    .from_source => try to_file.writeAll(std.mem.span(html)),
-                    .slice => try to_file.writeAll(snippet.slice),
-                }
-            }
+            const source = std.mem.span(html);
+            const contents = try runPageTransforms(
+                allocator,
+                source,
+                rule,
+                rule_index,
+                page,
+            );
+            try writeRocContents(contents, source, &writer);
         },
+    }
+}
+
+fn runPageTransforms(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    rule: PageRule,
+    rule_index: usize,
+    page: Page,
+) !RocList {
+    const tags = try xml.parse(allocator, source, rule.replaceTags);
+    defer allocator.free(tags);
+    var roc_tags = std.ArrayList(RocTag).init(allocator);
+    defer roc_tags.deinit();
+    for (tags) |tag| {
+        try roc_tags.append(RocTag{
+            .attributes = RocList.fromSlice(u8, tag.attributes, false),
+            .outerStart = @as(u32, @intCast(tag.outer_start)),
+            .outerEnd = @as(u32, @intCast(tag.outer_end)),
+            .innerStart = @as(u32, @intCast(tag.inner_start)),
+            .innerEnd = @as(u32, @intCast(tag.inner_end)),
+            .index = @as(u32, @intCast(tag.index)),
+        });
+    }
+    const roc_page = RocPage{
+        .meta = RocList.fromSlice(u8, page.frontmatter, false),
+        .path = RocStr.fromSlice(page.output_path),
+        .ruleIndex = @as(u32, @intCast(rule_index)),
+        .tags = RocList.fromSlice(RocTag, try roc_tags.toOwnedSlice(), true),
+        .len = @as(u32, @intCast(source.len)),
+    };
+    var contents = RocList.empty();
+    roc__runPipelineForHost_1_exposed_generic(&contents, &roc_page);
+    return contents;
+}
+
+fn writeRocContents(
+    contents: RocList,
+    source: []const u8,
+    writer: *std.fs.File.Writer,
+) !void {
+    var roc_xml_iterator = RocListIterator(RocSlice).init(contents);
+    while (roc_xml_iterator.next()) |roc_slice| {
+        switch (roc_slice.tag) {
+            .from_source => {
+                const slice = roc_slice.payload.from_source;
+                try writer.writeAll(source[slice.start..slice.end]);
+            },
+            .roc_generated => {
+                const roc_slice_list = roc_slice.payload.roc_generated;
+                const len = roc_slice_list.len();
+                if (len == 0) continue;
+                const slice = roc_slice_list.elements(u8) orelse return error.RocListUnexpectedEmpty;
+                try writer.writeAll(slice[0..len]);
+            },
+        }
     }
 }
