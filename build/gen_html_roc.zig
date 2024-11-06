@@ -50,6 +50,7 @@ const tags = [_]Tag{
     Tag{ .name = "li", .attrs = &.{"value"} },
     Tag{ .name = "menu", .attrs = &.{ "reversed", "start", "type" } },
     Tag{ .name = "ol", .attrs = &.{} },
+    Tag{ .name = "ul", .attrs = &.{} },
     Tag{ .name = "p", .attrs = &.{} },
     Tag{ .name = "pre", .attrs = &.{} },
     Tag{ .name = "a", .attrs = &.{ "download", "href", "hreflang", "ping", "referrerpolicy", "rel", "target", "type" } },
