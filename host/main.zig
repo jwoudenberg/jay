@@ -71,9 +71,9 @@ pub fn main() void {
 }
 
 var site: lib.Site = undefined;
+var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 
-pub fn run() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+fn run() !void {
     var args = std.process.args();
     const argv0 = args.next() orelse return error.EmptyArgv;
     site = try lib.Site.init(gpa.allocator(), argv0);
@@ -82,4 +82,12 @@ pub fn run() !void {
     try lib.run(&gpa, &site);
     const stdout = std.io.getStdOut().writer();
     try stdout.print("Generated site in {d}ms\n", .{timer.read() / 1_000_000});
+}
+
+export fn roc_fx_list(pattern: *RocStr) callconv(.C) RocList {
+    if (lib.getPagesMatchingPattern(gpa.allocator(), &site, pattern)) |results| {
+        return results;
+    } else |err| {
+        lib.failCrudely(err);
+    }
 }

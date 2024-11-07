@@ -6,11 +6,13 @@ module [
     fromMarkdown,
     wrapHtml,
     replaceHtml,
+    list!,
 ]
 
 import PagesInternal exposing [wrap, unwrap, Xml]
 import Html exposing [Html]
 import Xml.Internal
+import Effect
 import Xml.Attributes
 import Rvn
 
@@ -25,7 +27,7 @@ bootstrap = [
         patterns: [],
         processing: Bootstrap,
         replaceTags: [],
-        pipeline: \content, _ -> content,
+        pipeline!: \content, _ -> content,
     },
 ]
 
@@ -35,7 +37,7 @@ files = \patterns ->
         patterns,
         processing: None,
         replaceTags: [],
-        pipeline: \content, _ -> content,
+        pipeline!: \content, _ -> content,
     }
 
 ignore : List Str -> Pages type
@@ -44,7 +46,7 @@ ignore = \patterns ->
         patterns,
         processing: Ignore,
         replaceTags: [],
-        pipeline: \content, _ -> content,
+        pipeline!: \content, _ -> content,
     }
 
 fromMarkdown : Pages Markdown -> Pages Html
@@ -52,12 +54,12 @@ fromMarkdown = \pages ->
     internal = unwrap pages
     wrap { internal & processing: Markdown }
 
-wrapHtml : Pages Html, ({ content : Html, path : Str, meta : {}a } -> Html) -> Pages Html where a implements Decoding
-wrapHtml = \pages, userWrapper ->
+wrapHtml : Pages Html, ({ content : Html, path : Str, meta : {}a } => Html) -> Pages Html where a implements Decoding
+wrapHtml = \pages, userWrapper! ->
     internal = unwrap pages
 
-    wrapper : Xml, PagesInternal.HostPage -> Xml
-    wrapper = \content, page ->
+    wrapper! : Xml, PagesInternal.HostPage => Xml
+    wrapper! = \content, page ->
         meta =
             when Decode.fromBytes page.meta Rvn.compact is
                 Ok x -> x
@@ -66,29 +68,42 @@ wrapHtml = \pages, userWrapper ->
                         Ok str -> crash "@$%^&.jayerror*0*$(str)"
                         Err _ -> crash "frontmatter bytes not UTF8-encoded"
 
-        userWrapper { content: Xml.Internal.wrap content, path: page.path, meta }
+        userWrapper! { content: Xml.Internal.wrap content, path: page.path, meta }
         |> Xml.Internal.unwrap
 
     wrap {
         patterns: internal.patterns,
         processing: if internal.processing == None then Xml else internal.processing,
         replaceTags: internal.replaceTags,
-        pipeline: \content, hostPage ->
-            internal.pipeline content hostPage
-            |> wrapper hostPage,
+        pipeline!: \content, hostPage ->
+            internal.pipeline! content hostPage
+            |> wrapper! hostPage,
     }
+
+list! : Str => List { path : Str, meta : {}a }
+list! = \pattern ->
+    Effect.list! pattern
+    |> List.map \result ->
+        meta =
+            when Decode.fromBytes result.meta Rvn.compact is
+                Ok x -> x
+                Err _ ->
+                    when Str.fromUtf8 result.meta is
+                        Ok str -> crash "@$%^&.jayerror*0*$(str)"
+                        Err _ -> crash "frontmatter bytes not UTF8-encoded"
+        { path: result.path, meta }
 
 # Replace an HTML element in the passed in pages.
 replaceHtml :
     Pages Html,
     Str,
-    ({ content : Html, attrs : {}attrs, path : Str, meta : {}a } -> Html)
+    ({ content : Html, attrs : {}attrs, path : Str, meta : {}a } => Html)
     -> Pages Html
-replaceHtml = \pages, name, userReplacer ->
+replaceHtml = \pages, name, userReplacer! ->
     internal = unwrap pages
 
-    replacer : Xml, PagesInternal.HostPage -> Xml
-    replacer = \original, page ->
+    replacer! : Xml, PagesInternal.HostPage => Xml
+    replacer! = \original, page ->
         meta =
             when Decode.fromBytes page.meta Rvn.compact is
                 Ok x -> x
@@ -97,7 +112,7 @@ replaceHtml = \pages, name, userReplacer ->
                         Ok str -> crash "@$%^&.jayerror*0*$(str)"
                         Err _ -> crash "frontmatter bytes not UTF8-encoded"
 
-        List.walk page.tags original \content, tag ->
+        walk! page.tags original \content, tag ->
             if Num.intCast tag.index == List.len internal.replaceTags then
                 attrs =
                     when Decode.fromBytes tag.attributes Xml.Attributes.formatter is
@@ -107,8 +122,8 @@ replaceHtml = \pages, name, userReplacer ->
                                 Ok str -> crash "@$%^&.jayerror*1*$(str)"
                                 Err _ -> crash "attribute bytes not UTF8-encoded"
 
-                replaceTag content tag \nested ->
-                    userReplacer {
+                replaceTag! content tag \nested ->
+                    userReplacer! {
                         content: Xml.Internal.wrap nested,
                         path: page.path,
                         attrs,
@@ -122,93 +137,104 @@ replaceHtml = \pages, name, userReplacer ->
         patterns: internal.patterns,
         processing: if internal.processing == None then Xml else internal.processing,
         replaceTags: List.append internal.replaceTags name,
-        pipeline: \content, hostPage ->
-            internal.pipeline content hostPage
-            |> replacer hostPage,
+        pipeline!: \content, hostPage ->
+            internal.pipeline! content hostPage
+            |> replacer! hostPage,
     }
 
+replaceTag! : Xml, PagesInternal.HostTag, (Xml => Xml) => Xml
+replaceTag! = \content, tag, replace! ->
+    { before, nested, after } = replaceTagHelper content tag
+    before
+    |> List.concat (replace! nested)
+    |> List.concat after
+
+replaceTagHelper : Xml, PagesInternal.HostTag -> { before : Xml, nested : Xml, after : Xml }
+replaceTagHelper = \content, tag ->
+    List.walk content { before: [], nested: [], after: [] } \acc, slice ->
+        when slice is
+            RocGenerated _ ->
+                if !(List.isEmpty acc.after) then
+                    { acc & after: List.append acc.after slice }
+                else if !(List.isEmpty acc.nested) then
+                    { acc & nested: List.append acc.nested slice }
+                else
+                    { acc & before: List.append acc.before slice }
+
+            FromSource { start, end } ->
+                if tag.outerEnd <= start then
+                    # <tag /> [ slice ]
+                    { acc & after: List.append acc.after slice }
+                else if tag.outerStart >= end then
+                    # [ slice ] <tag />
+                    { acc & before: List.append acc.before slice }
+                else if tag.outerStart <= start && tag.outerEnd >= end then
+                    # <tag [ slice ] />
+                    { acc &
+                        nested: List.append
+                            acc.nested
+                            (
+                                FromSource {
+                                    start: clamp tag.innerStart start tag.innerEnd,
+                                    end: clamp tag.innerStart end tag.innerEnd,
+                                }
+                            ),
+                    }
+                else if tag.outerStart < start && tag.outerEnd < end then
+                    # <tag [ /> slice ]
+                    { acc &
+                        nested: List.append
+                            acc.nested
+                            (
+                                FromSource {
+                                    start: clamp tag.innerStart start tag.innerEnd,
+                                    end: tag.innerEnd,
+                                }
+                            ),
+                        after: List.append
+                            acc.after
+                            (FromSource { start: tag.outerEnd, end }),
+                    }
+                else if tag.outerStart > start && tag.outerEnd > end then
+                    # [ slice <tag ] />
+                    { acc &
+                        before: List.append
+                            acc.before
+                            (FromSource { start, end: tag.outerStart }),
+                        nested: List.append
+                            acc.nested
+                            (
+                                FromSource {
+                                    start: tag.innerStart,
+                                    end: clamp tag.innerStart end tag.innerEnd,
+                                }
+                            ),
+                    }
+                else
+                    # [ slice <tag /> ]
+                    { acc &
+                        before: List.append
+                            acc.before
+                            (FromSource { start, end: tag.outerStart }),
+                        nested: List.append
+                            acc.nested
+                            (FromSource { start: tag.innerStart, end: tag.innerEnd }),
+                        after: List.append
+                            acc.after
+                            (FromSource { start: tag.outerEnd, end }),
+                    }
+
+# A pure version of replaceTag! that shares almost all the logic, for testing.
 replaceTag : Xml, PagesInternal.HostTag, (Xml -> Xml) -> Xml
 replaceTag = \content, tag, replace ->
-    { before, after, nested } =
-        List.walk content { before: [], nested: [], after: [] } \acc, slice ->
-            when slice is
-                RocGenerated _ ->
-                    if !(List.isEmpty acc.after) then
-                        { acc & after: List.append acc.after slice }
-                    else if !(List.isEmpty acc.nested) then
-                        { acc & nested: List.append acc.nested slice }
-                    else
-                        { acc & before: List.append acc.before slice }
-
-                FromSource { start, end } ->
-                    if tag.outerEnd <= start then
-                        # <tag /> [ slice ]
-                        { acc & after: List.append acc.after slice }
-                    else if tag.outerStart >= end then
-                        # [ slice ] <tag />
-                        { acc & before: List.append acc.before slice }
-                    else if tag.outerStart <= start && tag.outerEnd >= end then
-                        # <tag [ slice ] />
-                        { acc &
-                            nested: List.append
-                                acc.nested
-                                (
-                                    FromSource {
-                                        start: clamp tag.innerStart start tag.innerEnd,
-                                        end: clamp tag.innerStart end tag.innerEnd,
-                                    }
-                                ),
-                        }
-                    else if tag.outerStart < start && tag.outerEnd < end then
-                        # <tag [ /> slice ]
-                        { acc &
-                            nested: List.append
-                                acc.nested
-                                (
-                                    FromSource {
-                                        start: clamp tag.innerStart start tag.innerEnd,
-                                        end: tag.innerEnd,
-                                    }
-                                ),
-                            after: List.append
-                                acc.after
-                                (FromSource { start: tag.outerEnd, end }),
-                        }
-                    else if tag.outerStart > start && tag.outerEnd > end then
-                        # [ slice <tag ] />
-                        { acc &
-                            before: List.append
-                                acc.before
-                                (FromSource { start, end: tag.outerStart }),
-                            nested: List.append
-                                acc.nested
-                                (
-                                    FromSource {
-                                        start: tag.innerStart,
-                                        end: clamp tag.innerStart end tag.innerEnd,
-                                    }
-                                ),
-                        }
-                    else
-                        # [ slice <tag /> ]
-                        { acc &
-                            before: List.append
-                                acc.before
-                                (FromSource { start, end: tag.outerStart }),
-                            nested: List.append
-                                acc.nested
-                                (FromSource { start: tag.innerStart, end: tag.innerEnd }),
-                            after: List.append
-                                acc.after
-                                (FromSource { start: tag.outerEnd, end }),
-                        }
-
+    { before, nested, after } = replaceTagHelper content tag
     before
     |> List.concat (replace nested)
     |> List.concat after
 
 parseTagForTest : List U8 -> PagesInternal.HostTag
 parseTagForTest = \bytes ->
+    ok : Result (Int a) err -> Int b
     ok = \result ->
         when result is
             Ok x -> Num.intCast x
@@ -413,3 +439,13 @@ expect clamp 2 8 6 == 6
 expect clamp 2 5 6 == 5
 expect clamp 2 2 6 == 2
 expect clamp 2 6 6 == 6
+
+walk! :
+    List elem,
+    state,
+    (state, elem => state)
+    => state
+walk! = \elems, state, fn! ->
+    when elems is
+        [] -> state
+        [head, .. as rest] -> walk! rest (fn! state head) fn!

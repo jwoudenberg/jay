@@ -4,7 +4,7 @@ Pages a := {
     patterns : List Str,
     processing : [None, Ignore, Bootstrap, Markdown, Xml],
     replaceTags : List Str,
-    pipeline : Xml, HostPage -> Xml,
+    pipeline! : Xml, HostPage => Xml,
 }
 
 wrap = \internal -> @Pages internal

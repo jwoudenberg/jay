@@ -3,7 +3,7 @@ platform "jay"
     exposes [Pages, Html]
     packages {}
     imports []
-    provides [mainForHost, runPipelineForHost, getMetadataLengthForHost]
+    provides [mainForHost, runPipelineForHost!, getMetadataLengthForHost]
 
 import Rvn
 import Pages
@@ -26,8 +26,8 @@ getMetadataLengthForHost = \bytes ->
         Ok {} -> List.len bytes - List.len rest
         Err _ -> 0
 
-runPipelineForHost : PagesInternal.HostPage -> PagesInternal.Xml
-runPipelineForHost = \hostPage ->
+runPipelineForHost! : PagesInternal.HostPage => PagesInternal.Xml
+runPipelineForHost! = \hostPage ->
     page =
         when List.get main (Num.intCast hostPage.ruleIndex) is
             Ok x -> PagesInternal.unwrap x
@@ -35,4 +35,4 @@ runPipelineForHost = \hostPage ->
 
     init = [FromSource { start: 0, end: hostPage.len }]
 
-    page.pipeline init hostPage
+    page.pipeline! init hostPage

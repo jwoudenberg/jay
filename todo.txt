@@ -11,6 +11,7 @@ x add timing information to output
 x warn if file matched by multiple patterns
 x support metadata frontmatter
 x implement `replaceHtml`
+x implement list
 
 +html support data attributes
 +html fix shadowed attributes
@@ -19,7 +20,6 @@ x implement `replaceHtml`
 +html custom attributes
 
 implement fromHtml
-implement list
 assert/convert html input files to ensure utf8 encoding of output
 watch for source-file changes and rebuild (using watchman)
 watch for roc-file changes and rebuild (using watchman)
@@ -32,6 +32,7 @@ provide --output flag for production builds
 support 'break' in a markdown post (introduction shown on index page)
 rss support
 offer way to get next/previous files
+check xml pages have an xml-like extension
 add changelog
 add support for pagination
 add support for search

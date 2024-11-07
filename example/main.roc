@@ -16,7 +16,7 @@ static = Pages.files ["/static"]
 pages =
     Pages.files ["*.md"]
     |> Pages.fromMarkdown
-    |> Pages.replaceHtml "page-list" postList
+    |> Pages.replaceHtml "page-list" postList!
     |> Pages.wrapHtml layout
 
 posts =
@@ -37,7 +37,13 @@ layout = \{ content, path, meta } ->
         ],
     ]
 
-postList = \{ attrs: { pattern } } ->
-    Html.ul {} [
-        Html.li {} [Html.text "TODO: show posts matching $(pattern) here"],
-    ]
+postList! = \{ attrs: { pattern } } ->
+    renderLink = \{ path, meta: { title } } ->
+        Html.li {} [
+            Html.a { href: path } [Html.text title],
+        ]
+
+    matches = Pages.list! pattern
+
+    Html.ul {} (List.map matches renderLink)
+

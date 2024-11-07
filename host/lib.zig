@@ -1155,3 +1155,26 @@ fn writeRocContents(
         }
     }
 }
+
+pub fn getPagesMatchingPattern(
+    allocator: std.mem.Allocator,
+    site: *Site,
+    roc_pattern: *RocStr,
+) !RocList {
+    const pattern = roc_pattern.asSlice();
+    var results = std.ArrayList(RocPage).init(allocator);
+    for (site.rules, 0..) |rule, rule_index| {
+        for (rule.pages.items) |page| {
+            if (glob.match(pattern, page.output_path[1..])) {
+                try results.append(RocPage{
+                    .meta = RocList.fromSlice(u8, page.frontmatter, false),
+                    .path = RocStr.fromSlice(page.output_path),
+                    .tags = RocList.empty(),
+                    .len = 0,
+                    .ruleIndex = @as(u32, @intCast(rule_index)),
+                });
+            }
+        }
+    }
+    return RocList.fromSlice(RocPage, try results.toOwnedSlice(), true);
+}
