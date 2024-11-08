@@ -12,11 +12,34 @@ comptime {
     _ = @import("xml.zig");
 }
 
-const Site = struct {
-    arena: *std.heap.ArenaAllocator,
+pub const Site = struct {
+    arena: std.heap.ArenaAllocator,
     source_root: std.fs.Dir,
     roc_main: []const u8,
     rules: []PageRule,
+
+    pub fn init(base_allocator: std.mem.Allocator, argv0: []const u8) !Site {
+        var arena = std.heap.ArenaAllocator.init(base_allocator);
+        const allocator = arena.allocator();
+
+        const argv0_abs = try std.fs.cwd().realpathAlloc(allocator, argv0);
+        const source_root_path = std.fs.path.dirname(argv0_abs) orelse "/";
+        const source_root = std.fs.cwd().openDir(source_root_path, .{ .iterate = true }) catch |err| {
+            try failPrettily("Cannot access directory containing {s}: '{}'\n", .{ source_root_path, err });
+        };
+
+        return Site{
+            .arena = arena,
+            .source_root = source_root,
+            .roc_main = std.fs.path.basename(argv0_abs),
+            .rules = &.{},
+        };
+    }
+
+    pub fn deinit(self: *Site) void {
+        self.source_root.close();
+        self.arena.deinit();
+    }
 };
 
 const PageRule = struct {
@@ -37,14 +60,6 @@ const output_root = "output";
 extern fn roc__mainForHost_1_exposed_generic(*RocList, *const void) callconv(.C) void;
 extern fn roc__getMetadataLengthForHost_1_exposed_generic(*u64, *const RocList) callconv(.C) void;
 extern fn roc__runPipelineForHost_1_exposed_generic(*RocList, *const RocPage) callconv(.C) void;
-
-pub fn run() !void {
-    var timer = try std.time.Timer.start();
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    try runTimed(&gpa);
-    const stdout = std.io.getStdOut().writer();
-    try stdout.print("Generated site in {d}ms\n", .{timer.read() / 1_000_000});
-}
 
 // The platform code uses 'crash' to 'throw' an error to the host in certain
 // situations. We can kind of get away with it because compile-time and
@@ -97,46 +112,28 @@ pub fn handlePanic(roc_msg: *RocStr, tag_id: u32) void {
     }
 }
 
-fn runTimed(gpa: *std.heap.GeneralPurposeAllocator(.{})) !void {
-    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    // (1) Get the path to the main.roc file that's currently running.
-    var args = std.process.args();
-    const argv0 = args.next() orelse return error.EmptyArgv;
-    const argv0_abs = try std.fs.cwd().realpathAlloc(allocator, argv0);
-    const source_root_path = std.fs.path.dirname(argv0_abs) orelse "/";
-    const source_root = std.fs.cwd().openDir(source_root_path, .{ .iterate = true }) catch |err| {
-        try failPrettily("Cannot access directory containing {s}: '{}'\n", .{ source_root_path, err });
-    };
-
-    // (2) Call platform to get page rules.
+pub fn run(gpa: *std.heap.GeneralPurposeAllocator(.{}), site: *Site) !void {
+    // (1) Call platform to get page rules.
     var roc_rules = RocList.empty();
     roc__mainForHost_1_exposed_generic(&roc_rules, &void{});
-    var site = Site{
-        .arena = &arena,
-        .source_root = source_root,
-        .roc_main = std.fs.path.basename(argv0),
-        .rules = try rocListMapToOwnedSlice(
-            RocPageRule,
-            PageRule,
-            rocPagesToPageRule,
-            allocator,
-            roc_rules,
-        ),
-    };
+    site.rules = try rocListMapToOwnedSlice(
+        RocPageRule,
+        PageRule,
+        rocPagesToPageRule,
+        site.arena.allocator(),
+        roc_rules,
+    );
 
-    // (3) Scan the project to find all the source files.
+    // (2) Scan the project to find all the source files.
     if (site.rules.len == 1 and site.rules[0].processing == .bootstrap) {
-        try bootstrapPageRules(&site);
-        try generateCodeForRules(&site);
+        try bootstrapPageRules(site);
+        try generateCodeForRules(site);
     } else {
-        try scanSourceFiles(gpa.allocator(), &site);
+        try scanSourceFiles(gpa.allocator(), site);
     }
 
-    // (4) Generate output files.
-    try generateSite(gpa.allocator(), &site, output_root);
+    // (3) Generate output files.
+    try generateSite(gpa.allocator(), site, output_root);
 }
 
 fn formatOutputPathForRoc(path: []const u8) []const u8 {
@@ -154,8 +151,7 @@ test formatOutputPathForRoc {
 }
 
 fn generateCodeForRules(site: *const Site) !void {
-    const cwd = std.fs.cwd();
-    const file = try cwd.openFile(site.roc_main, .{ .mode = .read_write });
+    const file = try site.source_root.openFile(site.roc_main, .{ .mode = .read_write });
     defer file.close();
 
     // The size of my minimal bootstrap examples is 119 bytes at time of
@@ -283,7 +279,7 @@ fn generateCodeForRules(site: *const Site) !void {
 }
 
 test generateCodeForRules {
-    var tmpdir = std.testing.tmpDir(.{ .iterate = true });
+    var tmpdir = std.testing.tmpDir(.{});
     defer tmpdir.cleanup();
     try tmpdir.dir.writeFile(.{
         .sub_path = "main.roc",
@@ -295,6 +291,10 @@ test generateCodeForRules {
         \\main = Pages.bootstrap
         ,
     });
+    const roc_main = try tmpdir.dir.realpathAlloc(std.testing.allocator, "main.roc");
+    defer std.testing.allocator.free(roc_main);
+    var site = try Site.init(std.testing.allocator, roc_main);
+    defer site.deinit();
     var rules = [_]PageRule{
         PageRule{
             .processing = .markdown,
@@ -315,17 +315,10 @@ test generateCodeForRules {
             .pages = std.ArrayList(Page).init(std.testing.allocator),
         },
     };
-    const roc_main = try tmpdir.dir.realpathAlloc(std.testing.allocator, "main.roc");
-    defer std.testing.allocator.free(roc_main);
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const site = Site{
-        .arena = &arena,
-        .source_root = tmpdir.dir,
-        .roc_main = roc_main,
-        .rules = rules[0..],
-    };
+    site.rules = rules[0..];
+
     try generateCodeForRules(&site);
+
     const generated = try tmpdir.dir.readFileAlloc(std.testing.allocator, "main.roc", 1024 * 1024);
     defer std.testing.allocator.free(generated);
     try std.testing.expectEqualStrings(generated,
@@ -464,6 +457,12 @@ test "bootstrapPageRules" {
     var tmpdir = std.testing.tmpDir(.{ .iterate = true });
     defer tmpdir.cleanup();
 
+    try tmpdir.dir.writeFile(.{ .sub_path = "main.roc", .data = "" });
+    const roc_main = try tmpdir.dir.realpathAlloc(std.testing.allocator, "main.roc");
+    defer std.testing.allocator.free(roc_main);
+    var site = try Site.init(std.testing.allocator, roc_main);
+    defer site.deinit();
+
     try tmpdir.dir.makeDir("markdown_only");
     try tmpdir.dir.makeDir("static_only");
     try tmpdir.dir.makeDir("mixed");
@@ -476,15 +475,6 @@ test "bootstrapPageRules" {
     try tmpdir.dir.writeFile(.{ .sub_path = "mixed/rss.xml", .data = "" });
     try tmpdir.dir.writeFile(.{ .sub_path = "index.md", .data = "" });
     try tmpdir.dir.writeFile(.{ .sub_path = ".gitignore", .data = "" });
-
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var site = Site{
-        .arena = &arena,
-        .source_root = tmpdir.dir,
-        .roc_main = "main.roc",
-        .rules = &.{},
-    };
 
     try bootstrapPageRules(&site);
 

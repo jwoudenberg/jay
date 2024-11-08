@@ -65,7 +65,21 @@ comptime {
 }
 
 pub fn main() void {
-    if (lib.run()) {} else |err| {
+    if (run()) {} else |err| {
         lib.failCrudely(err);
     }
+}
+
+var site: lib.Site = undefined;
+
+pub fn run() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var args = std.process.args();
+    const argv0 = args.next() orelse return error.EmptyArgv;
+    site = try lib.Site.init(gpa.allocator(), argv0);
+    defer site.deinit();
+    var timer = try std.time.Timer.start();
+    try lib.run(&gpa, &site);
+    const stdout = std.io.getStdOut().writer();
+    try stdout.print("Generated site in {d}ms\n", .{timer.read() / 1_000_000});
 }
