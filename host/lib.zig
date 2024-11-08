@@ -149,5 +149,8 @@ pub fn getPagesMatchingPattern(
             }
         }
     }
+    if (results.items.len == 0) {
+        try fail.prettily("Pattern '{s}' did not match any files", .{pattern});
+    }
     return RocList.fromSlice(platform.Page, try results.toOwnedSlice(), true);
 }
