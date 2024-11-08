@@ -1,3 +1,5 @@
+// TODO: merge this module into main.zig
+
 const std = @import("std");
 const builtin = @import("builtin");
 const RocStr = @import("roc/str.zig").RocStr;
@@ -64,15 +66,15 @@ pub fn handlePanic(roc_msg: *RocStr, tag_id: u32) void {
     }
 }
 
-pub fn run(gpa: *std.heap.GeneralPurposeAllocator(.{}), site: *Site) !void {
+pub fn run(gpa: std.mem.Allocator, site: *Site) !void {
     // (1) Call platform to get page rules.
     var roc_rules = RocList.empty();
     platform.roc__mainForHost_1_exposed_generic(&roc_rules, &void{});
     site.rules = try rocListMapToOwnedSlice(
         platform.Rule,
         Site.Rule,
-        rocPagesToRule,
-        site.arena.allocator(),
+        fromPlatformRule,
+        site.allocator(),
         roc_rules,
     );
 
@@ -80,31 +82,33 @@ pub fn run(gpa: *std.heap.GeneralPurposeAllocator(.{}), site: *Site) !void {
     if (site.rules.len == 1 and site.rules[0].processing == .bootstrap) {
         try bootstrap(site, output_root);
     } else {
-        try scan(gpa.allocator(), site, output_root);
+        try scan(gpa, site, output_root);
     }
 
     // (3) Generate output files.
-    try generate(gpa.allocator(), site, output_root);
+    try generate(gpa, site, output_root);
 }
 
-fn rocPagesToRule(allocator: std.mem.Allocator, pages: platform.Rule) !Site.Rule {
+fn fromPlatformRule(
+    arena: std.mem.Allocator,
+    platform_rule: platform.Rule,
+) !Site.Rule {
     return .{
         .patterns = try rocListMapToOwnedSlice(
             RocStr,
             []const u8,
             fromRocStr,
-            allocator,
-            pages.patterns,
+            arena,
+            platform_rule.patterns,
         ),
         .replaceTags = try rocListMapToOwnedSlice(
             RocStr,
             []const u8,
             fromRocStr,
-            allocator,
-            pages.replaceTags,
+            arena,
+            platform_rule.replaceTags,
         ),
-        .processing = pages.processing,
-        .pages = std.ArrayList(Site.Page).init(allocator),
+        .processing = platform_rule.processing,
     };
 }
 
@@ -136,17 +140,15 @@ pub fn getPagesMatchingPattern(
 ) !RocList {
     const pattern = roc_pattern.asSlice();
     var results = std.ArrayList(platform.Page).init(allocator);
-    for (site.rules, 0..) |rule, rule_index| {
-        for (rule.pages.items) |page| {
-            if (glob.match(pattern, page.output_path[1..])) {
-                try results.append(platform.Page{
-                    .meta = RocList.fromSlice(u8, page.frontmatter, false),
-                    .path = RocStr.fromSlice(util.formatPathForPlatform(page.output_path)),
-                    .tags = RocList.empty(),
-                    .len = 0,
-                    .ruleIndex = @as(u32, @intCast(rule_index)),
-                });
-            }
+    for (site.pages.items) |page| {
+        if (glob.match(pattern, page.source_path)) {
+            try results.append(platform.Page{
+                .meta = RocList.fromSlice(u8, page.frontmatter, false),
+                .path = RocStr.fromSlice(util.formatPathForPlatform(page.output_path)),
+                .tags = RocList.empty(),
+                .len = 0,
+                .ruleIndex = @as(u32, @intCast(page.rule_index)),
+            });
         }
     }
     if (results.items.len == 0) {

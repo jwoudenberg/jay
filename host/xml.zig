@@ -1,3 +1,12 @@
+// Partial XML parsing. This is not a general-purpose XML parsing, nor
+// intending to be.
+//
+// Our requirements for XML parsing are that we can identify the location of
+// tags that the application author is targetting for replacement. We need the
+// attributes of those tags and the location of their contents.
+//
+// TODO: Show the user pretty XML parsing errors.
+
 const std = @import("std");
 
 pub const Tag = struct {
@@ -10,13 +19,6 @@ pub const Tag = struct {
     inner_end: usize, // length of the slice between the open and close tags.
 };
 
-// This is not a general-purpose XML parsing, nor intending to be.
-//
-// Our requirements for XML parsing are that we can identify the location of
-// tags that the application author is targetting for replacement. We need the
-// attributes of those tags and the location of their contents.
-//
-// TODO: Show the user pretty XML parsing errors.
 pub fn parse(
     allocator: std.mem.Allocator,
     document: []const u8,

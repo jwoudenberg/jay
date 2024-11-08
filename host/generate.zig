@@ -1,3 +1,5 @@
+// Module responsible for producing the output files making up the static site.
+
 const std = @import("std");
 const Site = @import("site.zig").Site;
 const RocList = @import("roc/list.zig").RocList;
@@ -10,7 +12,7 @@ const c = @cImport({
 });
 
 pub fn generate(
-    gpa_allocator: std.mem.Allocator,
+    gpa: std.mem.Allocator,
     site: *const Site,
     output_dir_path: []const u8,
 ) !void {
@@ -24,30 +26,26 @@ pub fn generate(
     var output_dir = try site.source_root.openDir(output_dir_path, .{});
     defer output_dir.close();
 
-    var arena = std.heap.ArenaAllocator.init(gpa_allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-    for (site.rules, 0..) |rule, rule_index| {
-        for (rule.pages.items) |page| {
-            if (std.fs.path.dirname(page.output_path[1..])) |dir| try output_dir.makePath(dir);
-            try generateSitePath(
-                allocator,
-                site.source_root,
-                rule,
-                rule_index,
-                page,
-                output_dir,
-            );
-            _ = arena.reset(.retain_capacity);
-        }
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    for (site.pages.items) |page| {
+        if (std.fs.path.dirname(page.output_path[1..])) |dir| try output_dir.makePath(dir);
+        const rule = site.rules[page.rule_index];
+        try generateSitePath(
+            arena_state.allocator(),
+            site.source_root,
+            rule,
+            page,
+            output_dir,
+        );
+        _ = arena_state.reset(.retain_capacity);
     }
 }
 
 fn generateSitePath(
-    allocator: std.mem.Allocator,
+    arena: std.mem.Allocator,
     source_root: std.fs.Dir,
     rule: Site.Rule,
-    rule_index: usize,
     page: Site.Page,
     output_dir: std.fs.Dir,
 ) !void {
@@ -63,8 +61,7 @@ fn generateSitePath(
             //     hidden symbol `__dso_handle' isn't defined
             // try state.source_root.copyFile(source_path, output_dir, output_path, .{});
 
-            const buffer = try allocator.alloc(u8, 1024);
-            defer allocator.free(buffer);
+            const buffer = try arena.alloc(u8, 1024);
             var fifo = std.fifo.LinearFifo(u8, .Slice).init(buffer);
             defer fifo.deinit();
 
@@ -74,21 +71,18 @@ fn generateSitePath(
         },
         .xml => {
             // TODO: figure out what to do with files larger than this.
-            const source = try source_root.readFileAlloc(allocator, page.source_path, 1024 * 1024);
-            defer allocator.free(source);
-            const contents = try runPageTransforms(allocator, source, rule, rule_index, page);
+            const source = try source_root.readFileAlloc(arena, page.source_path, 1024 * 1024);
+            const contents = try runPageTransforms(arena, source, rule, page);
             try writeRocContents(contents, source, &writer);
         },
         .markdown => {
             // TODO: figure out what to do with files larger than this.
             const raw_source = try source_root.readFileAlloc(
-                allocator,
+                arena,
                 page.source_path,
                 1024 * 1024,
             );
-            defer allocator.free(raw_source);
             const markdown = raw_source[page.frontmatter.len..];
-            defer allocator.free(markdown);
             const html = c.cmark_markdown_to_html(
                 @ptrCast(markdown),
                 markdown.len,
@@ -97,10 +91,9 @@ fn generateSitePath(
             defer std.c.free(html);
             const source = std.mem.span(html);
             const contents = try runPageTransforms(
-                allocator,
+                arena,
                 source,
                 rule,
-                rule_index,
                 page,
             );
             try writeRocContents(contents, source, &writer);
@@ -109,16 +102,13 @@ fn generateSitePath(
 }
 
 fn runPageTransforms(
-    allocator: std.mem.Allocator,
+    arena: std.mem.Allocator,
     source: []const u8,
     rule: Site.Rule,
-    rule_index: usize,
     page: Site.Page,
 ) !RocList {
-    const tags = try xml.parse(allocator, source, rule.replaceTags);
-    defer allocator.free(tags);
-    var roc_tags = std.ArrayList(platform.Tag).init(allocator);
-    defer roc_tags.deinit();
+    const tags = try xml.parse(arena, source, rule.replaceTags);
+    var roc_tags = std.ArrayList(platform.Tag).init(arena);
     for (tags) |tag| {
         try roc_tags.append(platform.Tag{
             .attributes = RocList.fromSlice(u8, tag.attributes, false),
@@ -132,7 +122,7 @@ fn runPageTransforms(
     const roc_page = platform.Page{
         .meta = RocList.fromSlice(u8, page.frontmatter, false),
         .path = RocStr.fromSlice(util.formatPathForPlatform(page.output_path)),
-        .ruleIndex = @as(u32, @intCast(rule_index)),
+        .ruleIndex = @as(u32, @intCast(page.rule_index)),
         .tags = RocList.fromSlice(platform.Tag, try roc_tags.toOwnedSlice(), true),
         .len = @as(u32, @intCast(source.len)),
     };

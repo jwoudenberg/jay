@@ -1,3 +1,5 @@
+// Module responsible for evaluating glob patterns against file paths.
+
 const std = @import("std");
 
 pub fn match(full_pattern: []const u8, path: []const u8) bool {

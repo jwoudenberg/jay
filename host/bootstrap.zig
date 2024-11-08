@@ -1,3 +1,7 @@
+// Module responsible for generating an initial set of build rules for a
+// project, based on the markdown, html, and other source files present in
+// the project directory.
+
 const std = @import("std");
 const Site = @import("site.zig").Site;
 const fail = @import("fail.zig");
@@ -17,14 +21,13 @@ pub fn bootstrap(site: *Site, output_root: []const u8) !void {
 }
 
 fn bootstrapRules(site: *Site, output_root: []const u8) !void {
-    const allocator = site.arena.allocator();
-
-    var markdown_patterns = std.StringHashMap(void).init(allocator);
-    var static_patterns = std.StringHashMap(void).init(allocator);
-    var ignore_patterns = std.StringHashMap(void).init(allocator);
+    const arena = site.allocator();
+    var markdown_patterns = std.StringHashMap(void).init(arena);
+    var static_patterns = std.StringHashMap(void).init(arena);
+    var ignore_patterns = std.StringHashMap(void).init(arena);
 
     var source_iterator = try scan.SourceFileWalker.init(
-        allocator,
+        arena,
         site.source_root,
         site.roc_main,
         output_root,
@@ -34,11 +37,11 @@ fn bootstrapRules(site: *Site, output_root: []const u8) !void {
     // TODO: don't just collect patterns, also populate .pages field.
     while (try source_iterator.next()) |entry| {
         if (entry.ignore) {
-            try ignore_patterns.put(try allocator.dupe(u8, entry.path), void{});
+            try ignore_patterns.put(try arena.dupe(u8, entry.path), void{});
             continue;
         }
 
-        const pattern = try patternForPath(allocator, entry.path);
+        const pattern = try patternForPath(arena, entry.path);
         if (scan.isMarkdown(entry.path)) {
             try markdown_patterns.put(pattern, void{});
         } else {
@@ -129,30 +132,27 @@ fn updateSiteForPatterns(
     static_patterns: std.hash_map.StringHashMap(void),
     ignore_patterns: std.hash_map.StringHashMap(void),
 ) !void {
-    const allocator = site.arena.allocator();
-    var rules = try std.ArrayList(Site.Rule).initCapacity(allocator, 3);
+    const arena = site.allocator();
+    var rules = try std.ArrayList(Site.Rule).initCapacity(arena, 3);
     errdefer rules.deinit();
 
     if (markdown_patterns.count() > 0) {
         try rules.append(Site.Rule{
-            .patterns = try getHashMapKeys(allocator, markdown_patterns),
+            .patterns = try getHashMapKeys(arena, markdown_patterns),
             .processing = .markdown,
-            .pages = std.ArrayList(Site.Page).init(allocator),
             .replaceTags = &[_][]u8{},
         });
     }
     if (static_patterns.count() > 0) {
         try rules.append(Site.Rule{
-            .patterns = try getHashMapKeys(allocator, static_patterns),
+            .patterns = try getHashMapKeys(arena, static_patterns),
             .processing = .none,
-            .pages = std.ArrayList(Site.Page).init(allocator),
             .replaceTags = &[_][]u8{},
         });
     }
     try rules.append(Site.Rule{
-        .patterns = try getHashMapKeys(allocator, ignore_patterns),
+        .patterns = try getHashMapKeys(arena, ignore_patterns),
         .processing = .ignore,
-        .pages = std.ArrayList(Site.Page).init(allocator),
         .replaceTags = &[_][]u8{},
     });
 
@@ -323,19 +323,16 @@ test generateCodeForRules {
             .processing = .markdown,
             .patterns = ([_][]const u8{ "posts/*.md", "*.md" })[0..],
             .replaceTags = &[_][]const u8{},
-            .pages = std.ArrayList(Site.Page).init(std.testing.allocator),
         },
         Site.Rule{
             .processing = .none,
             .patterns = ([_][]const u8{"static"})[0..],
             .replaceTags = &[_][]const u8{},
-            .pages = std.ArrayList(Site.Page).init(std.testing.allocator),
         },
         Site.Rule{
             .processing = .ignore,
             .patterns = ([_][]const u8{ ".git", ".gitignore" })[0..],
             .replaceTags = &[_][]const u8{},
-            .pages = std.ArrayList(Site.Page).init(std.testing.allocator),
         },
     };
     site.rules = rules[0..];

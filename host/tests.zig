@@ -1,5 +1,6 @@
+// Run tests on this module to ensure they run on all the modules below.
+
 comptime {
-    // To run tests from all modules when running tests in this module
     _ = @import("bootstrap.zig");
     _ = @import("fail.zig");
     _ = @import("generate.zig");

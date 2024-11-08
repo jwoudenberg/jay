@@ -1,3 +1,5 @@
+// Functions and types for interacting with the platform code.
+
 const RocStr = @import("roc/str.zig").RocStr;
 const RocList = @import("roc/list.zig").RocList;
 const Site = @import("site.zig").Site;

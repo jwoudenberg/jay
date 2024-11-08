@@ -1,3 +1,5 @@
+// Helpers for rendering errors to the user.
+
 const std = @import("std");
 const builtin = @import("builtin");
 

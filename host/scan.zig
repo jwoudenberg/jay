@@ -1,3 +1,6 @@
+// Module responsible for scanning source files in the project directory and
+// adding them onto the Site object.
+
 const builtin = @import("builtin");
 const std = @import("std");
 const glob = @import("glob.zig");
@@ -7,28 +10,28 @@ const Site = @import("site.zig").Site;
 const RocList = @import("roc/list.zig").RocList;
 
 pub fn scan(
-    gpa_allocator: std.mem.Allocator,
+    gpa: std.mem.Allocator,
     site: *Site,
     output_root: []const u8,
 ) !void {
-    const allocator = site.arena.allocator();
-    const explicit_ignores = try getRuleIgnorePatterns(allocator, site.rules);
+    const arena = site.allocator();
+    const explicit_ignores = try getRuleIgnorePatterns(arena, site.rules);
     var source_iterator = try SourceFileWalker.init(
-        allocator,
+        arena,
         site.source_root,
         site.roc_main,
         output_root,
         explicit_ignores,
     );
     defer source_iterator.deinit();
-    var unmatched_paths = std.ArrayList([]const u8).init(allocator);
+    var unmatched_paths = std.ArrayList([]const u8).init(arena);
     defer unmatched_paths.deinit();
     while (try source_iterator.next()) |entry| {
         if (entry.ignore) {
             continue;
         } else {
-            const path = try allocator.dupe(u8, entry.path);
-            try addFileToRule(gpa_allocator, site, path, &unmatched_paths);
+            const path = try arena.dupe(u8, entry.path);
+            try addFileToRule(gpa, site, path, &unmatched_paths);
         }
     }
 
@@ -47,7 +50,7 @@ pub const SourceFileWalker = struct {
 
     walker: std.fs.Dir.Walker,
     explicit_ignores: []const []const u8,
-    implicit_ignores: []const []const u8,
+    implicit_ignores: [3][]const u8,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -59,10 +62,11 @@ pub const SourceFileWalker = struct {
         // The Roc file that starts this script as well as anything we generate
         // should be ignored implicitly, i.e. the user should not need to
         // specify these.
-        var implicit_ignores = try allocator.alloc([]const u8, 3);
-        implicit_ignores[0] = output_root;
-        implicit_ignores[1] = roc_main;
-        implicit_ignores[2] = std.fs.path.stem(roc_main);
+        const implicit_ignores = .{
+            output_root,
+            roc_main,
+            std.fs.path.stem(roc_main),
+        };
 
         return Self{
             .walker = try source_root.walk(allocator),
@@ -78,7 +82,7 @@ pub const SourceFileWalker = struct {
     pub fn next(self: *Self) !?Entry {
         while (true) {
             const entry = try self.walker.next() orelse return null;
-            const ignore_implicitly = glob.matchAny(self.implicit_ignores, entry.path);
+            const ignore_implicitly = glob.matchAny(&self.implicit_ignores, entry.path);
             const ignore_explicitly = glob.matchAny(self.explicit_ignores, entry.path);
             const ignore = ignore_implicitly or ignore_explicitly;
 
@@ -124,26 +128,25 @@ fn getRuleIgnorePatterns(
 }
 
 fn addFileToRule(
-    gpa_allocator: std.mem.Allocator,
+    gpa: std.mem.Allocator,
     site: *Site,
     source_path: []const u8,
     unmatched_paths: *std.ArrayList([]const u8),
 ) !void {
-    const allocator = site.arena.allocator();
-
+    const arena = site.allocator();
     // TODO: detect patterns that are not matched by any file.
-    var matched_rules = std.ArrayList(usize).init(allocator);
+    var matched_rules = std.ArrayList(usize).init(arena);
     defer matched_rules.deinit();
 
-    for (site.rules, 0..) |rule, index| {
+    for (site.rules, 0..) |rule, rule_index| {
         if (!glob.matchAny(rule.patterns, source_path)) continue;
 
-        try matched_rules.append(index);
+        try matched_rules.append(rule_index);
         const output_path = switch (rule.processing) {
             .ignore => return error.UnexpectedlyAskedToAddIgnoredFile,
             .bootstrap => return error.UnexpectedlyAskedToAddFileForBootstrapRule,
-            .xml, .none => try std.fmt.allocPrint(allocator, "/{s}", .{source_path}),
-            .markdown => try outputPathForMarkdownFile(allocator, source_path),
+            .xml, .none => try std.fmt.allocPrint(arena, "/{s}", .{source_path}),
+            .markdown => try outputPathForMarkdownFile(arena, source_path),
         };
 
         const frontmatter = switch (rule.processing) {
@@ -151,8 +154,8 @@ fn addFileToRule(
             .bootstrap => return error.UnexpectedlyAskedToAddFileForBootstrapRule,
             .xml, .none => "{}",
             .markdown => blk: {
-                const bytes = try site.source_root.readFileAlloc(gpa_allocator, source_path, 1024 * 1024);
-                defer gpa_allocator.free(bytes);
+                const bytes = try site.source_root.readFileAlloc(gpa, source_path, 1024 * 1024);
+                defer gpa.free(bytes);
                 if (firstNonWhitespaceByte(bytes) != '{') break :blk "{}";
 
                 const roc_bytes = RocList.fromSlice(u8, bytes, false);
@@ -174,11 +177,12 @@ fn addFileToRule(
                     , .{source_path});
                 }
 
-                break :blk try allocator.dupe(u8, meta_bytes);
+                break :blk try arena.dupe(u8, meta_bytes);
             },
         };
 
-        try site.rules[index].pages.append(Site.Page{
+        try site.pages.append(arena, Site.Page{
+            .rule_index = rule_index,
             .source_path = source_path,
             .output_path = output_path,
             .frontmatter = frontmatter,
