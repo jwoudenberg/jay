@@ -2,7 +2,7 @@
 zig-out
 
 # build products
-example/main
+example/build
 example/output
 platform/dynhost
 platform/libapp.so

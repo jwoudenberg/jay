@@ -13,7 +13,7 @@ posts/
 static/
   image.jpg
   style.css
-main.roc
+build.roc
 ```
 
 Jay will turn those markdown files into HTML and produce a site with the following paths:
@@ -26,11 +26,11 @@ Jay will turn those markdown files into HTML and produce a site with the followi
 /static/style.css
 ```
 
-You define the markdown conversion and any other transformations in main.roc.
+You define the markdown conversion and any other transformations in build.roc.
 
 ## Getting started
 
-In a directory with some source files, create a file `main.roc` with the following contents:
+In a directory with some source files, create a file `build.roc` with the following contents:
 
 ```roc
 #!/usr/bin/env roc
@@ -41,8 +41,8 @@ import Pages
 main = Pages.bootstrap
 ```
 
-The shebang on the first line makes it a script. Run it by typing `./main.roc`. This will:
+The shebang on the first line makes it a script. Run it by typing `./build.roc`. This will:
 
-- Replace `main.roc` with a draft site generation script that you can customize.
+- Replace `build.roc` with a draft site generation script that you can customize.
 - Build an initial version of the site and serve it on a local port.
-- Rebuild the site if you make changes to main.roc or source files.
+- Rebuild the site if you make changes to build.roc or source files.

@@ -20,7 +20,7 @@ Markdown := {}
 
 Pages a : PagesInternal.Pages a
 
-# Parse directory structure and rewrite main.roc with initial implementation.
+# Parse directory structure and rewrite build.roc with initial implementation.
 bootstrap : List (Pages type)
 bootstrap = [
     wrap {

@@ -162,13 +162,13 @@ fn generateCodeForRules(site: *const Site) !void {
     if (stat.size > 200) {
         try failPrettily(
             \\You're asking me to generate bootstrap code, which involves me
-            \\replacing the code in main.roc.
+            \\replacing the code in {s}.
             \\
-            \\Your main.roc contains a bit more code than I expect and I don't
+            \\Your {s} contains a bit more code than I expect and I don't
             \\want to accidentally delete anything important.
             \\
             \\If you're sure you want me to bootstrap delete everything from
-            \\the main.roc file except:
+            \\the {s} file except:
             \\
             \\    app [main] {{ pf: platform "<dont change this part>" }}
             \\
@@ -176,7 +176,7 @@ fn generateCodeForRules(site: *const Site) !void {
             \\
             \\    main = Pages.bootstrap
             \\
-        , .{});
+        , .{ site.roc_main, site.roc_main, site.roc_main });
     }
 
     // Find the end of the app header. We could truncate the entire file and
@@ -282,7 +282,7 @@ test generateCodeForRules {
     var tmpdir = std.testing.tmpDir(.{});
     defer tmpdir.cleanup();
     try tmpdir.dir.writeFile(.{
-        .sub_path = "main.roc",
+        .sub_path = "build.roc",
         .data =
         \\app [main] { pf: platform "some hash here" }
         \\
@@ -291,7 +291,7 @@ test generateCodeForRules {
         \\main = Pages.bootstrap
         ,
     });
-    const roc_main = try tmpdir.dir.realpathAlloc(std.testing.allocator, "main.roc");
+    const roc_main = try tmpdir.dir.realpathAlloc(std.testing.allocator, "build.roc");
     defer std.testing.allocator.free(roc_main);
     var site = try Site.init(std.testing.allocator, roc_main);
     defer site.deinit();
@@ -319,7 +319,7 @@ test generateCodeForRules {
 
     try generateCodeForRules(&site);
 
-    const generated = try tmpdir.dir.readFileAlloc(std.testing.allocator, "main.roc", 1024 * 1024);
+    const generated = try tmpdir.dir.readFileAlloc(std.testing.allocator, "build.roc", 1024 * 1024);
     defer std.testing.allocator.free(generated);
     try std.testing.expectEqualStrings(generated,
         \\app [main] { pf: platform "some hash here" }
@@ -457,8 +457,8 @@ test "bootstrapPageRules" {
     var tmpdir = std.testing.tmpDir(.{ .iterate = true });
     defer tmpdir.cleanup();
 
-    try tmpdir.dir.writeFile(.{ .sub_path = "main.roc", .data = "" });
-    const roc_main = try tmpdir.dir.realpathAlloc(std.testing.allocator, "main.roc");
+    try tmpdir.dir.writeFile(.{ .sub_path = "build.roc", .data = "" });
+    const roc_main = try tmpdir.dir.realpathAlloc(std.testing.allocator, "build.roc");
     defer std.testing.allocator.free(roc_main);
     var site = try Site.init(std.testing.allocator, roc_main);
     defer site.deinit();
