@@ -3,6 +3,8 @@ const builtin = @import("builtin");
 const RocStr = @import("roc/str.zig").RocStr;
 const RocList = @import("roc/list.zig").RocList;
 const lib = @import("lib.zig");
+const fail = @import("fail.zig");
+const Site = @import("site.zig").Site;
 
 export fn roc_alloc(size: usize, alignment: u32) callconv(.C) *anyopaque {
     _ = alignment;
@@ -66,17 +68,17 @@ comptime {
 
 pub fn main() void {
     if (run()) {} else |err| {
-        lib.failCrudely(err);
+        fail.crudely(err);
     }
 }
 
-var site: lib.Site = undefined;
+var site: Site = undefined;
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 
 fn run() !void {
     var args = std.process.args();
     const argv0 = args.next() orelse return error.EmptyArgv;
-    site = try lib.Site.init(gpa.allocator(), argv0);
+    site = try Site.init(gpa.allocator(), argv0);
     defer site.deinit();
     var timer = try std.time.Timer.start();
     try lib.run(&gpa, &site);
@@ -88,6 +90,6 @@ export fn roc_fx_list(pattern: *RocStr) callconv(.C) RocList {
     if (lib.getPagesMatchingPattern(gpa.allocator(), &site, pattern)) |results| {
         return results;
     } else |err| {
-        lib.failCrudely(err);
+        fail.crudely(err);
     }
 }
