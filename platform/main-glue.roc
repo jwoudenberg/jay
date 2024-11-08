@@ -5,14 +5,14 @@ platform "glue-types"
     imports []
     provides [mainForHost]
 
-import PagesInternal
+import Pages.Internal
 
 GlueTypes : {
-    a : PagesInternal.PageRule,
-    b : PagesInternal.HostPage,
-    c : PagesInternal.HostTag,
-    d : PagesInternal.Xml,
-    e : PagesInternal.SourceLoc,
+    a : Pages.Internal.PageRule,
+    b : Pages.Internal.HostPage,
+    c : Pages.Internal.HostTag,
+    d : Pages.Internal.Xml,
+    e : Pages.Internal.SourceLoc,
 }
 
 mainForHost : GlueTypes

@@ -1,14 +1,14 @@
 module [Xml, node, text, wrap, unwrap]
 
-import PagesInternal
+import Pages.Internal
 import Xml.Attributes
 
-Xml := PagesInternal.Xml
+Xml := Pages.Internal.Xml
 
-wrap : PagesInternal.Xml -> Xml
+wrap : Pages.Internal.Xml -> Xml
 wrap = \xml -> @Xml xml
 
-unwrap : Xml -> PagesInternal.Xml
+unwrap : Xml -> Pages.Internal.Xml
 unwrap = \@Xml xml -> xml
 
 # Escaping performed by this function:

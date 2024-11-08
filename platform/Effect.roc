@@ -1,5 +1,5 @@
 hosted Effect
     exposes [list!]
-    imports [PagesInternal]
+    imports [Pages.Internal]
 
-list! : Str => List PagesInternal.HostPage
+list! : Str => List Pages.Internal.HostPage

@@ -9,7 +9,7 @@ module [
     list!,
 ]
 
-import PagesInternal exposing [wrap, unwrap, Xml]
+import Pages.Internal exposing [wrap, unwrap, Xml]
 import Html exposing [Html]
 import Xml.Internal
 import Effect
@@ -18,7 +18,7 @@ import Rvn
 
 Markdown := {}
 
-Pages a : PagesInternal.Pages a
+Pages a : Pages.Internal.Pages a
 
 # Parse directory structure and rewrite build.roc with initial implementation.
 bootstrap : List (Pages type)
@@ -58,7 +58,7 @@ wrapHtml : Pages Html, ({ content : Html, path : Str, meta : {}a } => Html) -> P
 wrapHtml = \pages, userWrapper! ->
     internal = unwrap pages
 
-    wrapper! : Xml, PagesInternal.HostPage => Xml
+    wrapper! : Xml, Pages.Internal.HostPage => Xml
     wrapper! = \content, page ->
         meta =
             when Decode.fromBytes page.meta Rvn.compact is
@@ -102,7 +102,7 @@ replaceHtml :
 replaceHtml = \pages, name, userReplacer! ->
     internal = unwrap pages
 
-    replacer! : Xml, PagesInternal.HostPage => Xml
+    replacer! : Xml, Pages.Internal.HostPage => Xml
     replacer! = \original, page ->
         meta =
             when Decode.fromBytes page.meta Rvn.compact is
@@ -142,14 +142,14 @@ replaceHtml = \pages, name, userReplacer! ->
             |> replacer! hostPage,
     }
 
-replaceTag! : Xml, PagesInternal.HostTag, (Xml => Xml) => Xml
+replaceTag! : Xml, Pages.Internal.HostTag, (Xml => Xml) => Xml
 replaceTag! = \content, tag, replace! ->
     { before, nested, after } = replaceTagHelper content tag
     before
     |> List.concat (replace! nested)
     |> List.concat after
 
-replaceTagHelper : Xml, PagesInternal.HostTag -> { before : Xml, nested : Xml, after : Xml }
+replaceTagHelper : Xml, Pages.Internal.HostTag -> { before : Xml, nested : Xml, after : Xml }
 replaceTagHelper = \content, tag ->
     List.walk content { before: [], nested: [], after: [] } \acc, slice ->
         when slice is
@@ -225,14 +225,14 @@ replaceTagHelper = \content, tag ->
                     }
 
 # A pure version of replaceTag! that shares almost all the logic, for testing.
-replaceTag : Xml, PagesInternal.HostTag, (Xml -> Xml) -> Xml
+replaceTag : Xml, Pages.Internal.HostTag, (Xml -> Xml) -> Xml
 replaceTag = \content, tag, replace ->
     { before, nested, after } = replaceTagHelper content tag
     before
     |> List.concat (replace nested)
     |> List.concat after
 
-parseTagForTest : List U8 -> PagesInternal.HostTag
+parseTagForTest : List U8 -> Pages.Internal.HostTag
 parseTagForTest = \bytes ->
     ok : Result (Int a) err -> Int b
     ok = \result ->

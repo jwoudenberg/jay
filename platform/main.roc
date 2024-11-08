@@ -7,12 +7,12 @@ platform "jay"
 
 import Rvn
 import Pages
-import PagesInternal
+import Pages.Internal
 
-mainForHost : {} -> List PagesInternal.PageRule
+mainForHost : {} -> List Pages.Internal.PageRule
 mainForHost = \{} ->
     List.map main \page ->
-        internal = PagesInternal.unwrap page
+        internal = Pages.Internal.unwrap page
         {
             patterns: internal.patterns,
             processing: internal.processing,
@@ -26,11 +26,11 @@ getMetadataLengthForHost = \bytes ->
         Ok {} -> List.len bytes - List.len rest
         Err _ -> 0
 
-runPipelineForHost! : PagesInternal.HostPage => PagesInternal.Xml
+runPipelineForHost! : Pages.Internal.HostPage => Pages.Internal.Xml
 runPipelineForHost! = \hostPage ->
     page =
         when List.get main (Num.intCast hostPage.ruleIndex) is
-            Ok x -> PagesInternal.unwrap x
+            Ok x -> Pages.Internal.unwrap x
             Err OutOfBounds -> crash "unexpected out of bounds page rule"
 
     init = [FromSource { start: 0, end: hostPage.len }]
