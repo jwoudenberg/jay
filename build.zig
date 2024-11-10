@@ -1,25 +1,43 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) !void {
-    const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const target = b.standardTargetOptions(.{});
+    try buildDynhost(b, optimize, target);
+    buildLegacy(b, optimize, target);
+    buildGlue(b);
+    runTests(b, optimize, target);
+
+    b.getInstallStep().dependOn(&b.addInstallDirectory(.{
+        .source_dir = b.path("platform"),
+        .install_dir = .{ .prefix = {} },
+        .install_subdir = "platform",
+        .include_extensions = &.{"roc"},
+    }).step);
+}
+
+fn buildDynhost(
+    b: *std.Build,
+    optimize: std.builtin.OptimizeMode,
+    target: std.Build.ResolvedTarget,
+) !void {
 
     // Build a fake application for this platform as a library, so we have an
     // object exposing the right functions to compile the host against. The
     // implementation of the fake app will later be replaced with whatever real
     // Roc application we compile.
-    const build_libapp = b.addSystemCommand(&.{"roc"});
-    build_libapp.addArgs(&.{ "build", "--lib" });
-    build_libapp.addFileArg(b.path("platform/libapp.roc"));
-    build_libapp.addArg("--output");
-    const libapp = build_libapp.addOutputFileArg(makeTempFilePath(b, "libapp.so"));
+    const libapp = b.addSystemCommand(&.{"roc"});
+    libapp.addArgs(&.{ "build", "--lib" });
+    libapp.addFileArg(b.path("platform/libapp.roc"));
+    libapp.addArg("--output");
+    const libapp_so = libapp.addOutputFileArg(makeTempFilePath(b, "libapp.so"));
 
     // Roc build is succeeding but returning an error code because of an
     // unnecessary warning that needs to be fixed in the Roc compiler. Once
     // that's done the lines below can go away. See:
     // https://roc.zulipchat.com/#narrow/channel/316715-contributing/topic/Help.20upgrade.2Ftest.20purity.20inference/near/481218379
-    build_libapp.expectExitCode(2);
-    build_libapp.addCheck(.{ .expect_stdout_match = "while successfully building:" });
+    libapp.expectExitCode(2);
+    libapp.addCheck(.{ .expect_stdout_match = "while successfully building:" });
 
     const libcmark_gfm = b.dependency("libcmark-gfm", .{
         .target = target,
@@ -29,37 +47,28 @@ pub fn build(b: *std.Build) !void {
     // Build the host. We're claiming to build an executable here, but I don't
     // think that's exactly right as the artifact produced here is not intended
     // to run on its own.
-    const build_dynhost = b.addExecutable(.{
-        .name = "jay",
+    const dynhost = b.addExecutable(.{
+        .name = "dynhost",
         .root_source_file = b.path("host/main.zig"),
         .target = target,
         .optimize = optimize,
     });
-    build_dynhost.addObjectFile(libapp);
-    build_dynhost.bundle_compiler_rt = true;
-    build_dynhost.linkLibC(); // provides malloc/free/.. used in main.zig
-    build_dynhost.linkLibrary(libcmark_gfm.artifact("cmark-gfm"));
-    build_dynhost.linkLibrary(libcmark_gfm.artifact("cmark-gfm-extensions"));
-
-    // Build the host again, this time as a library for static linking.
-    const build_libhost = b.addStaticLibrary(.{
-        .name = "jay",
-        .root_source_file = b.path("host/main.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    build_libhost.bundle_compiler_rt = true;
-    build_libhost.linkLibC(); // provides malloc/free/.. used in main.zig
-    build_libhost.linkLibrary(libcmark_gfm.artifact("cmark-gfm"));
-    build_libhost.linkLibrary(libcmark_gfm.artifact("cmark-gfm-extensions"));
+    dynhost.pie = true;
+    dynhost.rdynamic = true;
+    dynhost.bundle_compiler_rt = true;
+    dynhost.root_module.stack_check = false;
+    dynhost.linkLibC();
+    dynhost.addObjectFile(libapp_so);
+    dynhost.linkLibrary(libcmark_gfm.artifact("cmark-gfm"));
+    dynhost.linkLibrary(libcmark_gfm.artifact("cmark-gfm-extensions"));
 
     // Run the Roc surgical linker to tie together our Roc platform and host
     // into something that can be packed up and used as a platform by others.
-    const build_host = b.addSystemCommand(&.{"roc"});
-    build_host.addArg("preprocess-host");
-    build_host.addFileArg(build_dynhost.getEmittedBin());
-    build_host.addFileArg(b.path("platform/main.roc"));
-    build_host.addFileArg(libapp);
+    const host = b.addSystemCommand(&.{"roc"});
+    host.addArg("preprocess-host");
+    host.addFileArg(dynhost.getEmittedBin());
+    host.addFileArg(b.path("platform/main.roc"));
+    host.addFileArg(libapp_so);
 
     // Mark all .roc files as dependencies of the two roc commands above. That
     // way zig will know to rerun the roc commands when .roc files change.
@@ -70,18 +79,37 @@ pub fn build(b: *std.Build) !void {
     while (try platform_walker.next()) |entry| {
         if (entry.kind != .file) continue;
         const roc_path = b.path("platform").path(b, entry.path);
-        build_libapp.addFileInput(roc_path);
-        build_host.addFileInput(roc_path);
+        libapp.addFileInput(roc_path);
+        host.addFileInput(roc_path);
     }
 
-    // Present description of roc types from running 'roc glue'. Glue does not
-    // currently generate types for Zig, so I only use the output from this
-    // command as documentation for hand-writing roc types in zig host code.
-    const build_glue = b.addSystemCommand(&.{"roc"});
-    build_glue.addArgs(&.{"glue"});
-    build_glue.addFileArg(b.path("build/glue.roc"));
-    const build_glue_dir = build_glue.addOutputDirectoryArg(b.makeTempPath());
-    build_glue.addFileArg(b.path("platform/main-glue.roc"));
+    b.getInstallStep().dependOn(&b.addInstallFile(libapp_so, "platform/libapp.so").step);
+    b.getInstallStep().dependOn(&b.addInstallFile(dynhost.getEmittedBin(), "platform/dynhost").step);
+}
+
+fn buildLegacy(
+    b: *std.Build,
+    optimize: std.builtin.OptimizeMode,
+    target: std.Build.ResolvedTarget,
+) void {
+    const libcmark_gfm = b.dependency("libcmark-gfm", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Build the host again, this time as a library for static linking.
+    const libhost = b.addStaticLibrary(.{
+        .name = "jay",
+        .root_source_file = b.path("host/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    libhost.pie = true;
+    libhost.rdynamic = true;
+    libhost.bundle_compiler_rt = true;
+    libhost.linkLibC(); // provides malloc/free/.. used in main.zig
+    libhost.linkLibrary(libcmark_gfm.artifact("cmark-gfm"));
+    libhost.linkLibrary(libcmark_gfm.artifact("cmark-gfm-extensions"));
 
     // We need the host's object files along with any C dependencies to be
     // bundled in a single archive for the legacy linker. The below build
@@ -90,23 +118,33 @@ pub fn build(b: *std.Build) !void {
     const combined_archive = combine_archive.addOutputFileArg(makeTempFilePath(b, "combined.a"));
     combine_archive.addFileArg(libcmark_gfm.artifact("cmark-gfm").getEmittedBin());
     combine_archive.addFileArg(libcmark_gfm.artifact("cmark-gfm-extensions").getEmittedBin());
-    combine_archive.addFileArg(build_libhost.getEmittedBin());
+    combine_archive.addFileArg(libhost.getEmittedBin());
+
+    b.getInstallStep().dependOn(&b.addInstallFile(combined_archive, "platform/linux-x64.a").step);
+}
+
+fn buildGlue(b: *std.Build) void {
+    // Present description of roc types from running 'roc glue'. Glue does not
+    // currently generate types for Zig, so I only use the output from this
+    // command as documentation for hand-writing roc types in zig host code.
+    const glue = b.addSystemCommand(&.{"roc"});
+    glue.addArgs(&.{"glue"});
+    glue.addFileArg(b.path("build/glue.roc"));
+    const glue_dir = glue.addOutputDirectoryArg(b.makeTempPath());
+    glue.addFileArg(b.path("platform/main-glue.roc"));
 
     b.getInstallStep().dependOn(&b.addInstallDirectory(.{
-        .source_dir = b.path("platform"),
-        .install_dir = .{ .prefix = {} },
-        .install_subdir = "platform",
-        .include_extensions = &.{"roc"},
-    }).step);
-    b.getInstallStep().dependOn(&b.addInstallFile(build_dynhost.getEmittedBin(), "platform/dynhost").step);
-    b.getInstallStep().dependOn(&b.addInstallFile(combined_archive, "platform/linux-x64.a").step);
-    b.getInstallStep().dependOn(&b.addInstallFile(libapp, "platform/libapp.so").step);
-    b.getInstallStep().dependOn(&b.addInstallDirectory(.{
-        .source_dir = build_glue_dir,
+        .source_dir = glue_dir,
         .install_dir = .{ .prefix = {} },
         .install_subdir = "glue",
     }).step);
+}
 
+fn runTests(
+    b: *std.Build,
+    optimize: std.builtin.OptimizeMode,
+    target: std.Build.ResolvedTarget,
+) void {
     const exe_unit_tests = b.addTest(.{
         .root_source_file = b.path("host/tests.zig"),
         .target = target,
