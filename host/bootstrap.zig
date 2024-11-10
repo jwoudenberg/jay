@@ -15,45 +15,103 @@ const bootstrap_ignore_patterns = [_][]const u8{
     "README*",
 };
 
-pub fn bootstrap(site: *Site, output_root: []const u8) !void {
-    try bootstrapRules(site, output_root);
+pub fn bootstrap(
+    gpa: std.mem.Allocator,
+    site: *Site,
+    output_root: []const u8,
+) !void {
+    try bootstrapRules(gpa, site, output_root);
     try generateCodeForRules(site);
 }
 
-fn bootstrapRules(site: *Site, output_root: []const u8) !void {
+fn bootstrapRules(
+    gpa: std.mem.Allocator,
+    site: *Site,
+    output_root: []const u8,
+) !void {
     const arena = site.allocator();
-    var markdown_patterns = std.StringHashMap(void).init(arena);
-    var static_patterns = std.StringHashMap(void).init(arena);
-    var ignore_patterns = std.StringHashMap(void).init(arena);
+
+    // We're going to scan for files and create rules to contain those files,
+    // but we don't know what rules we'll create upfront. Possibilities are
+    // a markdown rule, a static file rule, and an ignore rule, but we might
+    // not need all three.
+
+    const PreRule = struct {
+        rule_index: usize,
+        patterns: std.ArrayList([]const u8),
+    };
+    const processing_type_count = 8 * @sizeOf(Site.Processing);
+    var pre_rules: [processing_type_count]?PreRule = std.mem.zeroes([processing_type_count]?PreRule);
+
+    // Let's always add an ignore rule. Even if it's empty initially, it seems
+    // helpful to include one.
+    pre_rules[@intFromEnum(Site.Processing.ignore)] = PreRule{
+        .rule_index = 0,
+        .patterns = std.ArrayList([]const u8).init(arena),
+    };
 
     var source_iterator = try scan.SourceFileWalker.init(
-        arena,
+        gpa,
         site.source_root,
         site.roc_main,
         output_root,
         &bootstrap_ignore_patterns,
     );
     defer source_iterator.deinit();
-    // TODO: don't just collect patterns, also populate .pages field.
     while (try source_iterator.next()) |entry| {
         if (entry.ignore) {
-            try ignore_patterns.put(try arena.dupe(u8, entry.path), void{});
-            continue;
+            if (pre_rules[@intFromEnum(Site.Processing.ignore)]) |*pre_rule| {
+                try pre_rule.patterns.append(try arena.dupe(u8, entry.path));
+                continue;
+            } else return error.UnexpectedMissingIgnorePreRule;
         }
 
-        const pattern = try patternForPath(arena, entry.path);
-        if (scan.isMarkdown(entry.path)) {
-            try markdown_patterns.put(pattern, void{});
-        } else {
-            try static_patterns.put(pattern, void{});
+        const processing: Site.Processing = if (scan.isMarkdown(entry.path)) .markdown else .none;
+        const pre_rule_index = @intFromEnum(processing);
+
+        if (pre_rules[pre_rule_index] == null) {
+            var rule_index: usize = 0;
+            for (pre_rules) |pre_rule| {
+                if (pre_rule != null) rule_index += 1;
+            }
+            pre_rules[pre_rule_index] = PreRule{
+                .rule_index = rule_index,
+                .patterns = std.ArrayList([]const u8).init(arena),
+            };
         }
+
+        if (pre_rules[pre_rule_index]) |*pre_rule| {
+            try scan.addPath(
+                gpa,
+                site,
+                pre_rule.rule_index,
+                processing,
+                try arena.dupe(u8, entry.path),
+            );
+
+            const new_pattern = try patternForPath(gpa, entry.path);
+            defer gpa.free(new_pattern);
+            for (pre_rule.patterns.items) |existing_pattern| {
+                if (std.mem.eql(u8, existing_pattern, new_pattern)) break;
+            } else {
+                try pre_rule.patterns.append(try arena.dupe(u8, new_pattern));
+            }
+        } else return error.UnexpectedMissingPreRule;
     }
-    try updateSiteForPatterns(
-        site,
-        markdown_patterns,
-        static_patterns,
-        ignore_patterns,
-    );
+
+    var rules = try arena.alloc(Site.Rule, processing_type_count);
+    var rules_len: usize = 0;
+
+    for (pre_rules, 0..) |opt_pre_rule, processing| {
+        var pre_rule = opt_pre_rule orelse continue;
+        rules_len += 1;
+        rules[pre_rule.rule_index] = Site.Rule{
+            .patterns = try pre_rule.patterns.toOwnedSlice(),
+            .processing = @enumFromInt(processing),
+            .replaceTags = &.{},
+        };
+    }
+    site.rules = rules[0..rules_len];
 }
 
 test "bootstrapRules" {
@@ -79,31 +137,60 @@ test "bootstrapRules" {
     try tmpdir.dir.writeFile(.{ .sub_path = "index.md", .data = "" });
     try tmpdir.dir.writeFile(.{ .sub_path = ".gitignore", .data = "" });
 
-    try bootstrapRules(&site, "output");
+    try bootstrapRules(std.testing.allocator, &site, "output");
 
     try std.testing.expectEqual(3, site.rules.len);
 
-    try std.testing.expectEqual(.markdown, site.rules[0].processing);
-    try std.testing.expectEqual(3, site.rules[0].patterns.len);
-    const markdown_patterns = try std.testing.allocator.dupe([]const u8, site.rules[0].patterns);
+    try std.testing.expectEqual(.ignore, site.rules[0].processing);
+    try std.testing.expectEqual(1, site.rules[0].patterns.len);
+    try std.testing.expectEqualStrings(".gitignore", site.rules[0].patterns[0]);
+
+    try std.testing.expectEqual(.markdown, site.rules[1].processing);
+    try std.testing.expectEqual(3, site.rules[1].patterns.len);
+    const markdown_patterns = try std.testing.allocator.dupe([]const u8, site.rules[1].patterns);
     defer std.testing.allocator.free(markdown_patterns);
     std.sort.insertion([]const u8, markdown_patterns, {}, compareStrings);
     try std.testing.expectEqualStrings("*.md", markdown_patterns[0]);
     try std.testing.expectEqualStrings("markdown_only/*.md", markdown_patterns[1]);
     try std.testing.expectEqualStrings("mixed/*.md", markdown_patterns[2]);
 
-    try std.testing.expectEqual(.none, site.rules[1].processing);
-    try std.testing.expectEqual(3, site.rules[1].patterns.len);
-    const static_patterns = try std.testing.allocator.dupe([]const u8, site.rules[1].patterns);
+    try std.testing.expectEqual(.none, site.rules[2].processing);
+    try std.testing.expectEqual(3, site.rules[2].patterns.len);
+    const static_patterns = try std.testing.allocator.dupe([]const u8, site.rules[2].patterns);
     defer std.testing.allocator.free(static_patterns);
     std.sort.insertion([]const u8, static_patterns, {}, compareStrings);
     try std.testing.expectEqualStrings("mixed/*.xml", static_patterns[0]);
     try std.testing.expectEqualStrings("static_only/*.css", static_patterns[1]);
     try std.testing.expectEqualStrings("static_only/*.png", static_patterns[2]);
 
-    try std.testing.expectEqual(.ignore, site.rules[2].processing);
-    try std.testing.expectEqual(1, site.rules[2].patterns.len);
-    try std.testing.expectEqualStrings(".gitignore", site.rules[2].patterns[0]);
+    const pages = site.pages.items;
+    try std.testing.expectEqualStrings(pages[0].source_path, "markdown_only/one.md");
+    try std.testing.expectEqualStrings(pages[0].output_path, "/markdown_only/one.html");
+    try std.testing.expectEqual(pages[0].rule_index, 1);
+
+    try std.testing.expectEqualStrings(pages[1].source_path, "markdown_only/two.md");
+    try std.testing.expectEqualStrings(pages[1].output_path, "/markdown_only/two.html");
+    try std.testing.expectEqual(pages[1].rule_index, 1);
+
+    try std.testing.expectEqualStrings(pages[2].source_path, "static_only/main.css");
+    try std.testing.expectEqualStrings(pages[2].output_path, "/static_only/main.css");
+    try std.testing.expectEqual(pages[2].rule_index, 2);
+
+    try std.testing.expectEqualStrings(pages[3].source_path, "static_only/logo.png");
+    try std.testing.expectEqualStrings(pages[3].output_path, "/static_only/logo.png");
+    try std.testing.expectEqual(pages[3].rule_index, 2);
+
+    try std.testing.expectEqualStrings(pages[4].source_path, "mixed/three.md");
+    try std.testing.expectEqualStrings(pages[4].output_path, "/mixed/three.html");
+    try std.testing.expectEqual(pages[4].rule_index, 1);
+
+    try std.testing.expectEqualStrings(pages[5].source_path, "mixed/rss.xml");
+    try std.testing.expectEqualStrings(pages[5].output_path, "/mixed/rss.xml");
+    try std.testing.expectEqual(pages[5].rule_index, 2);
+
+    try std.testing.expectEqualStrings(pages[6].source_path, "index.md");
+    try std.testing.expectEqualStrings(pages[6].output_path, "/index.html");
+    try std.testing.expectEqual(pages[6].rule_index, 1);
 }
 
 fn compareStrings(_: void, lhs: []const u8, rhs: []const u8) bool {
@@ -124,53 +211,6 @@ fn patternForPath(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
             "*{s}",
             .{extension},
         );
-}
-
-fn updateSiteForPatterns(
-    site: *Site,
-    markdown_patterns: std.hash_map.StringHashMap(void),
-    static_patterns: std.hash_map.StringHashMap(void),
-    ignore_patterns: std.hash_map.StringHashMap(void),
-) !void {
-    const arena = site.allocator();
-    var rules = try std.ArrayList(Site.Rule).initCapacity(arena, 3);
-    errdefer rules.deinit();
-
-    if (markdown_patterns.count() > 0) {
-        try rules.append(Site.Rule{
-            .patterns = try getHashMapKeys(arena, markdown_patterns),
-            .processing = .markdown,
-            .replaceTags = &[_][]u8{},
-        });
-    }
-    if (static_patterns.count() > 0) {
-        try rules.append(Site.Rule{
-            .patterns = try getHashMapKeys(arena, static_patterns),
-            .processing = .none,
-            .replaceTags = &[_][]u8{},
-        });
-    }
-    try rules.append(Site.Rule{
-        .patterns = try getHashMapKeys(arena, ignore_patterns),
-        .processing = .ignore,
-        .replaceTags = &[_][]u8{},
-    });
-
-    site.rules = try rules.toOwnedSlice();
-}
-
-fn getHashMapKeys(
-    allocator: std.mem.Allocator,
-    map: std.hash_map.StringHashMap(void),
-) ![][]const u8 {
-    var keys = try allocator.alloc([]const u8, map.count());
-    var key_iterator = map.keyIterator();
-    var index: usize = 0;
-    while (key_iterator.next()) |key| {
-        keys[index] = key.*;
-        index += 1;
-    }
-    return keys;
 }
 
 fn generateCodeForRules(site: *const Site) !void {

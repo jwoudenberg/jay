@@ -14,18 +14,19 @@ pub fn scan(
     site: *Site,
     output_root: []const u8,
 ) !void {
-    const arena = site.allocator();
-    const explicit_ignores = try getRuleIgnorePatterns(arena, site.rules);
+    const explicit_ignores = try getRuleIgnorePatterns(gpa, site.rules);
     var source_iterator = try SourceFileWalker.init(
-        arena,
+        gpa,
         site.source_root,
         site.roc_main,
         output_root,
         explicit_ignores,
     );
     defer source_iterator.deinit();
-    var unmatched_paths = std.ArrayList([]const u8).init(arena);
+    var unmatched_paths = std.ArrayList([]const u8).init(gpa);
     defer unmatched_paths.deinit();
+
+    const arena = site.allocator();
     while (try source_iterator.next()) |entry| {
         if (entry.ignore) {
             continue;
@@ -133,60 +134,15 @@ fn addFileToRule(
     source_path: []const u8,
     unmatched_paths: *std.ArrayList([]const u8),
 ) !void {
-    const arena = site.allocator();
     // TODO: detect patterns that are not matched by any file.
-    var matched_rules = std.ArrayList(usize).init(arena);
+    var matched_rules = std.ArrayList(usize).init(gpa);
     defer matched_rules.deinit();
 
     for (site.rules, 0..) |rule, rule_index| {
         if (!glob.matchAny(rule.patterns, source_path)) continue;
 
         try matched_rules.append(rule_index);
-        const output_path = switch (rule.processing) {
-            .ignore => return error.UnexpectedlyAskedToAddIgnoredFile,
-            .bootstrap => return error.UnexpectedlyAskedToAddFileForBootstrapRule,
-            .xml, .none => try std.fmt.allocPrint(arena, "/{s}", .{source_path}),
-            .markdown => try outputPathForMarkdownFile(arena, source_path),
-        };
-
-        const frontmatter = switch (rule.processing) {
-            .ignore => return error.UnexpectedlyAskedToAddIgnoredFile,
-            .bootstrap => return error.UnexpectedlyAskedToAddFileForBootstrapRule,
-            .xml, .none => "{}",
-            .markdown => blk: {
-                const bytes = try site.source_root.readFileAlloc(gpa, source_path, 1024 * 1024);
-                defer gpa.free(bytes);
-                if (firstNonWhitespaceByte(bytes) != '{') break :blk "{}";
-
-                const roc_bytes = RocList.fromSlice(u8, bytes, false);
-                var meta_len: u64 = undefined;
-                platform.roc__getMetadataLengthForHost_1_exposed_generic(&meta_len, &roc_bytes);
-
-                // Markdown headers start with #, just like Roc comments. RVN
-                // supports comments, so if there's a header below the page
-                // frontmatter it is parsed as well. We'll peel these off.
-                const meta_bytes = dropTrailingHeaderLines(bytes[0..meta_len]);
-
-                if (meta_bytes.len == 0) {
-                    try fail.prettily(
-                        \\I ran into an error attempting to decode the metadata
-                        \\at the start of this file:
-                        \\
-                        \\    {s}
-                        \\
-                    , .{source_path});
-                }
-
-                break :blk try arena.dupe(u8, meta_bytes);
-            },
-        };
-
-        try site.pages.append(arena, Site.Page{
-            .rule_index = rule_index,
-            .source_path = source_path,
-            .output_path = output_path,
-            .frontmatter = frontmatter,
-        });
+        try addPath(gpa, site, rule_index, rule.processing, source_path);
     }
 
     switch (matched_rules.items.len) {
@@ -206,6 +162,67 @@ fn addFileToRule(
             , .{ source_path, matched_rules.items });
         },
     }
+}
+
+pub fn addPath(
+    gpa: std.mem.Allocator,
+    site: *Site,
+    rule_index: usize,
+    processing: Site.Processing,
+    source_path: []const u8,
+) !void {
+    const arena = site.allocator();
+    const output_path = switch (processing) {
+        .ignore => return error.UnexpectedlyAskedToAddIgnoredFile,
+        .bootstrap => return error.UnexpectedlyAskedToAddFileForBootstrapRule,
+        .xml, .none => try std.fmt.allocPrint(arena, "/{s}", .{source_path}),
+        .markdown => try outputPathForMarkdownFile(arena, source_path),
+    };
+
+    const frontmatter = switch (processing) {
+        .ignore => return error.UnexpectedlyAskedToAddIgnoredFile,
+        .bootstrap => return error.UnexpectedlyAskedToAddFileForBootstrapRule,
+        .xml, .none => "{}",
+        .markdown => blk: {
+            const bytes = try site.source_root.readFileAlloc(gpa, source_path, 1024 * 1024);
+            defer gpa.free(bytes);
+            if (firstNonWhitespaceByte(bytes) != '{') break :blk "{}";
+
+            const roc_bytes = RocList.fromSlice(u8, bytes, false);
+            var meta_len: u64 = undefined;
+
+            // Zig tests can't call out to Roc.
+            if (builtin.is_test) {
+                meta_len = 0;
+            } else {
+                platform.roc__getMetadataLengthForHost_1_exposed_generic(&meta_len, &roc_bytes);
+            }
+
+            // Markdown headers start with #, just like Roc comments. RVN
+            // supports comments, so if there's a header below the page
+            // frontmatter it is parsed as well. We'll peel these off.
+            const meta_bytes = dropTrailingHeaderLines(bytes[0..meta_len]);
+
+            if (meta_bytes.len == 0) {
+                try fail.prettily(
+                    \\I ran into an error attempting to decode the metadata
+                    \\at the start of this file:
+                    \\
+                    \\    {s}
+                    \\
+                , .{source_path});
+            }
+
+            break :blk try arena.dupe(u8, meta_bytes);
+        },
+    };
+
+    try site.pages.append(arena, Site.Page{
+        .rule_index = rule_index,
+        .source_path = source_path,
+        .output_path = output_path,
+        .frontmatter = frontmatter,
+    });
 }
 
 fn unmatchedSourceFileError(unmatched_paths: [][]const u8) !noreturn {

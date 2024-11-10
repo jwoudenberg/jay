@@ -80,7 +80,7 @@ pub fn run(gpa: std.mem.Allocator, site: *Site) !void {
 
     // (2) Scan the project to find all the source files.
     if (site.rules.len == 1 and site.rules[0].processing == .bootstrap) {
-        try bootstrap(site, output_root);
+        try bootstrap(gpa, site, output_root);
     } else {
         try scan(gpa, site, output_root);
     }

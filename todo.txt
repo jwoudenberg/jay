@@ -20,6 +20,7 @@ x implement list
 +html custom attributes
 +html empty attributes
 
+incorporate zig-learnings from https://github.com/ostcar/roc-aoc-platform
 update top-level API to deal with mismatch phantom param page types
 implement fromHtml
 assert/convert html input files to ensure utf8 encoding of output
