@@ -69,8 +69,9 @@ pub fn respond(
         .content_length = len,
         .respond_options = .{
             .status = .ok,
-            // TODO: include a content-type header
-            .extra_headers = &.{},
+            .extra_headers = &.{
+                .{ .name = "content-type", .value = @tagName(page.mime_type) },
+            },
         },
     });
 

@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const fail = @import("fail.zig");
+const mime = @import("mime");
 
 pub const Site = struct {
     // The allocator that should be used for content of the struct.
@@ -50,6 +51,7 @@ pub const Site = struct {
 
     pub const Page = struct {
         rule_index: usize,
+        mime_type: mime.Type,
         source_path: []const u8,
         output_path: []const u8,
         frontmatter: []const u8,

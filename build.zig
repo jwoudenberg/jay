@@ -61,6 +61,10 @@ fn buildDynhost(
     dynhost.addObjectFile(libapp_so);
     dynhost.linkLibrary(libcmark_gfm.artifact("cmark-gfm"));
     dynhost.linkLibrary(libcmark_gfm.artifact("cmark-gfm-extensions"));
+    dynhost.root_module.addImport("mime", b.dependency("mime", .{
+        .target = target,
+        .optimize = optimize,
+    }).module("mime"));
 
     // Run the Roc surgical linker to tie together our Roc platform and host
     // into something that can be packed up and used as a platform by others.
@@ -110,6 +114,10 @@ fn buildLegacy(
     libhost.linkLibC(); // provides malloc/free/.. used in main.zig
     libhost.linkLibrary(libcmark_gfm.artifact("cmark-gfm"));
     libhost.linkLibrary(libcmark_gfm.artifact("cmark-gfm-extensions"));
+    libhost.root_module.addImport("mime", b.dependency("mime", .{
+        .target = target,
+        .optimize = optimize,
+    }).module("mime"));
 
     // We need the host's object files along with any C dependencies to be
     // bundled in a single archive for the legacy linker. The below build
@@ -151,6 +159,10 @@ fn runTests(
         .optimize = optimize,
     });
     exe_unit_tests.linkLibC(); // provides malloc/free/.. used in main.zig
+    exe_unit_tests.root_module.addImport("mime", b.dependency("mime", .{
+        .target = target,
+        .optimize = optimize,
+    }).module("mime"));
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
 

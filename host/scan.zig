@@ -3,6 +3,7 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
+const mime = @import("mime");
 const glob = @import("glob.zig");
 const fail = @import("fail.zig");
 const platform = @import("platform.zig");
@@ -217,8 +218,12 @@ pub fn addPath(
         },
     };
 
+    const extension = std.fs.path.extension(output_path);
+    const mime_type = mime.extension_map.get(extension) orelse .@"application/octet-stream";
+
     try site.pages.append(arena, Site.Page{
         .rule_index = rule_index,
+        .mime_type = mime_type,
         .source_path = source_path,
         .output_path = output_path,
         .frontmatter = frontmatter,

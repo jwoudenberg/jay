@@ -7,6 +7,10 @@
             .url = "https://github.com/abhinav/libcmark-gfm.zig/archive/0.1.0.tar.gz",
             .hash = "1220b8a2a0e06f9adbe77b64be7482f5814383e647ced9a332f100044881af5e23a7",
         },
+        .mime = .{
+            .url = "https://github.com/andrewrk/mime/archive/refs/tags/2.0.1.tar.gz",
+            .hash = "12209083b0c43d0f68a26a48a7b26ad9f93b22c9cff710c78ddfebb47b89cfb9c7a4",
+        },
     },
     .paths = .{
         "build.zig",
