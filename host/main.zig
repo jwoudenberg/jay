@@ -5,6 +5,7 @@ const RocList = @import("roc/list.zig").RocList;
 const fail = @import("fail.zig");
 const Site = @import("site.zig").Site;
 const glob = @import("glob.zig");
+const server = @import("server.zig");
 const platform = @import("platform.zig");
 const bootstrap = @import("bootstrap.zig").bootstrap;
 const scan = @import("scan.zig").scan;
@@ -59,9 +60,11 @@ pub fn run() !void {
     // (3) Generate output files.
     try generate(gpa, &site, output_root);
 
-    // (4) Be polite and say goodbye.
     const stdout = std.io.getStdOut().writer();
     try stdout.print("Generated site in {d}ms\n", .{timer.read() / 1_000_000});
+
+    // (4) Serve the output files.
+    try server.start(&site, output_root);
 }
 
 fn fromPlatformRule(

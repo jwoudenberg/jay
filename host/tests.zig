@@ -8,6 +8,7 @@ comptime {
     _ = @import("main.zig");
     _ = @import("platform.zig");
     _ = @import("scan.zig");
+    _ = @import("server.zig");
     _ = @import("site.zig");
     _ = @import("util.zig");
     _ = @import("xml.zig");

@@ -18,7 +18,7 @@ pub fn prettily(comptime format: []const u8, args: anytype) !noreturn {
 pub fn crudely(err: anyerror) noreturn {
     // Make sure we only print if we didn't already show a pretty error.
     if (err != error.PrettyError) {
-        prettily("Error: {}", .{err}) catch {};
+        prettily("Error: {s}", .{@errorName(err)}) catch {};
     }
     std.process.exit(1);
 }
