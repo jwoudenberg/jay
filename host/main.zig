@@ -2,69 +2,16 @@ const std = @import("std");
 const builtin = @import("builtin");
 const RocStr = @import("roc/str.zig").RocStr;
 const RocList = @import("roc/list.zig").RocList;
-const lib = @import("lib.zig");
 const fail = @import("fail.zig");
 const Site = @import("site.zig").Site;
+const glob = @import("glob.zig");
+const platform = @import("platform.zig");
+const bootstrap = @import("bootstrap.zig").bootstrap;
+const scan = @import("scan.zig").scan;
+const generate = @import("generate.zig").generate;
+const util = @import("util.zig");
 
-export fn roc_alloc(size: usize, alignment: u32) callconv(.C) *anyopaque {
-    _ = alignment;
-    return std.c.malloc(size).?;
-}
-
-export fn roc_realloc(old_ptr: *anyopaque, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*anyopaque {
-    _ = old_size;
-    _ = alignment;
-    return std.c.realloc(old_ptr, new_size);
-}
-
-export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
-    _ = alignment;
-    std.c.free(c_ptr);
-}
-
-export fn roc_panic(msg: *RocStr, tag_id: u32) callconv(.C) void {
-    lib.handlePanic(msg, tag_id);
-}
-
-export fn roc_dbg(loc: *RocStr, msg: *RocStr, src: *RocStr) callconv(.C) void {
-    if (!builtin.is_test) {
-        const stderr = std.io.getStdErr().writer();
-        stderr.print("[{s}] {s} = {s}\n", .{ loc.asSlice(), src.asSlice(), msg.asSlice() }) catch unreachable;
-    }
-}
-
-export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void {
-    return @memset(dst[0..size], @intCast(value));
-}
-
-fn roc_getppid() callconv(.C) c_int {
-    // Only recently added to Zig: https://github.com/ziglang/zig/pull/20866
-    return @bitCast(@as(u32, @truncate(std.os.linux.syscall0(.getppid))));
-}
-
-fn roc_getppid_windows_stub() callconv(.C) c_int {
-    return 0;
-}
-
-fn roc_shm_open(name: [*:0]const u8, oflag: c_int, mode: c_uint) callconv(.C) c_int {
-    return std.c.shm_open(name, oflag, mode);
-}
-
-fn roc_mmap(addr: ?*align(std.mem.page_size) anyopaque, length: usize, prot: c_uint, flags: std.c.MAP, fd: c_int, offset: c_int) callconv(.C) *anyopaque {
-    return std.c.mmap(addr, length, prot, flags, fd, offset);
-}
-
-comptime {
-    if (builtin.os.tag == .macos or builtin.os.tag == .linux) {
-        @export(roc_getppid, .{ .name = "roc_getppid", .linkage = .strong });
-        @export(roc_mmap, .{ .name = "roc_mmap", .linkage = .strong });
-        @export(roc_shm_open, .{ .name = "roc_shm_open", .linkage = .strong });
-    }
-
-    if (builtin.os.tag == .windows) {
-        @export(roc_getppid_windows_stub, .{ .name = "roc_getppid", .linkage = .strong });
-    }
-}
+const output_root = "output";
 
 pub fn main() void {
     if (run()) {} else |err| {
@@ -76,21 +23,110 @@ var site: Site = undefined;
 var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
 const gpa = gpa_state.allocator();
 
-fn run() !void {
+export fn roc_fx_list(pattern: *RocStr) callconv(.C) RocList {
+    if (getPagesMatchingPattern(gpa, pattern)) |results| {
+        return results;
+    } else |err| {
+        fail.crudely(err);
+    }
+}
+
+pub fn run() !void {
     var args = std.process.args();
     const argv0 = args.next() orelse return error.EmptyArgv;
     site = try Site.init(gpa, argv0);
     defer site.deinit();
     var timer = try std.time.Timer.start();
-    try lib.run(gpa, &site);
+
+    // (1) Call platform to get page rules.
+    var roc_rules = RocList.empty();
+    platform.roc__mainForHost_1_exposed_generic(&roc_rules, &void{});
+    site.rules = try rocListMapToOwnedSlice(
+        platform.Rule,
+        Site.Rule,
+        fromPlatformRule,
+        site.allocator(),
+        roc_rules,
+    );
+
+    // (2) Scan the project to find all the source files.
+    if (site.rules.len == 1 and site.rules[0].processing == .bootstrap) {
+        try bootstrap(gpa, &site, output_root);
+    } else {
+        try scan(gpa, &site, output_root);
+    }
+
+    // (3) Generate output files.
+    try generate(gpa, &site, output_root);
+
+    // (4) Be polite and say goodbye.
     const stdout = std.io.getStdOut().writer();
     try stdout.print("Generated site in {d}ms\n", .{timer.read() / 1_000_000});
 }
 
-export fn roc_fx_list(pattern: *RocStr) callconv(.C) RocList {
-    if (lib.getPagesMatchingPattern(gpa, &site, pattern)) |results| {
-        return results;
-    } else |err| {
-        fail.crudely(err);
+fn fromPlatformRule(
+    arena: std.mem.Allocator,
+    platform_rule: platform.Rule,
+) !Site.Rule {
+    return .{
+        .patterns = try rocListMapToOwnedSlice(
+            RocStr,
+            []const u8,
+            fromRocStr,
+            arena,
+            platform_rule.patterns,
+        ),
+        .replaceTags = try rocListMapToOwnedSlice(
+            RocStr,
+            []const u8,
+            fromRocStr,
+            arena,
+            platform_rule.replaceTags,
+        ),
+        .processing = platform_rule.processing,
+    };
+}
+
+fn fromRocStr(allocator: std.mem.Allocator, roc_pattern: RocStr) ![]const u8 {
+    return try allocator.dupe(u8, roc_pattern.asSlice());
+}
+
+fn rocListMapToOwnedSlice(
+    comptime T: type,
+    comptime O: type,
+    comptime map: fn (allocator: std.mem.Allocator, elem: T) anyerror!O,
+    allocator: std.mem.Allocator,
+    list: RocList,
+) ![]O {
+    const len = list.len();
+    if (len == 0) return allocator.alloc(O, 0);
+    const elements = list.elements(T) orelse return error.RocListUnexpectedlyEmpty;
+    const slice = try allocator.alloc(O, len);
+    for (elements, 0..len) |element, index| {
+        slice[index] = try map(allocator, element);
     }
+    return slice;
+}
+
+pub fn getPagesMatchingPattern(
+    allocator: std.mem.Allocator,
+    roc_pattern: *RocStr,
+) !RocList {
+    const pattern = roc_pattern.asSlice();
+    var results = std.ArrayList(platform.Page).init(allocator);
+    for (site.pages.items) |page| {
+        if (glob.match(pattern, page.source_path)) {
+            try results.append(platform.Page{
+                .meta = RocList.fromSlice(u8, page.frontmatter, false),
+                .path = RocStr.fromSlice(util.formatPathForPlatform(page.output_path)),
+                .tags = RocList.empty(),
+                .len = 0,
+                .ruleIndex = @as(u32, @intCast(page.rule_index)),
+            });
+        }
+    }
+    if (results.items.len == 0) {
+        try fail.prettily("Pattern '{s}' did not match any files", .{pattern});
+    }
+    return RocList.fromSlice(platform.Page, try results.toOwnedSlice(), true);
 }

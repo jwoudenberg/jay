@@ -5,7 +5,6 @@ comptime {
     _ = @import("fail.zig");
     _ = @import("generate.zig");
     _ = @import("glob.zig");
-    _ = @import("lib.zig");
     _ = @import("main.zig");
     _ = @import("platform.zig");
     _ = @import("scan.zig");
