@@ -43,15 +43,26 @@ pub fn serve(site: *const Site, output_root: []const u8) !void {
     }
 }
 
-pub fn respond(
+fn respond(
     site: *const Site,
     request: *std.http.Server.Request,
     output_dir: std.fs.Dir,
 ) !void {
-    const page = site.pages.get(request.head.target) orelse {
+    if (site.pages.get(request.head.target)) |page| {
+        return servePage(page, .ok, request, output_dir);
+    } else if (site.pages.get("/404")) |page| {
+        return servePage(page, .not_found, request, output_dir);
+    } else {
         return request.respond("404 Not Found", .{ .status = .not_found });
-    };
+    }
+}
 
+fn servePage(
+    page: Site.Page,
+    status: std.http.Status,
+    request: *std.http.Server.Request,
+    output_dir: std.fs.Dir,
+) !void {
     const output_path_no_leading_slash = page.output_path[1..];
 
     var send_buffer: [8000]u8 = undefined;
@@ -59,7 +70,7 @@ pub fn respond(
         .send_buffer = &send_buffer,
         .content_length = page.output_len orelse return error.OutputLenUnset,
         .respond_options = .{
-            .status = .ok,
+            .status = status,
             .extra_headers = &.{
                 .{ .name = "content-type", .value = @tagName(page.mime_type) },
                 .{ .name = "cache-control", .value = "max-age=0, must-revalidate" },

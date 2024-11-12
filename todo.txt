@@ -20,7 +20,6 @@ x implement list
 +html custom attributes
 +html empty attributes
 
-detect cases of multiple source files mapping onto the same web path
 update top-level API to deal with mismatch phantom param page types
 implement fromHtml
 assert/convert html input files to ensure utf8 encoding of output
@@ -52,7 +51,6 @@ support setting a path root
 replace source-style-paths with output-style-paths
 support syntax highlighting in markdown snippets
 enable github markdown extensions
-figure out 404 page support
 +site for jay project with cookbooks
 +site example of gitbook-like site
 +site example of blog

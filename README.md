@@ -46,3 +46,9 @@ The shebang on the first line makes it a script. Run it by typing `./build.roc`.
 - Replace `build.roc` with a draft site generation script that you can customize.
 - Build an initial version of the site and serve it on a local port.
 - Rebuild the site if you make changes to build.roc or source files.
+
+## Custom 404 page
+
+If you generate a `/404.html` path then it will be served by the preview file server when it receives a request for a path it doesn't know.
+
+Note that you might need to configure the host for your production static site for it to serve your custom 404 page in the same manner.
