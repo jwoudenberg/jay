@@ -32,13 +32,6 @@ fn buildDynhost(
     libapp.addArg("--output");
     const libapp_so = libapp.addOutputFileArg(makeTempFilePath(b, "libapp.so"));
 
-    // Roc build is succeeding but returning an error code because of an
-    // unnecessary warning that needs to be fixed in the Roc compiler. Once
-    // that's done the lines below can go away. See:
-    // https://roc.zulipchat.com/#narrow/channel/316715-contributing/topic/Help.20upgrade.2Ftest.20purity.20inference/near/481218379
-    libapp.expectExitCode(2);
-    libapp.addCheck(.{ .expect_stdout_match = "while successfully building:" });
-
     const libcmark_gfm = b.dependency("libcmark-gfm", .{
         .target = target,
         .optimize = optimize,
