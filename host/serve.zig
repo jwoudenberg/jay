@@ -25,20 +25,11 @@ pub fn serve(site: *const Site, output_root: []const u8) !void {
         var server = std.http.Server.init(connection, &read_buffer);
         while (server.state == .ready) {
             var request = server.receiveHead() catch |err| {
-                // TODO: maybe not log here? It's the client that's buggy:
                 // https://ziglang.org/documentation/0.13.0/std/#std.http.Server.ReceiveHeadError
-                // Or return an http error code.
                 try stdout.print("Failed receiving request: {s}\n", .{@errorName(err)});
                 continue :accept;
             };
-            respond(site, &request, output_dir) catch |err| {
-                try stdout.print("Failed responding to request: {s}\n", .{@errorName(err)});
-                // TODO: considering crashing here - it indicates a bug.
-                try request.respond("500 Internal Server Error", .{
-                    .status = .internal_server_error,
-                });
-                continue :accept;
-            };
+            try respond(site, &request, output_dir);
         }
     }
 }
