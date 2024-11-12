@@ -13,8 +13,9 @@ pub const Site = struct {
     roc_main: []const u8,
     // The page-construction rules defined in the .roc file we're running.
     rules: []Rule,
-    // The non-ignored source files in project directory.
-    pages: std.ArrayListUnmanaged(Page),
+    // The non-ignored source files in project directory, keyed by the path
+    // they should be served at.
+    pages: std.StringHashMapUnmanaged(Page),
 
     pub fn init(base_allocator: std.mem.Allocator, argv0: []const u8) !Site {
         var arena_state = std.heap.ArenaAllocator.init(base_allocator);
@@ -30,7 +31,7 @@ pub const Site = struct {
             .source_root = source_root,
             .roc_main = std.fs.path.basename(argv0_abs),
             .rules = &.{},
-            .pages = try std.ArrayListUnmanaged(Page).initCapacity(arena, 0),
+            .pages = std.StringHashMapUnmanaged(Page){},
         };
     }
 
@@ -55,7 +56,6 @@ pub const Site = struct {
         output_len: ?u64,
         source_path: []const u8,
         output_path: []const u8,
-        web_path: []const u8,
         frontmatter: []const u8,
     };
 

@@ -163,34 +163,42 @@ test "bootstrapRules" {
     try std.testing.expectEqualStrings("static_only/*.css", static_patterns[1]);
     try std.testing.expectEqualStrings("static_only/*.png", static_patterns[2]);
 
-    const pages = site.pages.items;
-    try std.testing.expectEqualStrings(pages[0].source_path, "markdown_only/one.md");
-    try std.testing.expectEqualStrings(pages[0].output_path, "/markdown_only/one.html");
-    try std.testing.expectEqual(pages[0].rule_index, 1);
+    try std.testing.expectEqual(7, site.pages.count());
 
-    try std.testing.expectEqualStrings(pages[1].source_path, "markdown_only/two.md");
-    try std.testing.expectEqualStrings(pages[1].output_path, "/markdown_only/two.html");
-    try std.testing.expectEqual(pages[1].rule_index, 1);
+    const one_md = site.pages.get("/markdown_only/one").?;
+    try std.testing.expectEqualStrings(one_md.source_path, "markdown_only/one.md");
+    try std.testing.expectEqualStrings(one_md.output_path, "/markdown_only/one.html");
+    try std.testing.expectEqual(one_md.rule_index, 1);
 
-    try std.testing.expectEqualStrings(pages[2].source_path, "static_only/main.css");
-    try std.testing.expectEqualStrings(pages[2].output_path, "/static_only/main.css");
-    try std.testing.expectEqual(pages[2].rule_index, 2);
+    const two_md = site.pages.get("/markdown_only/two").?;
+    try std.testing.expectEqualStrings(two_md.source_path, "markdown_only/two.md");
+    try std.testing.expectEqualStrings(two_md.output_path, "/markdown_only/two.html");
+    try std.testing.expectEqual(two_md.rule_index, 1);
 
-    try std.testing.expectEqualStrings(pages[3].source_path, "static_only/logo.png");
-    try std.testing.expectEqualStrings(pages[3].output_path, "/static_only/logo.png");
-    try std.testing.expectEqual(pages[3].rule_index, 2);
+    const main_css = site.pages.get("/static_only/main.css").?;
+    try std.testing.expectEqualStrings(main_css.source_path, "static_only/main.css");
+    try std.testing.expectEqualStrings(main_css.output_path, "/static_only/main.css");
+    try std.testing.expectEqual(main_css.rule_index, 2);
 
-    try std.testing.expectEqualStrings(pages[4].source_path, "mixed/three.md");
-    try std.testing.expectEqualStrings(pages[4].output_path, "/mixed/three.html");
-    try std.testing.expectEqual(pages[4].rule_index, 1);
+    const logo_png = site.pages.get("/static_only/logo.png").?;
+    try std.testing.expectEqualStrings(logo_png.source_path, "static_only/logo.png");
+    try std.testing.expectEqualStrings(logo_png.output_path, "/static_only/logo.png");
+    try std.testing.expectEqual(logo_png.rule_index, 2);
 
-    try std.testing.expectEqualStrings(pages[5].source_path, "mixed/rss.xml");
-    try std.testing.expectEqualStrings(pages[5].output_path, "/mixed/rss.xml");
-    try std.testing.expectEqual(pages[5].rule_index, 2);
+    const three_md = site.pages.get("/mixed/three").?;
+    try std.testing.expectEqualStrings(three_md.source_path, "mixed/three.md");
+    try std.testing.expectEqualStrings(three_md.output_path, "/mixed/three.html");
+    try std.testing.expectEqual(three_md.rule_index, 1);
 
-    try std.testing.expectEqualStrings(pages[6].source_path, "index.md");
-    try std.testing.expectEqualStrings(pages[6].output_path, "/index.html");
-    try std.testing.expectEqual(pages[6].rule_index, 1);
+    const rss_xml = site.pages.get("/mixed/rss.xml").?;
+    try std.testing.expectEqualStrings(rss_xml.source_path, "mixed/rss.xml");
+    try std.testing.expectEqualStrings(rss_xml.output_path, "/mixed/rss.xml");
+    try std.testing.expectEqual(rss_xml.rule_index, 2);
+
+    const index_md = site.pages.get("/").?;
+    try std.testing.expectEqualStrings(index_md.source_path, "index.md");
+    try std.testing.expectEqualStrings(index_md.output_path, "/index.html");
+    try std.testing.expectEqual(index_md.rule_index, 1);
 }
 
 fn compareStrings(_: void, lhs: []const u8, rhs: []const u8) bool {

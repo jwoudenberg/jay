@@ -27,7 +27,10 @@ pub fn generate(
 
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
-    for (site.pages.items) |*page| {
+    var page_iterator = site.pages.iterator();
+    while (page_iterator.next()) |entry| {
+        const web_path = entry.key_ptr.*;
+        var page = entry.value_ptr;
         if (std.fs.path.dirname(page.output_path[1..])) |dir| try output_dir.makePath(dir);
         const rule = site.rules[page.rule_index];
         const output = try output_dir.createFile(page.output_path[1..], .{
@@ -37,7 +40,7 @@ pub fn generate(
         defer output.close();
         var counting_writer = std.io.countingWriter(output.writer());
         var writer = counting_writer.writer();
-        try writeFile(arena.allocator(), site.source_root, &writer, rule, page);
+        try writeFile(arena.allocator(), site.source_root, &writer, rule, web_path, page);
         page.output_len = counting_writer.bytes_written;
         _ = arena.reset(.retain_capacity);
     }
@@ -48,6 +51,7 @@ fn writeFile(
     source_root: std.fs.Dir,
     writer: anytype,
     rule: Site.Rule,
+    web_path: []const u8,
     page: *Site.Page,
 ) !void {
     switch (rule.processing) {
@@ -69,7 +73,7 @@ fn writeFile(
         .xml => {
             // TODO: figure out what to do with files larger than this.
             const source = try source_root.readFileAlloc(arena, page.source_path, 1024 * 1024);
-            const contents = try runPageTransforms(arena, source, rule, page);
+            const contents = try runPageTransforms(arena, source, rule, web_path, page);
             try writeRocContents(contents, source, writer);
         },
         .markdown => {
@@ -91,6 +95,7 @@ fn writeFile(
                 arena,
                 source,
                 rule,
+                web_path,
                 page,
             );
             try writeRocContents(contents, source, writer);
@@ -102,6 +107,7 @@ fn runPageTransforms(
     arena: std.mem.Allocator,
     source: []const u8,
     rule: Site.Rule,
+    web_path: []const u8,
     page: *Site.Page,
 ) !RocList {
     const tags = try xml.parse(arena, source, rule.replaceTags);
@@ -118,7 +124,7 @@ fn runPageTransforms(
     }
     const roc_page = platform.Page{
         .meta = RocList.fromSlice(u8, page.frontmatter, false),
-        .path = RocStr.fromSlice(page.web_path),
+        .path = RocStr.fromSlice(web_path),
         .ruleIndex = @as(u32, @intCast(page.rule_index)),
         .tags = RocList.fromSlice(platform.Tag, try roc_tags.toOwnedSlice(), true),
         .len = @as(u32, @intCast(source.len)),

@@ -48,12 +48,7 @@ pub fn respond(
     request: *std.http.Server.Request,
     output_dir: std.fs.Dir,
 ) !void {
-    const path = request.head.target;
-    // TODO: perform this lookup more efficiently.
-    const page = for (site.pages.items) |page| {
-        if (std.mem.eql(u8, page.web_path, path)) break page;
-    } else {
-        // TODO: show a better 404 page.
+    const page = site.pages.get(request.head.target) orelse {
         return request.respond("404 Not Found", .{ .status = .not_found });
     };
 
