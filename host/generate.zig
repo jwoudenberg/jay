@@ -12,7 +12,7 @@ const c = @cImport({
 
 pub fn generate(
     gpa: std.mem.Allocator,
-    site: *const Site,
+    site: *Site,
     output_dir_path: []const u8,
 ) !void {
     // Clear output directory if it already exists.
@@ -25,33 +25,31 @@ pub fn generate(
     var output_dir = try site.source_root.openDir(output_dir_path, .{});
     defer output_dir.close();
 
-    var arena_state = std.heap.ArenaAllocator.init(gpa);
-    defer arena_state.deinit();
-    for (site.pages.items) |page| {
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    for (site.pages.items) |*page| {
         if (std.fs.path.dirname(page.output_path[1..])) |dir| try output_dir.makePath(dir);
         const rule = site.rules[page.rule_index];
-        try generateSitePath(
-            arena_state.allocator(),
-            site.source_root,
-            rule,
-            page,
-            output_dir,
-        );
-        _ = arena_state.reset(.retain_capacity);
+        const output = try output_dir.createFile(page.output_path[1..], .{
+            .truncate = true,
+            .exclusive = true,
+        });
+        defer output.close();
+        var counting_writer = std.io.countingWriter(output.writer());
+        var writer = counting_writer.writer();
+        try writeFile(arena.allocator(), site.source_root, &writer, rule, page);
+        page.output_len = counting_writer.bytes_written;
+        _ = arena.reset(.retain_capacity);
     }
 }
 
-fn generateSitePath(
+fn writeFile(
     arena: std.mem.Allocator,
     source_root: std.fs.Dir,
+    writer: anytype,
     rule: Site.Rule,
-    page: Site.Page,
-    output_dir: std.fs.Dir,
+    page: *Site.Page,
 ) !void {
-    const output = try output_dir.createFile(page.output_path[1..], .{ .truncate = true, .exclusive = true });
-    defer output.close();
-    var writer = output.writer();
-
     switch (rule.processing) {
         .ignore => return error.UnexpectedlyAskedToGenerateOutputForIgnoredFile,
         .bootstrap => return error.UnexpectedlyAskedToGenerateOutputForBootstrapRule,
@@ -66,13 +64,13 @@ fn generateSitePath(
 
             const source = try source_root.openFile(page.source_path, .{});
             defer source.close();
-            try fifo.pump(source.reader(), output.writer());
+            try fifo.pump(source.reader(), writer);
         },
         .xml => {
             // TODO: figure out what to do with files larger than this.
             const source = try source_root.readFileAlloc(arena, page.source_path, 1024 * 1024);
             const contents = try runPageTransforms(arena, source, rule, page);
-            try writeRocContents(contents, source, &writer);
+            try writeRocContents(contents, source, writer);
         },
         .markdown => {
             // TODO: figure out what to do with files larger than this.
@@ -95,7 +93,7 @@ fn generateSitePath(
                 rule,
                 page,
             );
-            try writeRocContents(contents, source, &writer);
+            try writeRocContents(contents, source, writer);
         },
     }
 }
@@ -104,7 +102,7 @@ fn runPageTransforms(
     arena: std.mem.Allocator,
     source: []const u8,
     rule: Site.Rule,
-    page: Site.Page,
+    page: *Site.Page,
 ) !RocList {
     const tags = try xml.parse(arena, source, rule.replaceTags);
     var roc_tags = std.ArrayList(platform.Tag).init(arena);
@@ -133,7 +131,7 @@ fn runPageTransforms(
 fn writeRocContents(
     contents: RocList,
     source: []const u8,
-    writer: *std.fs.File.Writer,
+    writer: anytype,
 ) !void {
     var roc_xml_iterator = RocListIterator(platform.Slice).init(contents);
     while (roc_xml_iterator.next()) |roc_slice| {

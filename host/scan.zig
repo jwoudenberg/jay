@@ -226,6 +226,7 @@ pub fn addPath(
         .mime_type = mime_type,
         .source_path = source_path,
         .output_path = output_path,
+        .output_len = null, // We'll know this when we generate the page
         .web_path = webPathFromFilePath(output_path),
         .frontmatter = frontmatter,
     });

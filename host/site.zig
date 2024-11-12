@@ -52,6 +52,7 @@ pub const Site = struct {
     pub const Page = struct {
         rule_index: usize,
         mime_type: mime.Type,
+        output_len: ?u64,
         source_path: []const u8,
         output_path: []const u8,
         web_path: []const u8,

@@ -59,13 +59,10 @@ pub fn respond(
 
     const output_path_no_leading_slash = page.output_path[1..];
 
-    // TODO: avoid file stat by storing file size upon generation.
-    const len = (try output_dir.statFile(output_path_no_leading_slash)).size;
-
     var send_buffer: [8000]u8 = undefined;
     var response = request.respondStreaming(.{
         .send_buffer = &send_buffer,
-        .content_length = len,
+        .content_length = page.output_len orelse return error.OutputLenUnset,
         .respond_options = .{
             .status = .ok,
             .extra_headers = &.{
