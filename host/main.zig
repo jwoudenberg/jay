@@ -5,7 +5,7 @@ const RocList = @import("roc/list.zig").RocList;
 const fail = @import("fail.zig");
 const Site = @import("site.zig").Site;
 const glob = @import("glob.zig");
-const server = @import("server.zig");
+const serve = @import("serve.zig").serve;
 const platform = @import("platform.zig");
 const bootstrap = @import("bootstrap.zig").bootstrap;
 const scan = @import("scan.zig").scan;
@@ -64,7 +64,7 @@ pub fn run() !void {
     try stdout.print("Generated site in {d}ms\n", .{timer.read() / 1_000_000});
 
     // (4) Serve the output files.
-    try server.start(&site, output_root);
+    try serve(&site, output_root);
 }
 
 fn fromPlatformRule(

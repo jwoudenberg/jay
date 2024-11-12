@@ -1,9 +1,9 @@
-// HTTP server for the generated content
+// Run a file server to allow the site to be previewed in the browser
 
 const std = @import("std");
 const Site = @import("site.zig").Site;
 
-pub fn start(site: *const Site, output_root: []const u8) !void {
+pub fn serve(site: *const Site, output_root: []const u8) !void {
     const loopback = try std.net.Ip4Address.parse("127.0.0.1", 0);
     const localhost = std.net.Address{ .in = loopback };
     var http_server = try localhost.listen(.{
@@ -71,6 +71,7 @@ pub fn respond(
             .status = .ok,
             .extra_headers = &.{
                 .{ .name = "content-type", .value = @tagName(page.mime_type) },
+                .{ .name = "cache-control", .value = "max-age=0, must-revalidate" },
             },
         },
     });
