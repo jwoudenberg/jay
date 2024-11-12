@@ -51,8 +51,7 @@ pub fn respond(
     const path = request.head.target;
     // TODO: perform this lookup more efficiently.
     const page = for (site.pages.items) |page| {
-        // TODO: Return foo/index.html pages for a request to /
-        if (std.mem.eql(u8, page.output_path, path)) break page;
+        if (std.mem.eql(u8, page.web_path, path)) break page;
     } else {
         // TODO: show a better 404 page.
         return request.respond("404 Not Found", .{ .status = .not_found });

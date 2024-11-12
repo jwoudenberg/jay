@@ -6,7 +6,6 @@ const RocList = @import("roc/list.zig").RocList;
 const RocStr = @import("roc/str.zig").RocStr;
 const platform = @import("platform.zig");
 const xml = @import("xml.zig");
-const util = @import("util.zig");
 const c = @cImport({
     @cInclude("cmark-gfm.h");
 });
@@ -121,7 +120,7 @@ fn runPageTransforms(
     }
     const roc_page = platform.Page{
         .meta = RocList.fromSlice(u8, page.frontmatter, false),
-        .path = RocStr.fromSlice(util.formatPathForPlatform(page.output_path)),
+        .path = RocStr.fromSlice(page.web_path),
         .ruleIndex = @as(u32, @intCast(page.rule_index)),
         .tags = RocList.fromSlice(platform.Tag, try roc_tags.toOwnedSlice(), true),
         .len = @as(u32, @intCast(source.len)),

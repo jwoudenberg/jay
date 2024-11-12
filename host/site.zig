@@ -54,6 +54,7 @@ pub const Site = struct {
         mime_type: mime.Type,
         source_path: []const u8,
         output_path: []const u8,
+        web_path: []const u8,
         frontmatter: []const u8,
     };
 

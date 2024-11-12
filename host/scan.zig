@@ -226,6 +226,7 @@ pub fn addPath(
         .mime_type = mime_type,
         .source_path = source_path,
         .output_path = output_path,
+        .web_path = webPathFromFilePath(output_path),
         .frontmatter = frontmatter,
     });
 }
@@ -351,4 +352,18 @@ test dropTrailingHeaderLines {
     try std.testing.expectEqualStrings("{\n} #foo", dropTrailingHeaderLines("{\n} #foo"));
     try std.testing.expectEqualStrings("{\n}\t#foo", dropTrailingHeaderLines("{\n}\t#foo"));
     try std.testing.expectEqualStrings("{\n}#foo", dropTrailingHeaderLines("{\n}#foo\n#bar"));
+}
+
+pub fn webPathFromFilePath(path: []const u8) []const u8 {
+    std.debug.assert(path[0] == '/'); // Path's should have a leading slash.
+    if (std.mem.eql(u8, std.fs.path.basename(path), "index.html")) {
+        return std.fs.path.dirname(path) orelse unreachable;
+    } else {
+        return path;
+    }
+}
+
+test webPathFromFilePath {
+    try std.testing.expectEqualStrings("/hi/file.html", webPathFromFilePath("/hi/file.html"));
+    try std.testing.expectEqualStrings("/hi", webPathFromFilePath("/hi/index.html"));
 }

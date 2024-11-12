@@ -10,7 +10,6 @@ const platform = @import("platform.zig");
 const bootstrap = @import("bootstrap.zig").bootstrap;
 const scan = @import("scan.zig").scan;
 const generate = @import("generate.zig").generate;
-const util = @import("util.zig");
 
 const output_root = "output";
 
@@ -121,7 +120,7 @@ pub fn getPagesMatchingPattern(
         if (glob.match(pattern, page.source_path)) {
             try results.append(platform.Page{
                 .meta = RocList.fromSlice(u8, page.frontmatter, false),
-                .path = RocStr.fromSlice(util.formatPathForPlatform(page.output_path)),
+                .path = RocStr.fromSlice(page.web_path),
                 .tags = RocList.empty(),
                 .len = 0,
                 .ruleIndex = @as(u32, @intCast(page.rule_index)),
