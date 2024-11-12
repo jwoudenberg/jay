@@ -12,6 +12,7 @@ x warn if file matched by multiple patterns
 x support metadata frontmatter
 x implement `replaceHtml`
 x implement list
+x run local http server
 
 +html support data attributes
 +html fix shadowed attributes
@@ -27,7 +28,6 @@ watch for source-file changes and rebuild (using watchman)
 watch for roc-file changes and rebuild (using watchman)
 warn if site contains broken links
 perform partial builds when source file changes
-run local http server
 automatically reload browser when files change
 generate site in remote cache location
 provide --output flag for production builds

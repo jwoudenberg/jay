@@ -1,9 +1,10 @@
 // Run a file server to allow the site to be previewed in the browser
 
+const builtin = @import("builtin");
 const std = @import("std");
 const Site = @import("site.zig").Site;
 
-pub fn serve(site: *const Site, output_root: []const u8) !void {
+pub fn serve(gpa: std.mem.Allocator, site: *const Site, output_root: []const u8) !void {
     const loopback = try std.net.Ip4Address.parse("127.0.0.1", 0);
     const localhost = std.net.Address{ .in = loopback };
     var http_server = try localhost.listen(.{
@@ -14,9 +15,13 @@ pub fn serve(site: *const Site, output_root: []const u8) !void {
     const addr = http_server.listen_address;
     const stdout = std.io.getStdOut().writer();
     const output_dir = try site.source_root.openDir(output_root, .{});
-    try stdout.print("Listening on http://localhost:{}\n", .{addr.getPort()});
+    var buffer: ["http://localhost:00000".len]u8 = undefined;
+    const url = try std.fmt.bufPrint(&buffer, "http://localhost:{}", .{addr.getPort()});
+    try stdout.print("Listening on {s}\n", .{url});
 
-    // TODO: open browser
+    open(gpa, url) catch |err| {
+        try stdout.print("Failed to open browser: {s}\n", .{@errorName(err)});
+    };
 
     var read_buffer: [8000]u8 = undefined;
     accept: while (true) {
@@ -78,6 +83,20 @@ fn servePage(
     try fifo.pump(file.reader(), response.writer());
 
     try response.end();
+}
+
+fn open(gpa: std.mem.Allocator, resource: []const u8) !void {
+    const open_command = switch (builtin.os.tag) {
+        .linux => "xdg-open",
+        .macos => "open",
+        .windows => "open",
+        else => return error.UnsupportedOs,
+    };
+    var child = std.process.Child.init(&.{ open_command, resource }, gpa);
+    child.stdin_behavior = .Close;
+    child.stdout_behavior = .Close;
+    child.stderr_behavior = .Close;
+    _ = try child.spawnAndWait();
 }
 
 // This code is starting out as an adapted version of andrewrk/StaticHTPPFileServer.

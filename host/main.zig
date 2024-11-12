@@ -63,7 +63,7 @@ pub fn run() !void {
     try stdout.print("Generated site in {d}ms\n", .{timer.read() / 1_000_000});
 
     // (4) Serve the output files.
-    try serve(&site, output_root);
+    try serve(gpa, &site, output_root);
 }
 
 fn fromPlatformRule(
