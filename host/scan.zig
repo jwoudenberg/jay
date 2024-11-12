@@ -356,14 +356,17 @@ test dropTrailingHeaderLines {
 
 pub fn webPathFromFilePath(path: []const u8) []const u8 {
     std.debug.assert(path[0] == '/'); // Path's should have a leading slash.
-    if (std.mem.eql(u8, std.fs.path.basename(path), "index.html")) {
+    if (std.mem.eql(u8, "index.html", std.fs.path.basename(path))) {
         return std.fs.path.dirname(path) orelse unreachable;
+    } else if (std.mem.eql(u8, ".html", std.fs.path.extension(path))) {
+        return path[0..(path.len - ".html".len)];
     } else {
         return path;
     }
 }
 
 test webPathFromFilePath {
-    try std.testing.expectEqualStrings("/hi/file.html", webPathFromFilePath("/hi/file.html"));
+    try std.testing.expectEqualStrings("/hi/file.css", webPathFromFilePath("/hi/file.css"));
+    try std.testing.expectEqualStrings("/hi/file", webPathFromFilePath("/hi/file.html"));
     try std.testing.expectEqualStrings("/hi", webPathFromFilePath("/hi/index.html"));
 }
