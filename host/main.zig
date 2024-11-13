@@ -116,13 +116,12 @@ pub fn getPagesMatchingPattern(
 ) !RocList {
     const pattern = roc_pattern.asSlice();
     var results = std.ArrayList(platform.Page).init(allocator);
-    var page_iterator = site.pages.iterator();
-    while (page_iterator.next()) |entry| {
-        const page = entry.value_ptr;
+    var page_iterator = site.pages.iterator(0);
+    while (page_iterator.next()) |page| {
         if (glob.match(pattern, page.source_path)) {
             try results.append(platform.Page{
                 .meta = RocList.fromSlice(u8, page.frontmatter, false),
-                .path = RocStr.fromSlice(entry.key_ptr.*),
+                .path = RocStr.fromSlice(page.web_path),
                 .tags = RocList.empty(),
                 .len = 0,
                 .ruleIndex = @as(u32, @intCast(page.rule_index)),

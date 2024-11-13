@@ -44,9 +44,11 @@ fn respond(
     request: *std.http.Server.Request,
     output_dir: std.fs.Dir,
 ) !void {
-    if (site.pages.get(request.head.target)) |page| {
+    if (site.web_paths.get(request.head.target)) |index| {
+        const page = site.pages.at(@intFromEnum(index));
         return servePage(page, .ok, request, output_dir);
-    } else if (site.pages.get("/404")) |page| {
+    } else if (site.web_paths.get("/404")) |index| {
+        const page = site.pages.at(@intFromEnum(index));
         return servePage(page, .not_found, request, output_dir);
     } else {
         return request.respond("404 Not Found", .{ .status = .not_found });
@@ -54,7 +56,7 @@ fn respond(
 }
 
 fn servePage(
-    page: Site.Page,
+    page: *const Site.Page,
     status: std.http.Status,
     request: *std.http.Server.Request,
     output_dir: std.fs.Dir,

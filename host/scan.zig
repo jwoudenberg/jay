@@ -220,35 +220,18 @@ pub fn addPath(
 
     const extension = std.fs.path.extension(output_path);
     const mime_type = mime.extension_map.get(extension) orelse .@"application/octet-stream";
-
     const web_path = webPathFromFilePath(output_path);
-    const get_or_put = try site.pages.getOrPut(arena, web_path);
-    if (get_or_put.found_existing) {
-        try fail.prettily(
-            \\You have multiple source files that would get the same URL.
-            \\
-            \\These are the source files in question:
-            \\
-            \\  {s}
-            \\  {s}
-            \\
-            \\The URL path I would use for both of these is:
-            \\
-            \\  {s}
-            \\
-            \\Tip: Rename one of the files so both get a unique URL.
-            \\
-        , .{ get_or_put.value_ptr.source_path, source_path, web_path });
-    } else {
-        get_or_put.value_ptr.* = Site.Page{
-            .rule_index = rule_index,
-            .mime_type = mime_type,
-            .source_path = source_path,
-            .output_path = output_path,
-            .output_len = null, // We'll know this when we generate the page
-            .frontmatter = frontmatter,
-        };
-    }
+
+    const page = Site.Page{
+        .rule_index = rule_index,
+        .mime_type = mime_type,
+        .source_path = source_path,
+        .output_path = output_path,
+        .web_path = web_path,
+        .output_len = null, // We'll know this when we generate the page
+        .frontmatter = frontmatter,
+    };
+    _ = try site.addPage(page);
 }
 
 fn unmatchedSourceFileError(unmatched_paths: [][]const u8) !noreturn {

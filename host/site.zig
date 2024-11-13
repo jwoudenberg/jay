@@ -13,9 +13,11 @@ pub const Site = struct {
     roc_main: []const u8,
     // The page-construction rules defined in the .roc file we're running.
     rules: []Rule,
-    // The non-ignored source files in project directory, keyed by the path
-    // they should be served at.
-    pages: std.StringHashMapUnmanaged(Page),
+    // The pages in a project. Designed so a single thread can append new items
+    // while multiple threads read existing items.
+    pages: std.SegmentedList(Page, 0),
+    // Map for efficient access to a page by its web path.
+    web_paths: std.StringHashMapUnmanaged(PageIndex),
 
     pub fn init(base_allocator: std.mem.Allocator, argv0: []const u8) !Site {
         var arena_state = std.heap.ArenaAllocator.init(base_allocator);
@@ -31,7 +33,8 @@ pub const Site = struct {
             .source_root = source_root,
             .roc_main = std.fs.path.basename(argv0_abs),
             .rules = &.{},
-            .pages = std.StringHashMapUnmanaged(Page){},
+            .pages = std.SegmentedList(Page, 0){},
+            .web_paths = std.StringHashMapUnmanaged(PageIndex){},
         };
     }
 
@@ -41,7 +44,41 @@ pub const Site = struct {
 
     pub fn deinit(self: *Site) void {
         self.source_root.close();
+        self.web_paths.deinit(self.arena_state.child_allocator);
         self.arena_state.deinit();
+    }
+
+    pub fn addPage(self: *Site, page: Page) !PageIndex {
+        const index = self.pages.count();
+        const ptr = try self.pages.addOne(self.allocator());
+        ptr.* = page;
+        const get_or_put = try self.web_paths.getOrPut(
+            // We shouldn't use the arena allocator for the hash map, so any
+            // space it frees when it reshuffles data on insert is reclaimed.
+            self.arena_state.child_allocator,
+            page.web_path,
+        );
+        if (get_or_put.found_existing) {
+            const existing_page = self.pages.at(@intFromEnum(get_or_put.value_ptr.*));
+            try fail.prettily(
+                \\I found multiple source files for a single page URL.
+                \\
+                \\These are the source files in question:
+                \\
+                \\  {s}
+                \\  {s}
+                \\
+                \\The URL path I would use for both of these is:
+                \\
+                \\  {s}
+                \\
+                \\Tip: Rename one of the files so both get a unique URL.
+                \\
+            , .{ existing_page.source_path, page.source_path, page.web_path });
+        } else {
+            get_or_put.value_ptr.* = @enumFromInt(index);
+        }
+        return @enumFromInt(index);
     }
 
     pub const Rule = struct {
@@ -56,6 +93,7 @@ pub const Site = struct {
         output_len: ?u64,
         source_path: []const u8,
         output_path: []const u8,
+        web_path: []const u8,
         frontmatter: []const u8,
     };
 
@@ -66,4 +104,6 @@ pub const Site = struct {
         none = 3,
         xml = 4,
     };
+
+    pub const PageIndex = enum(u32) { _ };
 };
