@@ -11,36 +11,22 @@ const c = @cImport({
 });
 
 pub fn generate(
-    gpa: std.mem.Allocator,
+    arena: std.mem.Allocator,
     site: *Site,
+    output_dir: std.fs.Dir,
+    page: *Site.Page,
 ) !void {
-    // Clear output directory if it already exists.
-    site.source_root.deleteTree(site.output_root) catch |err| {
-        if (err != error.NotDir) {
-            return err;
-        }
-    };
-    try site.source_root.makeDir(site.output_root);
-    var output_dir = try site.source_root.openDir(site.output_root, .{});
-    defer output_dir.close();
-
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    var page_iterator = site.pages.iterator(0);
-    while (page_iterator.next()) |page| {
-        if (std.fs.path.dirname(page.output_path[1..])) |dir| try output_dir.makePath(dir);
-        const rule = site.rules[page.rule_index];
-        const output = try output_dir.createFile(page.output_path[1..], .{
-            .truncate = true,
-            .exclusive = true,
-        });
-        defer output.close();
-        var counting_writer = std.io.countingWriter(output.writer());
-        var writer = counting_writer.writer();
-        try writeFile(arena.allocator(), site.source_root, &writer, rule, page);
-        page.output_len = counting_writer.bytes_written;
-        _ = arena.reset(.retain_capacity);
-    }
+    if (std.fs.path.dirname(page.output_path[1..])) |dir| try output_dir.makePath(dir);
+    const rule = site.rules[page.rule_index];
+    const output = try output_dir.createFile(page.output_path[1..], .{
+        .truncate = true,
+        .exclusive = true,
+    });
+    defer output.close();
+    var counting_writer = std.io.countingWriter(output.writer());
+    var writer = counting_writer.writer();
+    try writeFile(arena, site.source_root, &writer, rule, page);
+    page.output_len = counting_writer.bytes_written;
 }
 
 fn writeFile(

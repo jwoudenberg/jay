@@ -6,31 +6,71 @@ const std = @import("std");
 const mime = @import("mime");
 const glob = @import("glob.zig");
 const fail = @import("fail.zig");
+const WorkQueue = @import("work.zig").WorkQueue;
 const platform = @import("platform.zig");
 const Site = @import("site.zig").Site;
 const RocList = @import("roc/list.zig").RocList;
 
-pub fn scan(gpa: std.mem.Allocator, site: *Site) !void {
-    var tmp_arena_state = std.heap.ArenaAllocator.init(gpa);
-    defer tmp_arena_state.deinit();
-    const tmp_arena = tmp_arena_state.allocator();
-    var source_iterator = try SourceFileWalker.init(tmp_arena, site);
-    defer source_iterator.deinit();
-    var unmatched_paths = std.ArrayList([]const u8).init(tmp_arena);
-    defer unmatched_paths.deinit();
+pub fn scan(
+    tmp_arena: std.mem.Allocator,
+    work: *WorkQueue,
+    site: *Site,
+    index: Site.DirIndex,
+    unmatched_paths: *std.ArrayList([]const u8),
+) !void {
+    const dir_path = site.dirPathFromIndex(index);
+    const dir = if (dir_path.len == 0) blk: {
+        break :blk site.source_root;
+    } else blk: {
+        break :blk try site.source_root.openDir(dir_path, .{ .iterate = true });
+    };
+    var iterator = dir.iterateAssumeFirstIteration();
+    while (true) {
+        const entry = try iterator.next() orelse break;
+        const path = if (dir_path.len == 0) blk: {
+            break :blk entry.name;
+        } else blk: {
+            break :blk try std.fmt.allocPrint(tmp_arena, "{s}/{s}", .{ dir_path, entry.name });
+        };
+        if (glob.matchAny(site.ignore_patterns, path)) continue;
 
-    const site_arena = site.allocator();
-    while (try source_iterator.next()) |path| {
-        try addFileToRule(
-            tmp_arena,
-            site,
-            try site_arena.dupe(u8, path),
-            &unmatched_paths,
-        );
-    }
-
-    if (unmatched_paths.items.len > 0) {
-        try unmatchedSourceFileError(try unmatched_paths.toOwnedSlice());
+        switch (entry.kind) {
+            .file => {
+                const opt_page_index = try addFileToRule(
+                    tmp_arena,
+                    site,
+                    path,
+                    unmatched_paths,
+                );
+                if (opt_page_index) |page_index| {
+                    try work.push(.{ .generate_page = page_index });
+                }
+            },
+            .directory => {
+                const dir_index = try site.dirIndexFromPath(path);
+                try work.push(.{ .scan_dir = dir_index });
+            },
+            .block_device,
+            .character_device,
+            .named_pipe,
+            .sym_link,
+            .unix_domain_socket,
+            .whiteout,
+            .door,
+            .event_port,
+            .unknown,
+            => {
+                try fail.prettily(
+                    \\Encountered a path of type {s}:
+                    \\
+                    \\    {s}
+                    \\
+                    \\I don't support generating pages from this type of file!
+                    \\
+                    \\Tip: Remove the path from the source directory.
+                , .{ @tagName(entry.kind), path });
+            },
+        }
     }
 }
 
@@ -84,16 +124,17 @@ fn addFileToRule(
     site: *Site,
     source_path: []const u8,
     unmatched_paths: *std.ArrayList([]const u8),
-) !void {
+) !?Site.PageIndex {
     // TODO: detect patterns that are not matched by any file.
     var matched_rules = std.ArrayList(usize).init(tmp_arena);
     defer matched_rules.deinit();
 
+    var page_index: ?Site.PageIndex = null;
     for (site.rules, 0..) |rule, rule_index| {
         if (!glob.matchAny(rule.patterns, source_path)) continue;
 
         try matched_rules.append(rule_index);
-        try addPath(tmp_arena, site, rule_index, rule.processing, source_path);
+        page_index = try addPath(tmp_arena, site, rule_index, rule.processing, source_path);
     }
 
     switch (matched_rules.items.len) {
@@ -113,6 +154,8 @@ fn addFileToRule(
             , .{ source_path, matched_rules.items });
         },
     }
+
+    return page_index;
 }
 
 pub fn addPath(
@@ -121,7 +164,7 @@ pub fn addPath(
     rule_index: usize,
     processing: Site.Processing,
     source_path: []const u8,
-) !void {
+) !Site.PageIndex {
     const site_arena = site.allocator();
     const output_path = switch (processing) {
         .xml, .none => try std.fmt.allocPrint(site_arena, "/{s}", .{source_path}),
@@ -170,37 +213,13 @@ pub fn addPath(
     const page = Site.Page{
         .rule_index = rule_index,
         .mime_type = mime_type,
-        .source_path = source_path,
+        .source_path = try site_arena.dupe(u8, source_path),
         .output_path = output_path,
         .web_path = web_path,
         .output_len = null, // We'll know this when we generate the page
         .frontmatter = frontmatter,
     };
-    _ = try site.addPage(page);
-}
-
-fn unmatchedSourceFileError(unmatched_paths: [][]const u8) !noreturn {
-    if (builtin.is_test) return error.PrettyError;
-
-    const stderr = std.io.getStdErr().writer();
-
-    try stderr.print(
-        \\Some source files are not matched by any rule.
-        \\If you don't mean to include these in your site,
-        \\you can ignore them like this:
-        \\
-        \\    Site.ignore
-        \\        [
-        \\
-    , .{});
-    for (unmatched_paths) |path| {
-        try stderr.print("            \"{s}\",\n", .{path});
-    }
-    try stderr.print(
-        \\        ]
-    , .{});
-
-    return error.PrettyError;
+    return site.addPage(page);
 }
 
 fn outputPathForMarkdownFile(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {

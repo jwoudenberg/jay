@@ -10,5 +10,6 @@ comptime {
     _ = @import("scan.zig");
     _ = @import("serve.zig");
     _ = @import("site.zig");
+    _ = @import("work.zig");
     _ = @import("xml.zig");
 }

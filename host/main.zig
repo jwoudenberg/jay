@@ -9,15 +9,16 @@ const serve = @import("serve.zig").serve;
 const platform = @import("platform.zig");
 const bootstrap = @import("bootstrap.zig").bootstrap;
 const scan = @import("scan.zig").scan;
+const WorkQueue = @import("work.zig").WorkQueue;
 const generate = @import("generate.zig").generate;
 
 pub fn main() void {
     if (run()) {} else |err| {
-        fail.crudely(err);
+        fail.crudely(err, @errorReturnTrace());
     }
 }
 
-var site: Site = undefined;
+var global_site: Site = undefined;
 var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
 const gpa = gpa_state.allocator();
 
@@ -25,7 +26,7 @@ export fn roc_fx_list(pattern: *RocStr) callconv(.C) RocList {
     if (getPagesMatchingPattern(gpa, pattern)) |results| {
         return results;
     } else |err| {
-        fail.crudely(err);
+        fail.crudely(err, @errorReturnTrace());
     }
 }
 
@@ -39,8 +40,9 @@ pub fn run() !void {
     platform.roc__mainForHost_1_exposed_generic(&roc_rules, &void{});
 
     // (2) Construct Site struct
-    site = try Site.init(gpa, argv0, "output");
-    defer site.deinit();
+    global_site = try Site.init(gpa, argv0, "output");
+    defer global_site.deinit();
+    var site = &global_site;
     var should_bootstrap = false;
     var rules = std.ArrayList(Site.Rule).init(gpa);
     errdefer rules.deinit();
@@ -88,21 +90,23 @@ pub fn run() !void {
     site.rules = try arena.dupe(Site.Rule, try rules.toOwnedSlice());
     site.ignore_patterns = try arena.dupe([]const u8, try ignore_patterns.toOwnedSlice());
 
-    // (3) Scan the project to find all the source files.
+    // (3) Scan the project to find all the source files and generate site.
+    var work = WorkQueue.init(gpa);
     if (site.rules.len == 1 and should_bootstrap) {
-        try bootstrap(gpa, &site);
+        try bootstrap(gpa, site, &work);
     } else {
-        try scan(gpa, &site);
+        // Queue a job to scan the root source directory. This will result in
+        // the entire project getting scanned and output generated.
+        const root_index = try site.dirIndexFromPath("");
+        try work.push(.{ .scan_dir = root_index });
     }
-
-    // (4) Generate output files.
-    try generate(gpa, &site);
+    try runWorkQueue(gpa, site, &work);
 
     const stdout = std.io.getStdOut().writer();
     try stdout.print("Generated site in {d}ms\n", .{timer.read() / 1_000_000});
 
-    // (5) Serve the output files.
-    try serve(gpa, &site);
+    // (4) Serve the output files.
+    try serve(gpa, site);
 }
 
 fn fromRocStr(allocator: std.mem.Allocator, roc_pattern: RocStr) ![]const u8 {
@@ -132,7 +136,7 @@ pub fn getPagesMatchingPattern(
 ) !RocList {
     const pattern = roc_pattern.asSlice();
     var results = std.ArrayList(platform.Page).init(allocator);
-    var page_iterator = site.pages.iterator(0);
+    var page_iterator = global_site.pages.iterator(0);
     while (page_iterator.next()) |page| {
         if (glob.match(pattern, page.source_path)) {
             try results.append(platform.Page{
@@ -148,4 +152,75 @@ pub fn getPagesMatchingPattern(
         try fail.prettily("Pattern '{s}' did not match any files", .{pattern});
     }
     return RocList.fromSlice(platform.Page, try results.toOwnedSlice(), true);
+}
+
+pub fn runWorkQueue(
+    base_allocator: std.mem.Allocator,
+    site: *Site,
+    work: *WorkQueue,
+) !void {
+    var arena_state = std.heap.ArenaAllocator.init(base_allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var unmatched_paths = std.ArrayList([]const u8).init(arena);
+    defer unmatched_paths.deinit();
+
+    // Clear output directory if it already exists.
+    site.source_root.deleteTree(site.output_root) catch |err| {
+        if (err != error.NotDir) {
+            return err;
+        }
+    };
+    try site.source_root.makeDir(site.output_root);
+    var output_dir = try site.source_root.openDir(site.output_root, .{});
+    defer output_dir.close();
+
+    while (work.pop()) |job| {
+        switch (job) {
+            .scan_file => unreachable,
+            .generate_page => {
+                const page = site.getPage(job.generate_page);
+                try generate(arena, site, output_dir, page);
+            },
+            .scan_dir => {
+                try scan(
+                    arena,
+                    work,
+                    site,
+                    job.scan_dir,
+                    &unmatched_paths,
+                );
+            },
+        }
+        _ = arena_state.reset(.retain_capacity);
+    }
+
+    if (unmatched_paths.items.len > 0) {
+        try unmatchedSourceFileError(try unmatched_paths.toOwnedSlice());
+    }
+}
+
+fn unmatchedSourceFileError(unmatched_paths: [][]const u8) !noreturn {
+    if (builtin.is_test) return error.PrettyError;
+
+    const stderr = std.io.getStdErr().writer();
+
+    try stderr.print(
+        \\Some source files are not matched by any rule.
+        \\If you don't mean to include these in your site,
+        \\you can ignore them like this:
+        \\
+        \\    Site.ignore
+        \\        [
+        \\
+    , .{});
+    for (unmatched_paths) |path| {
+        try stderr.print("            \"{s}\",\n", .{path});
+    }
+    try stderr.print(
+        \\        ]
+    , .{});
+
+    return error.PrettyError;
 }

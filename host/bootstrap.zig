@@ -6,6 +6,7 @@ const std = @import("std");
 const Site = @import("site.zig").Site;
 const fail = @import("fail.zig");
 const scan = @import("scan.zig");
+const WorkQueue = @import("work.zig").WorkQueue;
 
 // When running the bootstrap script we have to guess which files the user
 // might want to be ignored. This is our list of such guesses.
@@ -15,12 +16,20 @@ const bootstrap_ignore_patterns = [_][]const u8{
     "README*",
 };
 
-pub fn bootstrap(gpa: std.mem.Allocator, site: *Site) !void {
-    try bootstrapRules(gpa, site);
+pub fn bootstrap(
+    gpa: std.mem.Allocator,
+    site: *Site,
+    work: *WorkQueue,
+) !void {
+    try bootstrapRules(gpa, site, work);
     try generateCodeForRules(site);
 }
 
-fn bootstrapRules(gpa: std.mem.Allocator, site: *Site) !void {
+fn bootstrapRules(
+    gpa: std.mem.Allocator,
+    site: *Site,
+    work: *WorkQueue,
+) !void {
     const site_arena = site.allocator();
     var tmp_arena_state = std.heap.ArenaAllocator.init(gpa);
     defer tmp_arena_state.deinit();
@@ -69,13 +78,14 @@ fn bootstrapRules(gpa: std.mem.Allocator, site: *Site) !void {
         }
 
         if (pre_rules[pre_rule_index]) |*pre_rule| {
-            try scan.addPath(
+            const page_index = try scan.addPath(
                 tmp_arena,
                 site,
                 pre_rule.rule_index,
                 processing,
                 try site_arena.dupe(u8, path),
             );
+            try work.push(.{ .generate_page = page_index });
 
             const new_pattern = try patternForPath(tmp_arena, path);
             defer tmp_arena.free(new_pattern);
@@ -126,7 +136,9 @@ test "bootstrapRules" {
     try tmpdir.dir.writeFile(.{ .sub_path = "index.md", .data = "" });
     try tmpdir.dir.writeFile(.{ .sub_path = ".gitignore", .data = "" });
 
-    try bootstrapRules(std.testing.allocator, &site);
+    var work = WorkQueue.init(std.testing.allocator);
+    defer work.deinit();
+    try bootstrapRules(std.testing.allocator, &site, &work);
 
     try std.testing.expectEqual(4, site.ignore_patterns.len);
     try std.testing.expectEqualStrings("output", site.ignore_patterns[0]);

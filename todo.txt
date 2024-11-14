@@ -51,6 +51,7 @@ support setting a path root
 replace source-style-paths with output-style-paths
 support syntax highlighting in markdown snippets
 enable github markdown extensions
+create user-friendlier error reports for unexpected errors
 +site for jay project with cookbooks
 +site example of gitbook-like site
 +site example of blog

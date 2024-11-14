@@ -17,11 +17,15 @@ pub const Site = struct {
     ignore_patterns: []const []const u8,
     // The page-construction rules defined in the .roc file we're running.
     rules: []Rule,
-    // The pages in a project. Designed so a single thread can append new items
-    // while multiple threads read existing items.
+
+    // The pages in a project. Append only so multiple threads can safely read
+    // from this data. Writers need to obtain a lock first.
     pages: std.SegmentedList(Page, 0),
-    // Map for efficient access to a page by its web path.
     web_paths: std.StringHashMapUnmanaged(PageIndex),
+
+    // Bi-directional mapping of source directories to indexes.
+    dir_paths: std.StringHashMapUnmanaged(DirIndex),
+    dirs: std.SegmentedList([]const u8, 0),
 
     pub fn init(
         base_allocator: std.mem.Allocator,
@@ -49,8 +53,14 @@ pub const Site = struct {
             .output_root = output_root,
             .ignore_patterns = ignore_patterns,
             .rules = &.{},
+
+            // Pages
             .pages = std.SegmentedList(Page, 0){},
             .web_paths = std.StringHashMapUnmanaged(PageIndex){},
+
+            // Directories
+            .dir_paths = std.StringHashMapUnmanaged(DirIndex){},
+            .dirs = std.SegmentedList([]const u8, 0){},
         };
     }
 
@@ -61,7 +71,12 @@ pub const Site = struct {
     pub fn deinit(self: *Site) void {
         self.source_root.close();
         self.web_paths.deinit(self.arena_state.child_allocator);
+        self.dir_paths.deinit(self.arena_state.child_allocator);
         self.arena_state.deinit();
+    }
+
+    pub fn getPage(self: *Site, index: PageIndex) *Page {
+        return self.pages.at(@intFromEnum(index));
     }
 
     pub fn addPage(self: *Site, page: Page) !PageIndex {
@@ -97,6 +112,28 @@ pub const Site = struct {
         return @enumFromInt(index);
     }
 
+    pub fn dirPathFromIndex(self: *Site, index: DirIndex) []const u8 {
+        return self.dirs.at(@intFromEnum(index)).*;
+    }
+
+    pub fn dirIndexFromPath(self: *Site, path: []const u8) !DirIndex {
+        const get_or_put = try self.dir_paths.getOrPut(
+            // We shouldn't use the arena allocator for the hash map, so any
+            // space it frees when it reshuffles data on insert is reclaimed.
+            self.arena_state.child_allocator,
+            path,
+        );
+        if (!get_or_put.found_existing) {
+            const new_index = self.dirs.count();
+            const arena = self.allocator();
+            const owned_path = try arena.dupe(u8, path);
+            get_or_put.key_ptr.* = owned_path;
+            get_or_put.value_ptr.* = @enumFromInt(new_index);
+            (try self.dirs.addOne(arena)).* = owned_path;
+        }
+        return get_or_put.value_ptr.*;
+    }
+
     pub const Rule = struct {
         patterns: []const []const u8,
         replaceTags: []const []const u8,
@@ -121,4 +158,6 @@ pub const Site = struct {
     };
 
     pub const PageIndex = enum(u32) { _ };
+
+    pub const DirIndex = enum(u32) { _ };
 };
