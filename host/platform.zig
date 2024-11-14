@@ -5,7 +5,6 @@ const fail = @import("fail.zig");
 const std = @import("std");
 const RocStr = @import("roc/str.zig").RocStr;
 const RocList = @import("roc/list.zig").RocList;
-const Site = @import("site.zig").Site;
 
 pub extern fn roc__mainForHost_1_exposed_generic(*RocList, *const void) callconv(.C) void;
 pub extern fn roc__getMetadataLengthForHost_1_exposed_generic(*u64, *const RocList) callconv(.C) void;
@@ -14,7 +13,7 @@ pub extern fn roc__runPipelineForHost_1_exposed_generic(*RocList, *const Page) c
 pub const Rule = extern struct {
     patterns: RocList,
     replaceTags: RocList,
-    processing: Site.Processing,
+    processing: Processing,
 };
 
 pub const Page = extern struct {
@@ -23,6 +22,14 @@ pub const Page = extern struct {
     tags: RocList,
     len: u32,
     ruleIndex: u32,
+};
+
+pub const Processing = enum(u8) {
+    bootstrap = 0,
+    ignore = 1,
+    markdown = 2,
+    none = 3,
+    xml = 4,
 };
 
 pub const Tag = extern struct {
@@ -159,4 +166,32 @@ comptime {
     if (builtin.os.tag == .windows) {
         @export(roc_getppid_windows_stub, .{ .name = "roc_getppid", .linkage = .strong });
     }
+}
+
+pub fn RocListIterator(comptime T: type) type {
+    return struct {
+        const Self = @This();
+
+        elements: ?[*]T,
+        len: usize,
+        index: usize,
+
+        pub fn init(list: RocList) Self {
+            return Self{
+                .elements = list.elements(T),
+                .len = list.len(),
+                .index = 0,
+            };
+        }
+
+        pub fn next(self: *Self) ?T {
+            if (self.index < self.len) {
+                const elem = self.elements.?[self.index];
+                self.index += 1;
+                return elem;
+            } else {
+                return null;
+            }
+        }
+    };
 }

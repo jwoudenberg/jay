@@ -4,7 +4,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 const Site = @import("site.zig").Site;
 
-pub fn serve(gpa: std.mem.Allocator, site: *const Site, output_root: []const u8) !void {
+pub fn serve(gpa: std.mem.Allocator, site: *const Site) !void {
     const loopback = try std.net.Ip4Address.parse("127.0.0.1", 0);
     const localhost = std.net.Address{ .in = loopback };
     var http_server = try localhost.listen(.{
@@ -14,7 +14,7 @@ pub fn serve(gpa: std.mem.Allocator, site: *const Site, output_root: []const u8)
 
     const addr = http_server.listen_address;
     const stdout = std.io.getStdOut().writer();
-    const output_dir = try site.source_root.openDir(output_root, .{});
+    const output_dir = try site.source_root.openDir(site.output_root, .{});
     var buffer: ["http://localhost:00000".len]u8 = undefined;
     const url = try std.fmt.bufPrint(&buffer, "http://localhost:{}", .{addr.getPort()});
     try stdout.print("Listening on {s}\n", .{url});

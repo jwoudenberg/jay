@@ -10,35 +10,23 @@ const platform = @import("platform.zig");
 const Site = @import("site.zig").Site;
 const RocList = @import("roc/list.zig").RocList;
 
-pub fn scan(
-    gpa: std.mem.Allocator,
-    site: *Site,
-    output_root: []const u8,
-) !void {
+pub fn scan(gpa: std.mem.Allocator, site: *Site) !void {
     var tmp_arena_state = std.heap.ArenaAllocator.init(gpa);
     defer tmp_arena_state.deinit();
     const tmp_arena = tmp_arena_state.allocator();
-
-    const explicit_ignores = try getRuleIgnorePatterns(tmp_arena, site.rules);
-    var source_iterator = try SourceFileWalker.init(
-        tmp_arena,
-        site.source_root,
-        site.roc_main,
-        output_root,
-        explicit_ignores,
-    );
+    var source_iterator = try SourceFileWalker.init(tmp_arena, site);
     defer source_iterator.deinit();
     var unmatched_paths = std.ArrayList([]const u8).init(tmp_arena);
     defer unmatched_paths.deinit();
 
     const site_arena = site.allocator();
-    while (try source_iterator.next()) |entry| {
-        if (entry.ignore) {
-            continue;
-        } else {
-            const path = try site_arena.dupe(u8, entry.path);
-            try addFileToRule(tmp_arena, site, path, &unmatched_paths);
-        }
+    while (try source_iterator.next()) |path| {
+        try addFileToRule(
+            tmp_arena,
+            site,
+            try site_arena.dupe(u8, path),
+            &unmatched_paths,
+        );
     }
 
     if (unmatched_paths.items.len > 0) {
@@ -49,35 +37,13 @@ pub fn scan(
 pub const SourceFileWalker = struct {
     const Self = @This();
 
-    pub const Entry = struct {
-        path: []const u8,
-        ignore: bool,
-    };
-
     walker: std.fs.Dir.Walker,
-    explicit_ignores: []const []const u8,
-    implicit_ignores: [3][]const u8,
+    ignore_patterns: []const []const u8,
 
-    pub fn init(
-        allocator: std.mem.Allocator,
-        source_root: std.fs.Dir,
-        roc_main: []const u8,
-        output_root: []const u8,
-        explicit_ignores: []const []const u8,
-    ) !Self {
-        // The Roc file that starts this script as well as anything we generate
-        // should be ignored implicitly, i.e. the user should not need to
-        // specify these.
-        const implicit_ignores = .{
-            output_root,
-            roc_main,
-            std.fs.path.stem(roc_main),
-        };
-
+    pub fn init(allocator: std.mem.Allocator, site: *Site) !Self {
         return Self{
-            .walker = try source_root.walk(allocator),
-            .explicit_ignores = explicit_ignores,
-            .implicit_ignores = implicit_ignores,
+            .walker = try site.source_root.walk(allocator),
+            .ignore_patterns = site.ignore_patterns,
         };
     }
 
@@ -85,53 +51,33 @@ pub const SourceFileWalker = struct {
         self.walker.deinit();
     }
 
-    pub fn next(self: *Self) !?Entry {
+    pub fn next(self: *Self) !?[]const u8 {
         while (true) {
             const entry = try self.walker.next() orelse return null;
-            const ignore_implicitly = glob.matchAny(&self.implicit_ignores, entry.path);
-            const ignore_explicitly = glob.matchAny(self.explicit_ignores, entry.path);
-            const ignore = ignore_implicitly or ignore_explicitly;
 
-            if (ignore and entry.kind == .directory) {
-                // Reaching into the walker internals here to skip an entire
-                // directory, similar to how the walker implementation does
-                // this itself in a couple of places. This avoids needing to
-                // iterate through potentially large amounts of ignored files,
-                // for instance a .git directory.
-                var item = self.walker.stack.pop();
-                if (self.walker.stack.items.len != 0) {
-                    item.iter.dir.close();
-                }
+            const ignore = glob.matchAny(self.ignore_patterns, entry.path);
+            if (ignore) {
+                if (entry.kind == .directory) self.skip();
+                continue;
             }
 
             if (entry.kind != .file) continue;
+            return entry.path;
+        }
+    }
 
-            // Here's where the difference between implicit and explicit
-            // ignores becomes material. Implicit ignores we don't even let
-            // the code know about - we just pretend these files don't exist.
-            if (ignore_implicitly) continue;
-
-            return Entry{
-                .path = entry.path,
-                .ignore = ignore,
-            };
+    pub fn skip(self: *Self) void {
+        // Reaching into the walker internals here to skip an entire
+        // directory, similar to how the walker implementation does
+        // this itself in a couple of places. This avoids needing to
+        // iterate through potentially large amounts of ignored files,
+        // for instance a .git directory.
+        var item = self.walker.stack.pop();
+        if (self.walker.stack.items.len != 0) {
+            item.iter.dir.close();
         }
     }
 };
-
-// Read ignore patterns out of the page rules read from code.
-fn getRuleIgnorePatterns(
-    allocator: std.mem.Allocator,
-    rules: []const Site.Rule,
-) ![]const []const u8 {
-    var ignore_patterns = std.ArrayList([]const u8).init(allocator);
-    for (rules) |rule| {
-        if (rule.processing == .ignore) {
-            try ignore_patterns.appendSlice(rule.patterns);
-        }
-    }
-    return ignore_patterns.toOwnedSlice();
-}
 
 fn addFileToRule(
     tmp_arena: std.mem.Allocator,
@@ -178,15 +124,11 @@ pub fn addPath(
 ) !void {
     const site_arena = site.allocator();
     const output_path = switch (processing) {
-        .ignore => return error.UnexpectedlyAskedToAddIgnoredFile,
-        .bootstrap => return error.UnexpectedlyAskedToAddFileForBootstrapRule,
         .xml, .none => try std.fmt.allocPrint(site_arena, "/{s}", .{source_path}),
         .markdown => try outputPathForMarkdownFile(site_arena, source_path),
     };
 
     const frontmatter = switch (processing) {
-        .ignore => return error.UnexpectedlyAskedToAddIgnoredFile,
-        .bootstrap => return error.UnexpectedlyAskedToAddFileForBootstrapRule,
         .xml, .none => "{}",
         .markdown => blk: {
             const bytes = try site.source_root.readFileAlloc(tmp_arena, source_path, 1024 * 1024);

@@ -11,8 +11,6 @@ const bootstrap = @import("bootstrap.zig").bootstrap;
 const scan = @import("scan.zig").scan;
 const generate = @import("generate.zig").generate;
 
-const output_root = "output";
-
 pub fn main() void {
     if (run()) {} else |err| {
         fail.crudely(err);
@@ -34,59 +32,77 @@ export fn roc_fx_list(pattern: *RocStr) callconv(.C) RocList {
 pub fn run() !void {
     var args = std.process.args();
     const argv0 = args.next() orelse return error.EmptyArgv;
-    site = try Site.init(gpa, argv0);
-    defer site.deinit();
     var timer = try std.time.Timer.start();
 
     // (1) Call platform to get page rules.
     var roc_rules = RocList.empty();
     platform.roc__mainForHost_1_exposed_generic(&roc_rules, &void{});
-    site.rules = try rocListMapToOwnedSlice(
-        platform.Rule,
-        Site.Rule,
-        fromPlatformRule,
-        site.allocator(),
-        roc_rules,
-    );
 
-    // (2) Scan the project to find all the source files.
-    if (site.rules.len == 1 and site.rules[0].processing == .bootstrap) {
-        try bootstrap(gpa, &site, output_root);
+    // (2) Construct Site struct
+    site = try Site.init(gpa, argv0, "output");
+    defer site.deinit();
+    var should_bootstrap = false;
+    var rules = std.ArrayList(Site.Rule).init(gpa);
+    errdefer rules.deinit();
+    var ignore_patterns = std.ArrayList([]const u8).fromOwnedSlice(gpa, try gpa.dupe([]const u8, site.ignore_patterns));
+    errdefer ignore_patterns.deinit();
+    var roc_rule_iterator = platform.RocListIterator(platform.Rule).init(roc_rules);
+    const arena = site.allocator();
+    while (roc_rule_iterator.next()) |platform_rule| {
+        switch (platform_rule.processing) {
+            .none, .xml, .markdown => {
+                const rule = .{
+                    .patterns = try rocListMapToOwnedSlice(
+                        RocStr,
+                        []const u8,
+                        fromRocStr,
+                        arena,
+                        platform_rule.patterns,
+                    ),
+                    .replaceTags = try rocListMapToOwnedSlice(
+                        RocStr,
+                        []const u8,
+                        fromRocStr,
+                        arena,
+                        platform_rule.replaceTags,
+                    ),
+                    .processing = @as(Site.Processing, @enumFromInt(@intFromEnum(platform_rule.processing))),
+                };
+                try rules.append(rule);
+            },
+            .ignore => {
+                const patterns = try rocListMapToOwnedSlice(
+                    RocStr,
+                    []const u8,
+                    fromRocStr,
+                    arena,
+                    platform_rule.patterns,
+                );
+                try ignore_patterns.appendSlice(patterns);
+            },
+            .bootstrap => {
+                should_bootstrap = true;
+            },
+        }
+    }
+    site.rules = try arena.dupe(Site.Rule, try rules.toOwnedSlice());
+    site.ignore_patterns = try arena.dupe([]const u8, try ignore_patterns.toOwnedSlice());
+
+    // (3) Scan the project to find all the source files.
+    if (site.rules.len == 1 and should_bootstrap) {
+        try bootstrap(gpa, &site);
     } else {
-        try scan(gpa, &site, output_root);
+        try scan(gpa, &site);
     }
 
-    // (3) Generate output files.
-    try generate(gpa, &site, output_root);
+    // (4) Generate output files.
+    try generate(gpa, &site);
 
     const stdout = std.io.getStdOut().writer();
     try stdout.print("Generated site in {d}ms\n", .{timer.read() / 1_000_000});
 
-    // (4) Serve the output files.
-    try serve(gpa, &site, output_root);
-}
-
-fn fromPlatformRule(
-    arena: std.mem.Allocator,
-    platform_rule: platform.Rule,
-) !Site.Rule {
-    return .{
-        .patterns = try rocListMapToOwnedSlice(
-            RocStr,
-            []const u8,
-            fromRocStr,
-            arena,
-            platform_rule.patterns,
-        ),
-        .replaceTags = try rocListMapToOwnedSlice(
-            RocStr,
-            []const u8,
-            fromRocStr,
-            arena,
-            platform_rule.replaceTags,
-        ),
-        .processing = platform_rule.processing,
-    };
+    // (5) Serve the output files.
+    try serve(gpa, &site);
 }
 
 fn fromRocStr(allocator: std.mem.Allocator, roc_pattern: RocStr) ![]const u8 {

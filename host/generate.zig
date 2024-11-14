@@ -13,16 +13,15 @@ const c = @cImport({
 pub fn generate(
     gpa: std.mem.Allocator,
     site: *Site,
-    output_dir_path: []const u8,
 ) !void {
     // Clear output directory if it already exists.
-    site.source_root.deleteTree(output_dir_path) catch |err| {
+    site.source_root.deleteTree(site.output_root) catch |err| {
         if (err != error.NotDir) {
             return err;
         }
     };
-    try site.source_root.makeDir(output_dir_path);
-    var output_dir = try site.source_root.openDir(output_dir_path, .{});
+    try site.source_root.makeDir(site.output_root);
+    var output_dir = try site.source_root.openDir(site.output_root, .{});
     defer output_dir.close();
 
     var arena = std.heap.ArenaAllocator.init(gpa);
@@ -52,8 +51,6 @@ fn writeFile(
     page: *Site.Page,
 ) !void {
     switch (rule.processing) {
-        .ignore => return error.UnexpectedlyAskedToGenerateOutputForIgnoredFile,
-        .bootstrap => return error.UnexpectedlyAskedToGenerateOutputForBootstrapRule,
         .none => {
             // I'd like to use the below, but get the following error when I do:
             //     hidden symbol `__dso_handle' isn't defined
@@ -129,7 +126,7 @@ fn writeRocContents(
     source: []const u8,
     writer: anytype,
 ) !void {
-    var roc_xml_iterator = RocListIterator(platform.Slice).init(contents);
+    var roc_xml_iterator = platform.RocListIterator(platform.Slice).init(contents);
     while (roc_xml_iterator.next()) |roc_slice| {
         switch (roc_slice.tag) {
             .from_source => {
@@ -145,32 +142,4 @@ fn writeRocContents(
             },
         }
     }
-}
-
-fn RocListIterator(comptime T: type) type {
-    return struct {
-        const Self = @This();
-
-        elements: ?[*]T,
-        len: usize,
-        index: usize,
-
-        fn init(list: RocList) Self {
-            return Self{
-                .elements = list.elements(T),
-                .len = list.len(),
-                .index = 0,
-            };
-        }
-
-        fn next(self: *Self) ?T {
-            if (self.index < self.len) {
-                const elem = self.elements.?[self.index];
-                self.index += 1;
-                return elem;
-            } else {
-                return null;
-            }
-        }
-    };
 }

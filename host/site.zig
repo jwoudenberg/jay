@@ -11,6 +11,10 @@ pub const Site = struct {
     source_root: std.fs.Dir,
     // basename of the .roc file we're currently running.
     roc_main: []const u8,
+    // Path to the directory that will contain the generated site.
+    output_root: []const u8,
+    // Source patterns that should be turned into pages.
+    ignore_patterns: []const []const u8,
     // The page-construction rules defined in the .roc file we're running.
     rules: []Rule,
     // The pages in a project. Designed so a single thread can append new items
@@ -19,7 +23,11 @@ pub const Site = struct {
     // Map for efficient access to a page by its web path.
     web_paths: std.StringHashMapUnmanaged(PageIndex),
 
-    pub fn init(base_allocator: std.mem.Allocator, argv0: []const u8) !Site {
+    pub fn init(
+        base_allocator: std.mem.Allocator,
+        argv0: []const u8,
+        output_root: []const u8,
+    ) !Site {
         var arena_state = std.heap.ArenaAllocator.init(base_allocator);
         const arena = arena_state.allocator();
         const argv0_abs = try std.fs.cwd().realpathAlloc(arena, argv0);
@@ -27,11 +35,19 @@ pub const Site = struct {
         const source_root = std.fs.cwd().openDir(source_root_path, .{ .iterate = true }) catch |err| {
             try fail.prettily("Cannot access directory containing {s}: '{}'\n", .{ source_root_path, err });
         };
+        const roc_main = std.fs.path.basename(argv0_abs);
+        const ignore_patterns = try arena.dupe([]const u8, &[3][]const u8{
+            output_root,
+            roc_main,
+            std.fs.path.stem(roc_main),
+        });
 
         return Site{
             .arena_state = arena_state,
             .source_root = source_root,
-            .roc_main = std.fs.path.basename(argv0_abs),
+            .roc_main = roc_main,
+            .output_root = output_root,
+            .ignore_patterns = ignore_patterns,
             .rules = &.{},
             .pages = std.SegmentedList(Page, 0){},
             .web_paths = std.StringHashMapUnmanaged(PageIndex){},
@@ -97,9 +113,8 @@ pub const Site = struct {
         frontmatter: []const u8,
     };
 
+    // Enum pairs should be a subset of those in Platform.Processing enum.
     pub const Processing = enum(u8) {
-        bootstrap = 0,
-        ignore = 1,
         markdown = 2,
         none = 3,
         xml = 4,
