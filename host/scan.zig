@@ -15,25 +15,29 @@ pub fn scan(
     site: *Site,
     output_root: []const u8,
 ) !void {
-    const explicit_ignores = try getRuleIgnorePatterns(gpa, site.rules);
+    var tmp_arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer tmp_arena_state.deinit();
+    const tmp_arena = tmp_arena_state.allocator();
+
+    const explicit_ignores = try getRuleIgnorePatterns(tmp_arena, site.rules);
     var source_iterator = try SourceFileWalker.init(
-        gpa,
+        tmp_arena,
         site.source_root,
         site.roc_main,
         output_root,
         explicit_ignores,
     );
     defer source_iterator.deinit();
-    var unmatched_paths = std.ArrayList([]const u8).init(gpa);
+    var unmatched_paths = std.ArrayList([]const u8).init(tmp_arena);
     defer unmatched_paths.deinit();
 
-    const arena = site.allocator();
+    const site_arena = site.allocator();
     while (try source_iterator.next()) |entry| {
         if (entry.ignore) {
             continue;
         } else {
-            const path = try arena.dupe(u8, entry.path);
-            try addFileToRule(gpa, site, path, &unmatched_paths);
+            const path = try site_arena.dupe(u8, entry.path);
+            try addFileToRule(tmp_arena, site, path, &unmatched_paths);
         }
     }
 
@@ -130,20 +134,20 @@ fn getRuleIgnorePatterns(
 }
 
 fn addFileToRule(
-    gpa: std.mem.Allocator,
+    tmp_arena: std.mem.Allocator,
     site: *Site,
     source_path: []const u8,
     unmatched_paths: *std.ArrayList([]const u8),
 ) !void {
     // TODO: detect patterns that are not matched by any file.
-    var matched_rules = std.ArrayList(usize).init(gpa);
+    var matched_rules = std.ArrayList(usize).init(tmp_arena);
     defer matched_rules.deinit();
 
     for (site.rules, 0..) |rule, rule_index| {
         if (!glob.matchAny(rule.patterns, source_path)) continue;
 
         try matched_rules.append(rule_index);
-        try addPath(gpa, site, rule_index, rule.processing, source_path);
+        try addPath(tmp_arena, site, rule_index, rule.processing, source_path);
     }
 
     switch (matched_rules.items.len) {
@@ -166,18 +170,18 @@ fn addFileToRule(
 }
 
 pub fn addPath(
-    gpa: std.mem.Allocator,
+    tmp_arena: std.mem.Allocator,
     site: *Site,
     rule_index: usize,
     processing: Site.Processing,
     source_path: []const u8,
 ) !void {
-    const arena = site.allocator();
+    const site_arena = site.allocator();
     const output_path = switch (processing) {
         .ignore => return error.UnexpectedlyAskedToAddIgnoredFile,
         .bootstrap => return error.UnexpectedlyAskedToAddFileForBootstrapRule,
-        .xml, .none => try std.fmt.allocPrint(arena, "/{s}", .{source_path}),
-        .markdown => try outputPathForMarkdownFile(arena, source_path),
+        .xml, .none => try std.fmt.allocPrint(site_arena, "/{s}", .{source_path}),
+        .markdown => try outputPathForMarkdownFile(site_arena, source_path),
     };
 
     const frontmatter = switch (processing) {
@@ -185,8 +189,7 @@ pub fn addPath(
         .bootstrap => return error.UnexpectedlyAskedToAddFileForBootstrapRule,
         .xml, .none => "{}",
         .markdown => blk: {
-            const bytes = try site.source_root.readFileAlloc(gpa, source_path, 1024 * 1024);
-            defer gpa.free(bytes);
+            const bytes = try site.source_root.readFileAlloc(tmp_arena, source_path, 1024 * 1024);
             if (firstNonWhitespaceByte(bytes) != '{') break :blk "{}";
 
             const roc_bytes = RocList.fromSlice(u8, bytes, false);
@@ -214,7 +217,7 @@ pub fn addPath(
                 , .{source_path});
             }
 
-            break :blk try arena.dupe(u8, meta_bytes);
+            break :blk try site_arena.dupe(u8, meta_bytes);
         },
     };
 

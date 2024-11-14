@@ -29,7 +29,10 @@ fn bootstrapRules(
     site: *Site,
     output_root: []const u8,
 ) !void {
-    const arena = site.allocator();
+    const site_arena = site.allocator();
+    var tmp_arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer tmp_arena_state.deinit();
+    const tmp_arena = tmp_arena_state.allocator();
 
     // We're going to scan for files and create rules to contain those files,
     // but we don't know what rules we'll create upfront. Possibilities are
@@ -47,11 +50,11 @@ fn bootstrapRules(
     // helpful to include one.
     pre_rules[@intFromEnum(Site.Processing.ignore)] = PreRule{
         .rule_index = 0,
-        .patterns = std.ArrayList([]const u8).init(arena),
+        .patterns = std.ArrayList([]const u8).init(tmp_arena),
     };
 
     var source_iterator = try scan.SourceFileWalker.init(
-        gpa,
+        tmp_arena,
         site.source_root,
         site.roc_main,
         output_root,
@@ -61,7 +64,7 @@ fn bootstrapRules(
     while (try source_iterator.next()) |entry| {
         if (entry.ignore) {
             if (pre_rules[@intFromEnum(Site.Processing.ignore)]) |*pre_rule| {
-                try pre_rule.patterns.append(try arena.dupe(u8, entry.path));
+                try pre_rule.patterns.append(try site_arena.dupe(u8, entry.path));
                 continue;
             } else return error.UnexpectedMissingIgnorePreRule;
         }
@@ -76,37 +79,37 @@ fn bootstrapRules(
             }
             pre_rules[pre_rule_index] = PreRule{
                 .rule_index = rule_index,
-                .patterns = std.ArrayList([]const u8).init(arena),
+                .patterns = std.ArrayList([]const u8).init(tmp_arena),
             };
         }
 
         if (pre_rules[pre_rule_index]) |*pre_rule| {
             try scan.addPath(
-                gpa,
+                tmp_arena,
                 site,
                 pre_rule.rule_index,
                 processing,
-                try arena.dupe(u8, entry.path),
+                try site_arena.dupe(u8, entry.path),
             );
 
-            const new_pattern = try patternForPath(gpa, entry.path);
-            defer gpa.free(new_pattern);
+            const new_pattern = try patternForPath(tmp_arena, entry.path);
+            defer tmp_arena.free(new_pattern);
             for (pre_rule.patterns.items) |existing_pattern| {
                 if (std.mem.eql(u8, existing_pattern, new_pattern)) break;
             } else {
-                try pre_rule.patterns.append(try arena.dupe(u8, new_pattern));
+                try pre_rule.patterns.append(try site_arena.dupe(u8, new_pattern));
             }
         } else return error.UnexpectedMissingPreRule;
     }
 
-    var rules = try arena.alloc(Site.Rule, processing_type_count);
+    var rules = try site_arena.alloc(Site.Rule, processing_type_count);
     var rules_len: usize = 0;
 
     for (pre_rules, 0..) |opt_pre_rule, processing| {
-        var pre_rule = opt_pre_rule orelse continue;
+        const pre_rule = opt_pre_rule orelse continue;
         rules_len += 1;
         rules[pre_rule.rule_index] = Site.Rule{
-            .patterns = try pre_rule.patterns.toOwnedSlice(),
+            .patterns = try site_arena.dupe([]const u8, pre_rule.patterns.items),
             .processing = @enumFromInt(processing),
             .replaceTags = &.{},
         };
