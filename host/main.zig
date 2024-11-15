@@ -106,7 +106,9 @@ pub fn run() !void {
     try stdout.print("Generated site in {d}ms\n", .{timer.read() / 1_000_000});
 
     // (4) Serve the output files.
-    try serve(gpa, site);
+    const thread = try std.Thread.spawn(.{}, serve, .{site});
+    // TODO: instead of waiting for the thread, watch for file changes.
+    thread.join();
 }
 
 fn fromRocStr(allocator: std.mem.Allocator, roc_pattern: RocStr) ![]const u8 {
@@ -166,14 +168,17 @@ pub fn runWorkQueue(
     var unmatched_paths = std.ArrayList([]const u8).init(arena);
     defer unmatched_paths.deinit();
 
+    var source_root = try site.openSourceRoot(.{ .iterate = true });
+    defer source_root.close();
+
     // Clear output directory if it already exists.
-    site.source_root.deleteTree(site.output_root) catch |err| {
+    source_root.deleteTree(site.output_root) catch |err| {
         if (err != error.NotDir) {
             return err;
         }
     };
-    try site.source_root.makeDir(site.output_root);
-    var output_dir = try site.source_root.openDir(site.output_root, .{});
+    try source_root.makeDir(site.output_root);
+    var output_dir = try source_root.openDir(site.output_root, .{});
     defer output_dir.close();
 
     while (work.pop()) |job| {
@@ -181,13 +186,14 @@ pub fn runWorkQueue(
             .scan_file => unreachable,
             .generate_page => {
                 const page = site.getPage(job.generate_page);
-                try generate(arena, site, output_dir, page);
+                try generate(arena, site, source_root, output_dir, page);
             },
             .scan_dir => {
                 try scan(
                     arena,
                     work,
                     site,
+                    source_root,
                     job.scan_dir,
                     &unmatched_paths,
                 );

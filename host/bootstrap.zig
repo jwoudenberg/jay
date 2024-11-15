@@ -21,14 +21,18 @@ pub fn bootstrap(
     site: *Site,
     work: *WorkQueue,
 ) !void {
-    try bootstrapRules(gpa, site, work);
-    try generateCodeForRules(site);
+    var source_root = try site.openSourceRoot(.{ .iterate = true });
+    defer source_root.close();
+
+    try bootstrapRules(gpa, site, work, source_root);
+    try generateCodeForRules(site, source_root);
 }
 
 fn bootstrapRules(
     gpa: std.mem.Allocator,
     site: *Site,
     work: *WorkQueue,
+    source_root: std.fs.Dir,
 ) !void {
     const site_arena = site.allocator();
     var tmp_arena_state = std.heap.ArenaAllocator.init(gpa);
@@ -52,7 +56,7 @@ fn bootstrapRules(
     const processing_type_count = 8 * @sizeOf(Site.Processing);
     var pre_rules: [processing_type_count]?PreRule = std.mem.zeroes([processing_type_count]?PreRule);
 
-    var source_iterator = try scan.SourceFileWalker.init(tmp_arena, site);
+    var source_iterator = try scan.SourceFileWalker.init(tmp_arena, site, source_root);
     defer source_iterator.deinit();
     iter: while (try source_iterator.next()) |path| {
         for (bootstrap_ignore_patterns) |bootstrap_ignore_pattern| {
@@ -81,6 +85,7 @@ fn bootstrapRules(
             const page_index = try scan.addPath(
                 tmp_arena,
                 site,
+                source_root,
                 pre_rule.rule_index,
                 processing,
                 try site_arena.dupe(u8, path),
@@ -138,7 +143,7 @@ test "bootstrapRules" {
 
     var work = WorkQueue.init(std.testing.allocator);
     defer work.deinit();
-    try bootstrapRules(std.testing.allocator, &site, &work);
+    try bootstrapRules(std.testing.allocator, &site, &work, tmpdir.dir);
 
     try std.testing.expectEqual(4, site.ignore_patterns.len);
     try std.testing.expectEqualStrings("output", site.ignore_patterns[0]);
@@ -224,8 +229,8 @@ fn patternForPath(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
         );
 }
 
-fn generateCodeForRules(site: *const Site) !void {
-    const file = try site.source_root.openFile(site.roc_main, .{ .mode = .read_write });
+fn generateCodeForRules(site: *const Site, source_root: std.fs.Dir) !void {
+    const file = try source_root.openFile(site.roc_main, .{ .mode = .read_write });
     defer file.close();
 
     // The size of my minimal bootstrap examples is 119 bytes at time of
@@ -379,7 +384,7 @@ test generateCodeForRules {
     site.rules = rules[0..];
     site.ignore_patterns = ([_][]const u8{ ".git", ".gitignore" })[0..];
 
-    try generateCodeForRules(&site);
+    try generateCodeForRules(&site, tmpdir.dir);
 
     const generated = try tmpdir.dir.readFileAlloc(std.testing.allocator, "build.roc", 1024 * 1024);
     defer std.testing.allocator.free(generated);

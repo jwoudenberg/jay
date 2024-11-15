@@ -15,14 +15,15 @@ pub fn scan(
     tmp_arena: std.mem.Allocator,
     work: *WorkQueue,
     site: *Site,
+    source_root: std.fs.Dir,
     index: Site.DirIndex,
     unmatched_paths: *std.ArrayList([]const u8),
 ) !void {
     const dir_path = site.dirPathFromIndex(index);
     const dir = if (dir_path.len == 0) blk: {
-        break :blk site.source_root;
+        break :blk source_root;
     } else blk: {
-        break :blk try site.source_root.openDir(dir_path, .{ .iterate = true });
+        break :blk try source_root.openDir(dir_path, .{ .iterate = true });
     };
     var iterator = dir.iterateAssumeFirstIteration();
     while (true) {
@@ -39,6 +40,7 @@ pub fn scan(
                 const opt_page_index = try addFileToRule(
                     tmp_arena,
                     site,
+                    source_root,
                     path,
                     unmatched_paths,
                 );
@@ -80,9 +82,13 @@ pub const SourceFileWalker = struct {
     walker: std.fs.Dir.Walker,
     ignore_patterns: []const []const u8,
 
-    pub fn init(allocator: std.mem.Allocator, site: *Site) !Self {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        site: *Site,
+        source_root: std.fs.Dir,
+    ) !Self {
         return Self{
-            .walker = try site.source_root.walk(allocator),
+            .walker = try source_root.walk(allocator),
             .ignore_patterns = site.ignore_patterns,
         };
     }
@@ -122,6 +128,7 @@ pub const SourceFileWalker = struct {
 fn addFileToRule(
     tmp_arena: std.mem.Allocator,
     site: *Site,
+    source_root: std.fs.Dir,
     source_path: []const u8,
     unmatched_paths: *std.ArrayList([]const u8),
 ) !?Site.PageIndex {
@@ -134,7 +141,14 @@ fn addFileToRule(
         if (!glob.matchAny(rule.patterns, source_path)) continue;
 
         try matched_rules.append(rule_index);
-        page_index = try addPath(tmp_arena, site, rule_index, rule.processing, source_path);
+        page_index = try addPath(
+            tmp_arena,
+            site,
+            source_root,
+            rule_index,
+            rule.processing,
+            source_path,
+        );
     }
 
     switch (matched_rules.items.len) {
@@ -161,6 +175,7 @@ fn addFileToRule(
 pub fn addPath(
     tmp_arena: std.mem.Allocator,
     site: *Site,
+    source_root: std.fs.Dir,
     rule_index: usize,
     processing: Site.Processing,
     source_path: []const u8,
@@ -174,7 +189,7 @@ pub fn addPath(
     const frontmatter = switch (processing) {
         .xml, .none => "{}",
         .markdown => blk: {
-            const bytes = try site.source_root.readFileAlloc(tmp_arena, source_path, 1024 * 1024);
+            const bytes = try source_root.readFileAlloc(tmp_arena, source_path, 1024 * 1024);
             if (firstNonWhitespaceByte(bytes) != '{') break :blk "{}";
 
             const roc_bytes = RocList.fromSlice(u8, bytes, false);

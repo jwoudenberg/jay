@@ -8,7 +8,7 @@ pub const Site = struct {
     // The allocator that should be used for content of the struct.
     arena_state: std.heap.ArenaAllocator,
     // Absolute path of the directory containing the static site project.
-    source_root: std.fs.Dir,
+    source_root: []const u8,
     // basename of the .roc file we're currently running.
     roc_main: []const u8,
     // Path to the directory that will contain the generated site.
@@ -27,6 +27,8 @@ pub const Site = struct {
     dir_paths: std.StringHashMapUnmanaged(DirIndex),
     dirs: std.SegmentedList([]const u8, 0),
 
+    path_mutex: std.Thread.Mutex,
+
     pub fn init(
         base_allocator: std.mem.Allocator,
         argv0: []const u8,
@@ -35,10 +37,7 @@ pub const Site = struct {
         var arena_state = std.heap.ArenaAllocator.init(base_allocator);
         const arena = arena_state.allocator();
         const argv0_abs = try std.fs.cwd().realpathAlloc(arena, argv0);
-        const source_root_path = std.fs.path.dirname(argv0_abs) orelse "/";
-        const source_root = std.fs.cwd().openDir(source_root_path, .{ .iterate = true }) catch |err| {
-            try fail.prettily("Cannot access directory containing {s}: '{}'\n", .{ source_root_path, err });
-        };
+        const source_root = std.fs.path.dirname(argv0_abs) orelse "/";
         const roc_main = std.fs.path.basename(argv0_abs);
         const ignore_patterns = try arena.dupe([]const u8, &[3][]const u8{
             output_root,
@@ -53,6 +52,7 @@ pub const Site = struct {
             .output_root = output_root,
             .ignore_patterns = ignore_patterns,
             .rules = &.{},
+            .path_mutex = std.Thread.Mutex{},
 
             // Pages
             .pages = std.SegmentedList(Page, 0){},
@@ -69,17 +69,31 @@ pub const Site = struct {
     }
 
     pub fn deinit(self: *Site) void {
-        self.source_root.close();
         self.web_paths.deinit(self.arena_state.child_allocator);
         self.dir_paths.deinit(self.arena_state.child_allocator);
         self.arena_state.deinit();
     }
 
+    pub fn openSourceRoot(self: *const Site, args: std.fs.Dir.OpenDirOptions) !std.fs.Dir {
+        return std.fs.cwd().openDir(self.source_root, args) catch |err| {
+            try fail.prettily(
+                "Cannot access directory containing {s}: '{}'\n",
+                .{ self.source_root, err },
+            );
+        };
+    }
+
     pub fn getPage(self: *Site, index: PageIndex) *Page {
+        self.path_mutex.lock();
+        defer self.path_mutex.unlock();
+
         return self.pages.at(@intFromEnum(index));
     }
 
     pub fn addPage(self: *Site, page: Page) !PageIndex {
+        self.path_mutex.lock();
+        defer self.path_mutex.unlock();
+
         const index = self.pages.count();
         const ptr = try self.pages.addOne(self.allocator());
         ptr.* = page;
@@ -113,10 +127,16 @@ pub const Site = struct {
     }
 
     pub fn dirPathFromIndex(self: *Site, index: DirIndex) []const u8 {
+        self.path_mutex.lock();
+        defer self.path_mutex.unlock();
+
         return self.dirs.at(@intFromEnum(index)).*;
     }
 
     pub fn dirIndexFromPath(self: *Site, path: []const u8) !DirIndex {
+        self.path_mutex.lock();
+        defer self.path_mutex.unlock();
+
         const get_or_put = try self.dir_paths.getOrPut(
             // We shouldn't use the arena allocator for the hash map, so any
             // space it frees when it reshuffles data on insert is reclaimed.

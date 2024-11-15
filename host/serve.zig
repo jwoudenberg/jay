@@ -4,7 +4,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 const Site = @import("site.zig").Site;
 
-pub fn serve(gpa: std.mem.Allocator, site: *const Site) !void {
+pub fn serve(site: *const Site) !void {
     const loopback = try std.net.Ip4Address.parse("127.0.0.1", 0);
     const localhost = std.net.Address{ .in = loopback };
     var http_server = try localhost.listen(.{
@@ -14,20 +14,22 @@ pub fn serve(gpa: std.mem.Allocator, site: *const Site) !void {
 
     const addr = http_server.listen_address;
     const stdout = std.io.getStdOut().writer();
-    const output_dir = try site.source_root.openDir(site.output_root, .{});
+    var source_root = try site.openSourceRoot(.{});
+    defer source_root.close();
+    const output_dir = try source_root.openDir(site.output_root, .{});
     var buffer: ["http://localhost:00000".len]u8 = undefined;
     const url = try std.fmt.bufPrint(&buffer, "http://localhost:{}", .{addr.getPort()});
     try stdout.print("Listening on {s}\n", .{url});
 
-    open(gpa, url) catch |err| {
+    open(url) catch |err| {
         try stdout.print("Failed to open browser: {s}\n", .{@errorName(err)});
     };
 
-    var read_buffer: [8000]u8 = undefined;
+    var request_buffer: [8000]u8 = undefined;
     accept: while (true) {
         const connection = try http_server.accept();
         defer connection.stream.close();
-        var server = std.http.Server.init(connection, &read_buffer);
+        var server = std.http.Server.init(connection, &request_buffer);
         while (server.state == .ready) {
             var request = server.receiveHead() catch |err| {
                 // https://ziglang.org/documentation/0.13.0/std/#std.http.Server.ReceiveHeadError
@@ -87,14 +89,15 @@ fn servePage(
     try response.end();
 }
 
-fn open(gpa: std.mem.Allocator, resource: []const u8) !void {
+fn open(resource: []const u8) !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const open_command = switch (builtin.os.tag) {
         .linux => "xdg-open",
         .macos => "open",
         .windows => "open",
         else => return error.UnsupportedOs,
     };
-    var child = std.process.Child.init(&.{ open_command, resource }, gpa);
+    var child = std.process.Child.init(&.{ open_command, resource }, gpa.allocator());
     child.stdin_behavior = .Close;
     child.stdout_behavior = .Close;
     child.stderr_behavior = .Close;

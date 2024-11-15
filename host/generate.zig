@@ -13,6 +13,7 @@ const c = @cImport({
 pub fn generate(
     arena: std.mem.Allocator,
     site: *Site,
+    source_root: std.fs.Dir,
     output_dir: std.fs.Dir,
     page: *Site.Page,
 ) !void {
@@ -25,7 +26,7 @@ pub fn generate(
     defer output.close();
     var counting_writer = std.io.countingWriter(output.writer());
     var writer = counting_writer.writer();
-    try writeFile(arena, site.source_root, &writer, rule, page);
+    try writeFile(arena, source_root, &writer, rule, page);
     page.output_len = counting_writer.bytes_written;
 }
 
