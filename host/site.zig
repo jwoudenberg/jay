@@ -3,6 +3,7 @@
 const std = @import("std");
 const fail = @import("fail.zig");
 const mime = @import("mime");
+const glob = @import("glob.zig");
 
 pub const Site = struct {
     // The allocator that should be used for content of the struct.
@@ -22,10 +23,7 @@ pub const Site = struct {
     // from this data. Writers need to obtain a lock first.
     pages: std.SegmentedList(Page, 0),
     web_paths: std.StringHashMapUnmanaged(PageIndex),
-
-    // Bi-directional mapping of source directories to indexes.
-    dir_paths: std.StringHashMapUnmanaged(DirIndex),
-    dirs: std.SegmentedList([]const u8, 0),
+    source_paths: std.StringHashMapUnmanaged(PageIndex),
 
     path_mutex: std.Thread.Mutex,
 
@@ -57,10 +55,7 @@ pub const Site = struct {
             // Pages
             .pages = std.SegmentedList(Page, 0){},
             .web_paths = std.StringHashMapUnmanaged(PageIndex){},
-
-            // Directories
-            .dir_paths = std.StringHashMapUnmanaged(DirIndex){},
-            .dirs = std.SegmentedList([]const u8, 0){},
+            .source_paths = std.StringHashMapUnmanaged(PageIndex){},
         };
     }
 
@@ -76,7 +71,7 @@ pub const Site = struct {
 
     pub fn deinit(self: *Site) void {
         self.web_paths.deinit(self.arena_state.child_allocator);
-        self.dir_paths.deinit(self.arena_state.child_allocator);
+        self.source_paths.deinit(self.arena_state.child_allocator);
         self.arena_state.deinit();
     }
 
@@ -96,13 +91,37 @@ pub const Site = struct {
         return self.pages.at(@intFromEnum(index));
     }
 
-    pub fn addPage(self: *Site, page: Page) !PageIndex {
+    pub fn pageIndex(self: *Site, source_path: []const u8) !?PageIndex {
+        if (glob.matchAny(self.ignore_patterns, source_path)) return null;
+
         self.path_mutex.lock();
         defer self.path_mutex.unlock();
 
-        const index = self.pages.count();
-        const ptr = try self.pages.addOne(self.allocator());
-        ptr.* = page;
+        const get_or_put = try self.source_paths.getOrPut(
+            // We shouldn't use the arena allocator for the hash map, so any
+            // space it frees when it reshuffles data on insert is reclaimed.
+            self.arena_state.child_allocator,
+            source_path,
+        );
+        if (get_or_put.found_existing) {
+            return get_or_put.value_ptr.*;
+        } else {
+            const new_index: PageIndex = @enumFromInt(self.pages.count());
+            _ = try self.pages.addOne(self.allocator());
+            get_or_put.value_ptr.* = new_index;
+            return new_index;
+        }
+    }
+
+    pub fn addPage(self: *Site, page: Page) !PageIndex {
+        const index = (try self.pageIndex(page.source_path)) orelse {
+            return error.CantCreatePageForIgnoredPath;
+        };
+
+        self.path_mutex.lock();
+        defer self.path_mutex.unlock();
+
+        self.pages.at(@intFromEnum(index)).* = page;
         const get_or_put = try self.web_paths.getOrPut(
             // We shouldn't use the arena allocator for the hash map, so any
             // space it frees when it reshuffles data on insert is reclaimed.
@@ -127,37 +146,9 @@ pub const Site = struct {
                 \\
             , .{ existing_page.source_path, page.source_path, page.web_path });
         } else {
-            get_or_put.value_ptr.* = @enumFromInt(index);
+            get_or_put.value_ptr.* = index;
         }
-        return @enumFromInt(index);
-    }
-
-    pub fn dirPathFromIndex(self: *Site, index: DirIndex) []const u8 {
-        self.path_mutex.lock();
-        defer self.path_mutex.unlock();
-
-        return self.dirs.at(@intFromEnum(index)).*;
-    }
-
-    pub fn dirIndexFromPath(self: *Site, path: []const u8) !DirIndex {
-        self.path_mutex.lock();
-        defer self.path_mutex.unlock();
-
-        const get_or_put = try self.dir_paths.getOrPut(
-            // We shouldn't use the arena allocator for the hash map, so any
-            // space it frees when it reshuffles data on insert is reclaimed.
-            self.arena_state.child_allocator,
-            path,
-        );
-        if (!get_or_put.found_existing) {
-            const new_index = self.dirs.count();
-            const arena = self.allocator();
-            const owned_path = try arena.dupe(u8, path);
-            get_or_put.key_ptr.* = owned_path;
-            get_or_put.value_ptr.* = @enumFromInt(new_index);
-            (try self.dirs.addOne(arena)).* = owned_path;
-        }
-        return get_or_put.value_ptr.*;
+        return index;
     }
 
     pub const Rule = struct {
@@ -184,6 +175,4 @@ pub const Site = struct {
     };
 
     pub const PageIndex = enum(u32) { _ };
-
-    pub const DirIndex = enum(u32) { _ };
 };

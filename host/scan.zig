@@ -9,17 +9,19 @@ const fail = @import("fail.zig");
 const WorkQueue = @import("work.zig").WorkQueue;
 const platform = @import("platform.zig");
 const Site = @import("site.zig").Site;
+const Watcher = @import("watch.zig").Watcher;
 const RocList = @import("roc/list.zig").RocList;
 
 pub fn scan(
     tmp_arena: std.mem.Allocator,
     work: *WorkQueue,
     site: *Site,
+    watcher: *Watcher,
     source_root: std.fs.Dir,
-    index: Site.DirIndex,
+    index: Watcher.DirIndex,
     unmatched_paths: *std.ArrayList([]const u8),
 ) !void {
-    const dir_path = site.dirPathFromIndex(index);
+    const dir_path = watcher.dirPath(index);
     const dir = if (dir_path.len == 0) blk: {
         break :blk source_root;
     } else blk: {
@@ -49,7 +51,7 @@ pub fn scan(
                 }
             },
             .directory => {
-                const dir_index = try site.dirIndexFromPath(path);
+                const dir_index = try watcher.watchDir(path);
                 try work.push(.{ .scan_dir = dir_index });
             },
             .block_device,

@@ -4,6 +4,7 @@ const RocStr = @import("roc/str.zig").RocStr;
 const RocList = @import("roc/list.zig").RocList;
 const fail = @import("fail.zig");
 const Site = @import("site.zig").Site;
+const Watcher = @import("watch.zig").Watcher;
 const glob = @import("glob.zig");
 const serve = @import("serve.zig").serve;
 const platform = @import("platform.zig");
@@ -92,23 +93,45 @@ pub fn run() !void {
 
     // (3) Scan the project to find all the source files and generate site.
     var work = WorkQueue.init(gpa);
+    defer work.deinit();
+    var watcher = try Watcher.init(gpa);
+    defer watcher.deinit();
     if (site.rules.len == 0 and should_bootstrap) {
         try bootstrap(gpa, site, &work);
     } else {
         // Queue a job to scan the root source directory. This will result in
         // the entire project getting scanned and output generated.
-        const root_index = try site.dirIndexFromPath("");
+        const root_index = try watcher.watchDir("");
         try work.push(.{ .scan_dir = root_index });
     }
-    try runWorkQueue(gpa, site, &work);
+    try runWorkQueue(gpa, site, &watcher, &work);
 
     const stdout = std.io.getStdOut().writer();
     try stdout.print("Generated site in {d}ms\n", .{timer.read() / 1_000_000});
 
     // (4) Serve the output files.
     const thread = try std.Thread.spawn(.{}, serve, .{site});
-    // TODO: instead of waiting for the thread, watch for file changes.
-    thread.join();
+    thread.detach();
+
+    // (5) Watch for changes.
+    while (true) {
+        const change = try watcher.next();
+        if (change.filename.len == 0) {
+            try work.push(.{ .scan_dir = change.dir });
+        } else {
+            var buffer: [std.fs.max_path_bytes]u8 = undefined;
+            const dir_path = watcher.dirPath(change.dir);
+            const source_path = try std.fmt.bufPrint(
+                &buffer,
+                "{s}/{s}",
+                .{ dir_path, change.filename },
+            );
+            if (try site.pageIndex(source_path)) |page_index| {
+                try work.push(.{ .scan_file = page_index });
+            }
+        }
+        try runWorkQueue(gpa, site, &watcher, &work);
+    }
 }
 
 fn fromRocStr(allocator: std.mem.Allocator, roc_pattern: RocStr) ![]const u8 {
@@ -159,6 +182,7 @@ pub fn getPagesMatchingPattern(
 pub fn runWorkQueue(
     base_allocator: std.mem.Allocator,
     site: *Site,
+    watcher: *Watcher,
     work: *WorkQueue,
 ) !void {
     var arena_state = std.heap.ArenaAllocator.init(base_allocator);
@@ -193,6 +217,7 @@ pub fn runWorkQueue(
                     arena,
                     work,
                     site,
+                    watcher,
                     source_root,
                     job.scan_dir,
                     &unmatched_paths,
