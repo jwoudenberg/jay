@@ -21,7 +21,7 @@ pub fn scan(
     index: Watcher.DirIndex,
     unmatched_paths: *std.ArrayList([]const u8),
 ) !void {
-    const dir_path = watcher.dirPath(index);
+    const dir_path = try watcher.dirPath(index);
     const dir = if (dir_path.len == 0) blk: {
         break :blk source_root;
     } else blk: {

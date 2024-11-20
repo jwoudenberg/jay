@@ -94,7 +94,7 @@ pub fn run() !void {
     // (3) Scan the project to find all the source files and generate site.
     var work = WorkQueue.init(gpa);
     defer work.deinit();
-    var watcher = try Watcher.init(gpa);
+    var watcher = try Watcher.init(gpa, try site.openSourceRoot(.{}));
     defer watcher.deinit();
     if (site.rules.len == 0 and should_bootstrap) {
         try bootstrap(gpa, site, &work);
@@ -120,7 +120,7 @@ pub fn run() !void {
             try work.push(.{ .scan_dir = change.dir });
         } else {
             var buffer: [std.fs.max_path_bytes]u8 = undefined;
-            const dir_path = watcher.dirPath(change.dir);
+            const dir_path = try watcher.dirPath(change.dir);
             const source_path = try std.fmt.bufPrint(
                 &buffer,
                 "{s}/{s}",
