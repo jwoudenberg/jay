@@ -1,6 +1,7 @@
 const std = @import("std");
 const Site = @import("site.zig").Site;
 const WorkQueue = @import("work.zig").WorkQueue;
+const fanotify = @import("fanotify.zig");
 
 pub const Watcher = struct {
     pub fn init(allocator: std.mem.Allocator) !Watcher {
