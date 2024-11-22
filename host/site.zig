@@ -39,7 +39,7 @@ pub const Site = struct {
         const argv0_abs = try std.fs.cwd().realpathAlloc(arena, argv0);
         const source_root = std.fs.path.dirname(argv0_abs) orelse "/";
         const roc_main = std.fs.path.basename(argv0_abs);
-        const ignore_patterns = try arena.dupe([]const u8, &[3][]const u8{
+        const ignore_patterns = try arena.dupe([]const u8, &[implicit_ignore_pattern_count][]const u8{
             output_root,
             roc_main,
             std.fs.path.stem(roc_main),
@@ -62,6 +62,12 @@ pub const Site = struct {
             .dir_paths = std.StringHashMapUnmanaged(DirIndex){},
             .dirs = std.SegmentedList([]const u8, 0){},
         };
+    }
+
+    const implicit_ignore_pattern_count = 3;
+
+    pub fn user_ignore_patterns(self: *const Site) []const []const u8 {
+        return self.ignore_patterns[implicit_ignore_pattern_count..];
     }
 
     pub fn allocator(self: *Site) std.mem.Allocator {

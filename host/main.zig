@@ -92,7 +92,7 @@ pub fn run() !void {
 
     // (3) Scan the project to find all the source files and generate site.
     var work = WorkQueue.init(gpa);
-    if (site.rules.len == 1 and should_bootstrap) {
+    if (site.rules.len == 0 and should_bootstrap) {
         try bootstrap(gpa, site, &work);
     } else {
         // Queue a job to scan the root source directory. This will result in

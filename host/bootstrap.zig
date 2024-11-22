@@ -305,9 +305,10 @@ fn generateCodeForRules(site: *const Site, source_root: std.fs.Dir) !void {
     try writer.writeAll(
         \\    Pages.ignore [
     );
-    for (site.ignore_patterns, 0..) |pattern, index| {
+    const user_ignore_patterns = site.user_ignore_patterns();
+    for (user_ignore_patterns, 0..) |pattern, index| {
         try writer.print("\"{s}\"", .{pattern});
-        if (index < site.ignore_patterns.len - 1) {
+        if (index < user_ignore_patterns.len - 1) {
             try writer.writeAll(", ");
         }
     }
@@ -382,7 +383,13 @@ test generateCodeForRules {
         },
     };
     site.rules = rules[0..];
-    site.ignore_patterns = ([_][]const u8{ ".git", ".gitignore" })[0..];
+    site.ignore_patterns = ([_][]const u8{
+        "build.roc",
+        "build",
+        "output",
+        ".git",
+        ".gitignore",
+    })[0..];
 
     try generateCodeForRules(&site, tmpdir.dir);
 

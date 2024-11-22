@@ -36,7 +36,7 @@ In a directory with some source files, create a file `build.roc` with the follow
 #!/usr/bin/env roc
 app [main] { pf: platform "github.com/jwoudenberg/roc-static-site" }
 
-import Pages
+import pf.Pages
 
 main = Pages.bootstrap
 ```
