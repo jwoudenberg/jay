@@ -9,7 +9,7 @@ const glob = @import("glob.zig");
 const serve = @import("serve.zig").serve;
 const platform = @import("platform.zig");
 const bootstrap = @import("bootstrap.zig").bootstrap;
-const scan = @import("scan.zig").scan;
+const scan = @import("scan.zig");
 const WorkQueue = @import("work.zig").WorkQueue;
 const generate = @import("generate.zig").generate;
 
@@ -96,15 +96,16 @@ pub fn run() !void {
     defer work.deinit();
     var watcher = try Watcher.init(gpa, try site.openSourceRoot(.{}));
     defer watcher.deinit();
+
     if (site.rules.len == 0 and should_bootstrap) {
-        try bootstrap(gpa, site, &work);
+        try bootstrap(gpa, site, &watcher, &work);
     } else {
         // Queue a job to scan the root source directory. This will result in
         // the entire project getting scanned and output generated.
         const root_index = try watcher.watchDir("");
         try work.push(.{ .scan_dir = root_index });
+        try doWork(gpa, site, &watcher, &work);
     }
-    try runWorkQueue(gpa, site, &watcher, &work);
 
     const stdout = std.io.getStdOut().writer();
     try stdout.print("Generated site in {d}ms\n", .{timer.read() / 1_000_000});
@@ -130,7 +131,7 @@ pub fn run() !void {
                 try work.push(.{ .scan_file = page_index });
             }
         }
-        try runWorkQueue(gpa, site, &watcher, &work);
+        try doWork(gpa, site, &watcher, &work);
     }
 }
 
@@ -179,7 +180,7 @@ pub fn getPagesMatchingPattern(
     return RocList.fromSlice(platform.Page, try results.toOwnedSlice(), true);
 }
 
-pub fn runWorkQueue(
+pub fn doWork(
     base_allocator: std.mem.Allocator,
     site: *Site,
     watcher: *Watcher,
@@ -207,20 +208,26 @@ pub fn runWorkQueue(
 
     while (work.pop()) |job| {
         switch (job) {
-            .scan_file => unreachable,
+            .scan_file => {
+                try scan.addFileToRule(
+                    arena,
+                    site,
+                    source_root,
+                    job.scan_file,
+                    &unmatched_paths,
+                );
+            },
             .generate_page => {
                 const page = site.getPage(job.generate_page);
                 try generate(arena, site, source_root, output_dir, page);
             },
             .scan_dir => {
-                try scan(
-                    arena,
+                try scan.scan(
                     work,
                     site,
                     watcher,
                     source_root,
                     job.scan_dir,
-                    &unmatched_paths,
                 );
             },
         }

@@ -109,8 +109,17 @@ pub const Site = struct {
             const new_index: PageIndex = @enumFromInt(self.pages.count());
             _ = try self.pages.addOne(self.allocator());
             get_or_put.value_ptr.* = new_index;
+            get_or_put.key_ptr.* = try self.allocator().dupe(u8, source_path);
             return new_index;
         }
+    }
+
+    pub fn getPath(self: *Site, index: PageIndex) ![]const u8 {
+        // TODO: avoid iteration here.
+        var iterator = self.source_paths.iterator();
+        while (iterator.next()) |entry| {
+            if (entry.value_ptr.* == index) return entry.key_ptr.*;
+        } else return error.NoSourcePathForPageIndex;
     }
 
     pub fn addPage(self: *Site, page: Page) !PageIndex {

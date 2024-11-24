@@ -13,13 +13,11 @@ const Watcher = @import("watch.zig").Watcher;
 const RocList = @import("roc/list.zig").RocList;
 
 pub fn scan(
-    tmp_arena: std.mem.Allocator,
     work: *WorkQueue,
     site: *Site,
     watcher: *Watcher,
     source_root: std.fs.Dir,
     index: Watcher.DirIndex,
-    unmatched_paths: *std.ArrayList([]const u8),
 ) !void {
     const dir_path = try watcher.dirPath(index);
     const dir = if (dir_path.len == 0) blk: {
@@ -30,24 +28,19 @@ pub fn scan(
     var iterator = dir.iterateAssumeFirstIteration();
     while (true) {
         const entry = try iterator.next() orelse break;
+        var buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;
         const path = if (dir_path.len == 0) blk: {
             break :blk entry.name;
         } else blk: {
-            break :blk try std.fmt.allocPrint(tmp_arena, "{s}/{s}", .{ dir_path, entry.name });
+            break :blk try std.fmt.bufPrint(&buffer, "{s}/{s}", .{ dir_path, entry.name });
         };
         if (glob.matchAny(site.ignore_patterns, path)) continue;
 
         switch (entry.kind) {
             .file => {
-                const opt_page_index = try addFileToRule(
-                    tmp_arena,
-                    site,
-                    source_root,
-                    path,
-                    unmatched_paths,
-                );
+                const opt_page_index = try site.pageIndex(path);
                 if (opt_page_index) |page_index| {
-                    try work.push(.{ .generate_page = page_index });
+                    try work.push(.{ .scan_file = page_index });
                 }
             },
             .directory => {
@@ -78,66 +71,18 @@ pub fn scan(
     }
 }
 
-pub const SourceFileWalker = struct {
-    const Self = @This();
-
-    walker: std.fs.Dir.Walker,
-    ignore_patterns: []const []const u8,
-
-    pub fn init(
-        allocator: std.mem.Allocator,
-        site: *Site,
-        source_root: std.fs.Dir,
-    ) !Self {
-        return Self{
-            .walker = try source_root.walk(allocator),
-            .ignore_patterns = site.ignore_patterns,
-        };
-    }
-
-    pub fn deinit(self: *Self) void {
-        self.walker.deinit();
-    }
-
-    pub fn next(self: *Self) !?[]const u8 {
-        while (true) {
-            const entry = try self.walker.next() orelse return null;
-
-            const ignore = glob.matchAny(self.ignore_patterns, entry.path);
-            if (ignore) {
-                if (entry.kind == .directory) self.skip();
-                continue;
-            }
-
-            if (entry.kind != .file) continue;
-            return entry.path;
-        }
-    }
-
-    pub fn skip(self: *Self) void {
-        // Reaching into the walker internals here to skip an entire
-        // directory, similar to how the walker implementation does
-        // this itself in a couple of places. This avoids needing to
-        // iterate through potentially large amounts of ignored files,
-        // for instance a .git directory.
-        var item = self.walker.stack.pop();
-        if (self.walker.stack.items.len != 0) {
-            item.iter.dir.close();
-        }
-    }
-};
-
-fn addFileToRule(
+pub fn addFileToRule(
     tmp_arena: std.mem.Allocator,
     site: *Site,
     source_root: std.fs.Dir,
-    source_path: []const u8,
+    index: Site.PageIndex,
     unmatched_paths: *std.ArrayList([]const u8),
-) !?Site.PageIndex {
+) !void {
     // TODO: detect patterns that are not matched by any file.
     var matched_rules = std.ArrayList(usize).init(tmp_arena);
     defer matched_rules.deinit();
 
+    const source_path = try site.getPath(index);
     var page_index: ?Site.PageIndex = null;
     for (site.rules, 0..) |rule, rule_index| {
         if (!glob.matchAny(rule.patterns, source_path)) continue;
@@ -170,8 +115,6 @@ fn addFileToRule(
             , .{ source_path, matched_rules.items });
         },
     }
-
-    return page_index;
 }
 
 pub fn addPath(

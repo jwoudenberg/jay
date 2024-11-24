@@ -2,11 +2,14 @@
 // project, based on the markdown, html, and other source files present in
 // the project directory.
 
+const builtin = @import("builtin");
 const std = @import("std");
 const Site = @import("site.zig").Site;
 const fail = @import("fail.zig");
 const scan = @import("scan.zig");
+const Watcher = @import("watch.zig").Watcher;
 const WorkQueue = @import("work.zig").WorkQueue;
+const generate = @import("generate.zig").generate;
 
 // When running the bootstrap script we have to guess which files the user
 // might want to be ignored. This is our list of such guesses.
@@ -19,18 +22,20 @@ const bootstrap_ignore_patterns = [_][]const u8{
 pub fn bootstrap(
     gpa: std.mem.Allocator,
     site: *Site,
+    watcher: *Watcher,
     work: *WorkQueue,
 ) !void {
     var source_root = try site.openSourceRoot(.{ .iterate = true });
     defer source_root.close();
 
-    try bootstrapRules(gpa, site, work, source_root);
+    try bootstrapRules(gpa, site, watcher, work, source_root);
     try generateCodeForRules(site, source_root);
 }
 
 fn bootstrapRules(
     gpa: std.mem.Allocator,
     site: *Site,
+    watcher: *Watcher,
     work: *WorkQueue,
     source_root: std.fs.Dir,
 ) !void {
@@ -38,11 +43,9 @@ fn bootstrapRules(
     var tmp_arena_state = std.heap.ArenaAllocator.init(gpa);
     defer tmp_arena_state.deinit();
     const tmp_arena = tmp_arena_state.allocator();
-    var ignore_patterns = std.ArrayList([]const u8).fromOwnedSlice(
-        tmp_arena,
-        try tmp_arena.dupe([]const u8, site.ignore_patterns),
-    );
-    defer ignore_patterns.deinit();
+    var ignore_patterns = std.ArrayListUnmanaged([]const u8){};
+    try ignore_patterns.appendSlice(tmp_arena, site.ignore_patterns);
+    defer ignore_patterns.deinit(tmp_arena);
 
     // We're going to scan for files and create rules to contain those files,
     // but we don't know what rules we'll create upfront. Possibilities are
@@ -56,50 +59,80 @@ fn bootstrapRules(
     const processing_type_count = 8 * @sizeOf(Site.Processing);
     var pre_rules: [processing_type_count]?PreRule = std.mem.zeroes([processing_type_count]?PreRule);
 
-    var source_iterator = try scan.SourceFileWalker.init(tmp_arena, site, source_root);
-    defer source_iterator.deinit();
-    iter: while (try source_iterator.next()) |path| {
-        for (bootstrap_ignore_patterns) |bootstrap_ignore_pattern| {
-            if (std.mem.eql(u8, bootstrap_ignore_pattern, path)) {
-                try ignore_patterns.append(try site_arena.dupe(u8, path));
-                source_iterator.skip();
-                continue :iter;
-            }
+    // Clear output directory if it already exists.
+    source_root.deleteTree(site.output_root) catch |err| {
+        if (err != error.NotDir) {
+            return err;
         }
+    };
+    try source_root.makeDir(site.output_root);
+    var output_dir = try source_root.openDir(site.output_root, .{});
+    defer output_dir.close();
 
-        const processing: Site.Processing = if (scan.isMarkdown(path)) .markdown else .none;
-        const pre_rule_index = @intFromEnum(processing);
+    // Queue a job to scan the root source directory. This will result in
+    // the entire project getting scanned and output generated.
+    const root_index = try watcher.watchDir("");
+    try work.push(.{ .scan_dir = root_index });
 
-        if (pre_rules[pre_rule_index] == null) {
-            var rule_index: usize = 0;
-            for (pre_rules) |pre_rule| {
-                if (pre_rule != null) rule_index += 1;
-            }
-            pre_rules[pre_rule_index] = PreRule{
-                .rule_index = rule_index,
-                .patterns = std.ArrayList([]const u8).init(tmp_arena),
-            };
+    // TODO: reinit arena after each iteration.
+    while (work.pop()) |job| {
+        switch (job) {
+            .scan_file => {
+                const source_path = try site.getPath(job.scan_file);
+
+                for (bootstrap_ignore_patterns) |bootstrap_ignore_pattern| {
+                    if (std.mem.eql(u8, bootstrap_ignore_pattern, source_path)) {
+                        try ignore_patterns.append(tmp_arena, try site_arena.dupe(u8, source_path));
+                        continue;
+                    }
+                }
+
+                const processing: Site.Processing = if (scan.isMarkdown(source_path)) .markdown else .none;
+                const pre_rule_index = @intFromEnum(processing);
+
+                if (pre_rules[pre_rule_index] == null) {
+                    var rule_index: usize = 0;
+                    for (pre_rules) |pre_rule| {
+                        if (pre_rule != null) rule_index += 1;
+                    }
+                    pre_rules[pre_rule_index] = PreRule{
+                        .rule_index = rule_index,
+                        .patterns = std.ArrayList([]const u8).init(tmp_arena),
+                    };
+                }
+
+                if (pre_rules[pre_rule_index]) |*pre_rule| {
+                    const page_index = try scan.addPath(
+                        tmp_arena,
+                        site,
+                        source_root,
+                        pre_rule.rule_index,
+                        processing,
+                        try site_arena.dupe(u8, source_path),
+                    );
+                    try work.push(.{ .generate_page = page_index });
+
+                    const new_pattern = try patternForPath(tmp_arena, source_path);
+                    for (pre_rule.patterns.items) |existing_pattern| {
+                        if (std.mem.eql(u8, existing_pattern, new_pattern)) break;
+                    } else {
+                        try pre_rule.patterns.append(try site_arena.dupe(u8, new_pattern));
+                    }
+                } else return error.UnexpectedMissingPreRule;
+            },
+            .generate_page => {
+                // TODO: fix page generation on bootstrap
+            },
+            .scan_dir => {
+                try scan.scan(
+                    work,
+                    site,
+                    watcher,
+                    source_root,
+                    job.scan_dir,
+                );
+            },
         }
-
-        if (pre_rules[pre_rule_index]) |*pre_rule| {
-            const page_index = try scan.addPath(
-                tmp_arena,
-                site,
-                source_root,
-                pre_rule.rule_index,
-                processing,
-                try site_arena.dupe(u8, path),
-            );
-            try work.push(.{ .generate_page = page_index });
-
-            const new_pattern = try patternForPath(tmp_arena, path);
-            defer tmp_arena.free(new_pattern);
-            for (pre_rule.patterns.items) |existing_pattern| {
-                if (std.mem.eql(u8, existing_pattern, new_pattern)) break;
-            } else {
-                try pre_rule.patterns.append(try site_arena.dupe(u8, new_pattern));
-            }
-        } else return error.UnexpectedMissingPreRule;
     }
 
     var rules = try site_arena.alloc(Site.Rule, processing_type_count);
@@ -142,8 +175,11 @@ test "bootstrapRules" {
     try tmpdir.dir.writeFile(.{ .sub_path = ".gitignore", .data = "" });
 
     var work = WorkQueue.init(std.testing.allocator);
+    var watcher = try Watcher.init(std.testing.allocator, tmpdir.dir);
+    defer watcher.deinit();
+
     defer work.deinit();
-    try bootstrapRules(std.testing.allocator, &site, &work, tmpdir.dir);
+    try bootstrapRules(std.testing.allocator, &site, &watcher, &work, tmpdir.dir);
 
     try std.testing.expectEqual(4, site.ignore_patterns.len);
     try std.testing.expectEqualStrings("output", site.ignore_patterns[0]);
