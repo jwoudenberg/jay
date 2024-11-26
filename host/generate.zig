@@ -12,21 +12,23 @@ const c = @cImport({
 
 pub fn generate(
     arena: std.mem.Allocator,
-    site: *Site,
     source_root: std.fs.Dir,
     output_dir: std.fs.Dir,
     page: *Site.Page,
 ) !void {
-    if (std.fs.path.dirname(page.output_path[1..])) |dir| try output_dir.makePath(dir);
-    const rule = site.rules[page.rule_index];
-    const output = try output_dir.createFile(page.output_path[1..], .{
+    page.mutex.lock();
+    defer page.mutex.unlock();
+
+    const output_path_bytes = page.output_path.bytes();
+    if (std.fs.path.dirname(output_path_bytes)) |dir| try output_dir.makePath(dir);
+    const output = try output_dir.createFile(output_path_bytes, .{
         .truncate = true,
         .exclusive = true,
     });
     defer output.close();
     var counting_writer = std.io.countingWriter(output.writer());
     var writer = counting_writer.writer();
-    try writeFile(arena, source_root, &writer, rule, page);
+    try writeFile(arena, source_root, &writer, page);
     page.output_len = counting_writer.bytes_written;
 }
 
@@ -34,10 +36,9 @@ fn writeFile(
     arena: std.mem.Allocator,
     source_root: std.fs.Dir,
     writer: anytype,
-    rule: Site.Rule,
     page: *Site.Page,
 ) !void {
-    switch (rule.processing) {
+    switch (page.processing) {
         .none => {
             // I'd like to use the below, but get the following error when I do:
             //     hidden symbol `__dso_handle' isn't defined
@@ -47,21 +48,21 @@ fn writeFile(
             var fifo = std.fifo.LinearFifo(u8, .Slice).init(buffer);
             defer fifo.deinit();
 
-            const source = try source_root.openFile(page.source_path, .{});
+            const source = try source_root.openFile(page.source_path.bytes(), .{});
             defer source.close();
             try fifo.pump(source.reader(), writer);
         },
         .xml => {
             // TODO: figure out what to do with files larger than this.
-            const source = try source_root.readFileAlloc(arena, page.source_path, 1024 * 1024);
-            const contents = try runPageTransforms(arena, source, rule, page);
+            const source = try source_root.readFileAlloc(arena, page.source_path.bytes(), 1024 * 1024);
+            const contents = try runPageTransforms(arena, source, page);
             try writeRocContents(contents, source, writer);
         },
         .markdown => {
             // TODO: figure out what to do with files larger than this.
             const raw_source = try source_root.readFileAlloc(
                 arena,
-                page.source_path,
+                page.source_path.bytes(),
                 1024 * 1024,
             );
             const markdown = raw_source[page.frontmatter.len..];
@@ -72,7 +73,7 @@ fn writeFile(
             ) orelse return error.OutOfMemory;
             defer std.c.free(html);
             const source = std.mem.span(html);
-            const contents = try runPageTransforms(arena, source, rule, page);
+            const contents = try runPageTransforms(arena, source, page);
             try writeRocContents(contents, source, writer);
         },
     }
@@ -81,10 +82,9 @@ fn writeFile(
 fn runPageTransforms(
     arena: std.mem.Allocator,
     source: []const u8,
-    rule: Site.Rule,
     page: *Site.Page,
 ) !RocList {
-    const tags = try xml.parse(arena, source, rule.replaceTags);
+    const tags = try xml.parse(arena, source, page.replace_tags);
     var roc_tags = std.ArrayList(platform.Tag).init(arena);
     for (tags) |tag| {
         try roc_tags.append(platform.Tag{
@@ -98,7 +98,7 @@ fn runPageTransforms(
     }
     const roc_page = platform.Page{
         .meta = RocList.fromSlice(u8, page.frontmatter, false),
-        .path = RocStr.fromSlice(page.web_path),
+        .path = RocStr.fromSlice(page.web_path.bytes()),
         .ruleIndex = @as(u32, @intCast(page.rule_index)),
         .tags = RocList.fromSlice(platform.Tag, try roc_tags.toOwnedSlice(), true),
         .len = @as(u32, @intCast(source.len)),

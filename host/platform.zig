@@ -12,7 +12,7 @@ pub extern fn roc__runPipelineForHost_1_exposed_generic(*RocList, *const Page) c
 
 pub const Rule = extern struct {
     patterns: RocList,
-    replaceTags: RocList,
+    replace_tags: RocList,
     processing: Processing,
 };
 

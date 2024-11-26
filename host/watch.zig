@@ -1,16 +1,20 @@
 const std = @import("std");
 const Site = @import("site.zig").Site;
 const WorkQueue = @import("work.zig").WorkQueue;
+const Path = @import("path.zig").Path;
 const fanotify = @import("fanotify.zig");
 
 pub const Watcher = struct {
+    paths: *Path.Registry,
     fan_fd: std.posix.fd_t,
     root_dir: std.fs.Dir,
     allocator: std.mem.Allocator,
-    index_by_path: std.StringHashMapUnmanaged(DirIndex),
-    path_by_index: std.AutoHashMapUnmanaged(DirIndex, []const u8),
 
-    pub fn init(allocator: std.mem.Allocator, root_dir: std.fs.Dir) !Watcher {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        paths: *Path.Registry,
+        root_dir: std.fs.Dir,
+    ) !Watcher {
         const fan_fd = try fanotify.fanotify_init(.{
             .CLASS = .NOTIF,
             .CLOEXEC = true,
@@ -21,40 +25,26 @@ pub const Watcher = struct {
         }, 0);
 
         return Watcher{
+            .paths = paths,
             .root_dir = root_dir,
             .fan_fd = fan_fd,
             .allocator = allocator,
-            .index_by_path = std.StringHashMapUnmanaged(DirIndex){},
-            .path_by_index = std.AutoHashMapUnmanaged(DirIndex, []const u8){},
         };
     }
 
     pub fn deinit(self: *Watcher) void {
-        self.index_by_path.deinit(self.allocator);
-        self.path_by_index.deinit(self.allocator);
+        _ = self;
     }
 
-    pub fn watchDir(self: *Watcher, path: []const u8) !DirIndex {
-        // TODO: use directory file descriptors as DirIndex.
-        const get_or_put = try self.index_by_path.getOrPut(self.allocator, path);
-        if (get_or_put.found_existing) return get_or_put.value_ptr.*;
-
-        const owned_path = try self.allocator.dupe(u8, path);
-        const dir_index: DirIndex = @enumFromInt(self.path_by_index.count());
-        get_or_put.key_ptr.* = owned_path;
-        get_or_put.value_ptr.* = dir_index;
-        try self.path_by_index.put(self.allocator, dir_index, owned_path);
-
+    pub fn watchDir(self: *Watcher, path: Path) !void {
         // TODO: root project directory appears not to be marked correctly.
         try fanotify.fanotify_mark(
             self.fan_fd,
             .{ .ADD = true, .ONLYDIR = true },
             fan_mask,
             self.root_dir.fd,
-            if (path.len == 0) null else path,
+            if (path.bytes().len == 0) null else path.bytes(),
         );
-
-        return dir_index;
     }
 
     pub fn next(self: *Watcher) !Change {
@@ -72,8 +62,8 @@ pub const Watcher = struct {
             if (meta[0].mask.Q_OVERFLOW) {
                 std.debug.print("fanotify queue overflowed. Rescanning everything.\n", .{});
                 return Change{
-                    .dir = self.index_by_path.get("").?,
-                    .filename = "",
+                    .is_dir = true,
+                    .path = try self.paths.intern(""),
                 };
             }
             const fid: *align(1) fanotify.fanotify.event_info_fid = @ptrCast(meta + 1);
@@ -96,15 +86,9 @@ pub const Watcher = struct {
         unreachable;
     }
 
-    pub fn dirPath(self: *Watcher, index: DirIndex) ![]const u8 {
-        return self.path_by_index.get(index) orelse return error.MissingDirEntry;
-    }
-
-    pub const DirIndex = enum(u32) { _ };
-
     const Change = struct {
-        dir: DirIndex,
-        filename: []const u8,
+        path: Path,
+        is_dir: bool,
     };
 
     const fan_mask: fanotify.fanotify.MarkMask = .{

@@ -9,6 +9,7 @@ const fail = @import("fail.zig");
 const scan = @import("scan.zig");
 const Watcher = @import("watch.zig").Watcher;
 const WorkQueue = @import("work.zig").WorkQueue;
+const Path = @import("path.zig").Path;
 const generate = @import("generate.zig").generate;
 
 // When running the bootstrap script we have to guess which files the user
@@ -21,6 +22,7 @@ const bootstrap_ignore_patterns = [_][]const u8{
 
 pub fn bootstrap(
     gpa: std.mem.Allocator,
+    paths: *Path.Registry,
     site: *Site,
     watcher: *Watcher,
     work: *WorkQueue,
@@ -28,12 +30,13 @@ pub fn bootstrap(
     var source_root = try site.openSourceRoot(.{ .iterate = true });
     defer source_root.close();
 
-    try bootstrapRules(gpa, site, watcher, work, source_root);
+    try bootstrapRules(gpa, paths, site, watcher, work, source_root);
     try generateCodeForRules(site, source_root);
 }
 
 fn bootstrapRules(
     gpa: std.mem.Allocator,
+    paths: *Path.Registry,
     site: *Site,
     watcher: *Watcher,
     work: *WorkQueue,
@@ -71,23 +74,23 @@ fn bootstrapRules(
 
     // Queue a job to scan the root source directory. This will result in
     // the entire project getting scanned and output generated.
-    const root_index = try watcher.watchDir("");
-    try work.push(.{ .scan_dir = root_index });
+    try work.push(.{ .scan_dir = try paths.intern("") });
 
     // TODO: reinit arena after each iteration.
-    while (work.pop()) |job| {
+    jobs_loop: while (work.pop()) |job| {
         switch (job) {
             .scan_file => {
-                const source_path = try site.getPath(job.scan_file);
+                const source_path = job.scan_file;
+                const source_path_bytes = source_path.bytes();
 
                 for (bootstrap_ignore_patterns) |bootstrap_ignore_pattern| {
-                    if (std.mem.eql(u8, bootstrap_ignore_pattern, source_path)) {
-                        try ignore_patterns.append(tmp_arena, try site_arena.dupe(u8, source_path));
-                        continue;
+                    if (std.mem.eql(u8, bootstrap_ignore_pattern, source_path_bytes)) {
+                        try ignore_patterns.append(tmp_arena, try site_arena.dupe(u8, source_path_bytes));
+                        continue :jobs_loop;
                     }
                 }
 
-                const processing: Site.Processing = if (scan.isMarkdown(source_path)) .markdown else .none;
+                const processing: Site.Processing = if (scan.isMarkdown(source_path_bytes)) .markdown else .none;
                 const pre_rule_index = @intFromEnum(processing);
 
                 if (pre_rules[pre_rule_index] == null) {
@@ -102,17 +105,20 @@ fn bootstrapRules(
                 }
 
                 if (pre_rules[pre_rule_index]) |*pre_rule| {
-                    const page_index = try scan.addPath(
+                    const page = try scan.addPath(
                         tmp_arena,
+                        paths,
                         site,
                         source_root,
                         pre_rule.rule_index,
                         processing,
-                        try site_arena.dupe(u8, source_path),
+                        &[0][]const u8{},
+                        source_path,
                     );
-                    try work.push(.{ .generate_page = page_index });
 
-                    const new_pattern = try patternForPath(tmp_arena, source_path);
+                    try work.push(.{ .generate_file = page.source_path });
+
+                    const new_pattern = try patternForPath(tmp_arena, source_path_bytes);
                     for (pre_rule.patterns.items) |existing_pattern| {
                         if (std.mem.eql(u8, existing_pattern, new_pattern)) break;
                     } else {
@@ -120,12 +126,17 @@ fn bootstrapRules(
                     }
                 } else return error.UnexpectedMissingPreRule;
             },
-            .generate_page => {
-                // TODO: fix page generation on bootstrap
+            .generate_file => {
+                const page = site.getPage(job.generate_file) orelse return error.CantGenerateMissingPage;
+                // TODO: figure out how to include generation in tests.
+                if (!builtin.is_test) {
+                    try generate(tmp_arena, source_root, output_dir, page);
+                }
             },
             .scan_dir => {
-                try scan.scan(
+                try scan.scanDir(
                     work,
+                    paths,
                     site,
                     watcher,
                     source_root,
@@ -144,7 +155,7 @@ fn bootstrapRules(
         rules[pre_rule.rule_index] = Site.Rule{
             .patterns = try site_arena.dupe([]const u8, pre_rule.patterns.items),
             .processing = @enumFromInt(processing),
-            .replaceTags = &.{},
+            .replace_tags = &.{},
         };
     }
     site.ignore_patterns = try site_arena.dupe([]const u8, ignore_patterns.items);
@@ -175,11 +186,13 @@ test "bootstrapRules" {
     try tmpdir.dir.writeFile(.{ .sub_path = ".gitignore", .data = "" });
 
     var work = WorkQueue.init(std.testing.allocator);
-    var watcher = try Watcher.init(std.testing.allocator, tmpdir.dir);
+    defer work.deinit();
+    var paths = Path.Registry.init(std.testing.allocator);
+    defer paths.deinit();
+    var watcher = try Watcher.init(std.testing.allocator, &paths, tmpdir.dir);
     defer watcher.deinit();
 
-    defer work.deinit();
-    try bootstrapRules(std.testing.allocator, &site, &watcher, &work, tmpdir.dir);
+    try bootstrapRules(std.testing.allocator, &paths, &site, &watcher, &work, tmpdir.dir);
 
     try std.testing.expectEqual(4, site.ignore_patterns.len);
     try std.testing.expectEqualStrings("output", site.ignore_patterns[0]);
@@ -207,41 +220,39 @@ test "bootstrapRules" {
     try std.testing.expectEqualStrings("static_only/*.css", static_patterns[1]);
     try std.testing.expectEqualStrings("static_only/*.png", static_patterns[2]);
 
-    try std.testing.expectEqual(7, site.web_paths.count());
-
-    const one_md = site.pages.at(@intFromEnum(site.web_paths.get("/markdown_only/one").?));
-    try std.testing.expectEqualStrings(one_md.source_path, "markdown_only/one.md");
-    try std.testing.expectEqualStrings(one_md.output_path, "/markdown_only/one.html");
+    const one_md = site.getPage(try paths.intern("markdown_only/one")).?;
+    try std.testing.expectEqualStrings("markdown_only/one.md", one_md.source_path.bytes());
+    try std.testing.expectEqualStrings("markdown_only/one.html", one_md.output_path.bytes());
     try std.testing.expectEqual(one_md.rule_index, 0);
 
-    const two_md = site.pages.at(@intFromEnum(site.web_paths.get("/markdown_only/two").?));
-    try std.testing.expectEqualStrings(two_md.source_path, "markdown_only/two.md");
-    try std.testing.expectEqualStrings(two_md.output_path, "/markdown_only/two.html");
+    const two_md = site.getPage(try paths.intern("markdown_only/two")).?;
+    try std.testing.expectEqualStrings("markdown_only/two.md", two_md.source_path.bytes());
+    try std.testing.expectEqualStrings("markdown_only/two.html", two_md.output_path.bytes());
     try std.testing.expectEqual(two_md.rule_index, 0);
 
-    const main_css = site.pages.at(@intFromEnum(site.web_paths.get("/static_only/main.css").?));
-    try std.testing.expectEqualStrings(main_css.source_path, "static_only/main.css");
-    try std.testing.expectEqualStrings(main_css.output_path, "/static_only/main.css");
+    const main_css = site.getPage(try paths.intern("static_only/main.css")).?;
+    try std.testing.expectEqualStrings("static_only/main.css", main_css.source_path.bytes());
+    try std.testing.expectEqualStrings("static_only/main.css", main_css.output_path.bytes());
     try std.testing.expectEqual(main_css.rule_index, 1);
 
-    const logo_png = site.pages.at(@intFromEnum(site.web_paths.get("/static_only/logo.png").?));
-    try std.testing.expectEqualStrings(logo_png.source_path, "static_only/logo.png");
-    try std.testing.expectEqualStrings(logo_png.output_path, "/static_only/logo.png");
+    const logo_png = site.getPage(try paths.intern("static_only/logo.png")).?;
+    try std.testing.expectEqualStrings("static_only/logo.png", logo_png.source_path.bytes());
+    try std.testing.expectEqualStrings("static_only/logo.png", logo_png.output_path.bytes());
     try std.testing.expectEqual(logo_png.rule_index, 1);
 
-    const three_md = site.pages.at(@intFromEnum(site.web_paths.get("/mixed/three").?));
-    try std.testing.expectEqualStrings(three_md.source_path, "mixed/three.md");
-    try std.testing.expectEqualStrings(three_md.output_path, "/mixed/three.html");
+    const three_md = site.getPage(try paths.intern("mixed/three")).?;
+    try std.testing.expectEqualStrings("mixed/three.md", three_md.source_path.bytes());
+    try std.testing.expectEqualStrings("mixed/three.html", three_md.output_path.bytes());
     try std.testing.expectEqual(three_md.rule_index, 0);
 
-    const rss_xml = site.pages.at(@intFromEnum(site.web_paths.get("/mixed/rss.xml").?));
-    try std.testing.expectEqualStrings(rss_xml.source_path, "mixed/rss.xml");
-    try std.testing.expectEqualStrings(rss_xml.output_path, "/mixed/rss.xml");
+    const rss_xml = site.getPage(try paths.intern("mixed/rss.xml")).?;
+    try std.testing.expectEqualStrings("mixed/rss.xml", rss_xml.source_path.bytes());
+    try std.testing.expectEqualStrings("mixed/rss.xml", rss_xml.output_path.bytes());
     try std.testing.expectEqual(rss_xml.rule_index, 1);
 
-    const index_md = site.pages.at(@intFromEnum(site.web_paths.get("/").?));
-    try std.testing.expectEqualStrings(index_md.source_path, "index.md");
-    try std.testing.expectEqualStrings(index_md.output_path, "/index.html");
+    const index_md = site.getPage(try paths.intern("")).?;
+    try std.testing.expectEqualStrings("index.md", index_md.source_path.bytes());
+    try std.testing.expectEqualStrings("index.html", index_md.output_path.bytes());
     try std.testing.expectEqual(index_md.rule_index, 0);
 }
 
@@ -410,22 +421,22 @@ test generateCodeForRules {
         Site.Rule{
             .processing = .markdown,
             .patterns = ([_][]const u8{ "posts/*.md", "*.md" })[0..],
-            .replaceTags = &[_][]const u8{},
+            .replace_tags = &.{},
         },
         Site.Rule{
             .processing = .none,
             .patterns = ([_][]const u8{"static"})[0..],
-            .replaceTags = &[_][]const u8{},
+            .replace_tags = &.{},
         },
     };
     site.rules = rules[0..];
-    site.ignore_patterns = ([_][]const u8{
+    site.ignore_patterns = &.{
         "build.roc",
         "build",
         "output",
         ".git",
         ".gitignore",
-    })[0..];
+    };
 
     try generateCodeForRules(&site, tmpdir.dir);
 

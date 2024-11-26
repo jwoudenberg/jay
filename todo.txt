@@ -14,6 +14,8 @@ x implement `replaceHtml`
 x implement list
 x run local http server
 
++paths no leading slashes in stored output or web paths
+
 +html support data attributes
 +html fix shadowed attributes
 +html add doctype
@@ -21,39 +23,42 @@ x run local http server
 +html custom attributes
 +html empty attributes
 
-update top-level API to deal with mismatch phantom param page types
-implement fromHtml
-assert/convert html input files to ensure utf8 encoding of output
-watch for source-file changes and rebuild (using watchman)
-watch for roc-file changes and rebuild (using watchman)
-warn if site contains broken links
-perform partial builds when source file changes
-automatically reload browser when files change
-generate site in remote cache location
-provide --output flag for production builds
-support 'break' in a markdown post (introduction shown on index page)
-rss support
-offer way to get next/previous files
-check xml pages have an xml-like extension
-add changelog
-add support for pagination
-add support for search
-integration tests
-macos support
-windows support
-provide error output in the browser showing the site preview
-skip running platform a second time when bootstrapping
-pretty errors
-Xml modules support other types of 'attribute-construction' rules than hypen-separated
-support hashing static contents for cache-support
-minify css/html/..?..
-support setting a path root
-replace source-style-paths with output-style-paths
-support syntax highlighting in markdown snippets
-enable github markdown extensions
-create user-friendlier error reports for unexpected errors
++watch working watch based for linux
++watch dependency tree with regeneration of changed files
++watch run on separate thread
+
 +site for jay project with cookbooks
 +site example of gitbook-like site
 +site example of blog
 +site example of recipe site
 +site example of site with multi-language support
+
++errors check xml pages have an xml-like extension
++errors create user-friendlier error reports for unexpected errors
++errors pass over editor errors
++errors warn if site contains broken links
++errors assert/convert html input files to ensure utf8 encoding of output
++errors error output in the browser
+
++feature syntax highlighting in markdown snippets
++feature github markdown extensions
++feature support hashing static content paths (for cache-support)
++feature support for non-markdown sources, via custom parser
++feature rss feeds
++feature pagination
++feature minification
++feature search
++feature macos support
++feature windows support
++feature auto-replace source-paths in href attrs with output paths
++feature 'break' in a markdown post (snippet of post for index page)
++feature --output flag for production builds
++feature automatically reload browser when files change
+
++dev integration tests
++dev changelog
+
++thinking supporting site hosted on subpath, do rss feeds require jay to know the domain?
+
+update top-level API to deal with mismatch phantom param page types
+generate site in remote cache location

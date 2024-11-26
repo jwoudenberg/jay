@@ -22,7 +22,6 @@ pub const Path = enum(usize) {
     }
 
     pub const Registry = struct {
-        gpa: std.mem.Allocator,
         arena_state: std.heap.ArenaAllocator,
         paths: std.StringHashMapUnmanaged(Path),
         mutex: std.Thread.Mutex,
@@ -30,7 +29,6 @@ pub const Path = enum(usize) {
         pub fn init(gpa: std.mem.Allocator) Registry {
             const arena_state = std.heap.ArenaAllocator.init(gpa);
             return Registry{
-                .gpa = gpa,
                 .arena_state = arena_state,
                 .paths = std.StringHashMapUnmanaged(Path){},
                 .mutex = std.Thread.Mutex{},
@@ -38,8 +36,8 @@ pub const Path = enum(usize) {
         }
 
         pub fn deinit(self: *Registry) void {
+            self.paths.deinit(self.arena_state.child_allocator);
             self.arena_state.deinit();
-            self.paths.deinit(self.gpa);
         }
 
         pub fn get(self: *Registry, path: []const u8) ?Path {
@@ -52,7 +50,7 @@ pub const Path = enum(usize) {
             self.mutex.lock();
             defer self.mutex.unlock();
 
-            const get_or_put = try self.paths.getOrPut(self.gpa, path);
+            const get_or_put = try self.paths.getOrPut(self.arena_state.child_allocator, path);
             if (get_or_put.found_existing) {
                 return get_or_put.value_ptr.*;
             }

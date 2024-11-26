@@ -2,9 +2,10 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
+const Path = @import("path.zig").Path;
 const Site = @import("site.zig").Site;
 
-pub fn serve(site: *const Site) !void {
+pub fn serve(paths: *Path.Registry, site: *Site) !void {
     const loopback = try std.net.Ip4Address.parse("127.0.0.1", 0);
     const localhost = std.net.Address{ .in = loopback };
     var http_server = try localhost.listen(.{
@@ -36,25 +37,33 @@ pub fn serve(site: *const Site) !void {
                 try stdout.print("Failed receiving request: {s}\n", .{@errorName(err)});
                 continue :accept;
             };
-            try respond(site, &request, output_dir);
+            try respond(paths, site, &request, output_dir);
         }
     }
 }
 
 fn respond(
-    site: *const Site,
+    paths: *Path.Registry,
+    site: *Site,
     request: *std.http.Server.Request,
     output_dir: std.fs.Dir,
 ) !void {
-    if (site.web_paths.get(request.head.target)) |index| {
-        const page = site.pages.at(@intFromEnum(index));
+    blk: {
+        const requested_path = paths.get(request.head.target[1..]) orelse break :blk;
+        const page = site.getPage(requested_path) orelse break :blk;
+        page.mutex.lock();
+        defer page.mutex.unlock();
+        if (page.web_path != requested_path) break :blk;
         return servePage(page, .ok, request, output_dir);
-    } else if (site.web_paths.get("/404")) |index| {
-        const page = site.pages.at(@intFromEnum(index));
-        return servePage(page, .not_found, request, output_dir);
-    } else {
-        return request.respond("404 Not Found", .{ .status = .not_found });
     }
+    blk: {
+        const custom_404 = paths.get("404") orelse break :blk;
+        const page = site.getPage(custom_404) orelse break :blk;
+        page.mutex.lock();
+        defer page.mutex.unlock();
+        return servePage(page, .not_found, request, output_dir);
+    }
+    return request.respond("404 Not Found", .{ .status = .not_found });
 }
 
 fn servePage(
@@ -63,8 +72,6 @@ fn servePage(
     request: *std.http.Server.Request,
     output_dir: std.fs.Dir,
 ) !void {
-    const output_path_no_leading_slash = page.output_path[1..];
-
     var send_buffer: [8000]u8 = undefined;
     var response = request.respondStreaming(.{
         .send_buffer = &send_buffer,
@@ -82,7 +89,7 @@ fn servePage(
     var fifo = std.fifo.LinearFifo(u8, .Slice).init(&fifo_buffer);
     defer fifo.deinit();
 
-    const file = try output_dir.openFile(output_path_no_leading_slash, .{});
+    const file = try output_dir.openFile(page.output_path.bytes(), .{});
     defer file.close();
     try fifo.pump(file.reader(), response.writer());
 
