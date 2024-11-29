@@ -9,9 +9,9 @@ const fail = @import("fail.zig");
 const WorkQueue = @import("work.zig").WorkQueue;
 const platform = @import("platform.zig");
 const Site = @import("site.zig").Site;
-const Watcher = @import("watch.zig").Watcher;
 const RocList = @import("roc/list.zig").RocList;
 const Path = @import("path.zig").Path;
+const Watcher = @import("watch.zig").Watcher(Path, Path.bytes);
 
 pub fn scanDir(
     work: *WorkQueue,
@@ -118,7 +118,24 @@ pub fn scanFile(
         },
     }
 
-    return page orelse error.PageMatchingRuleMissing;
+    if (page) |found_page| return found_page;
+
+    try fail.prettily(
+        \\I can't find a pattern matching the following source path:
+        \\
+        \\    {s}
+        \\
+        \\Make sure each path in your project directory is matched by
+        \\a rule, or an ignore pattern.
+        \\
+        \\Tip: Add an extra rule like this:
+        \\
+        \\    Pages.files ["{s}"]
+        \\
+        \\
+    , .{ source_path.bytes(), source_path.bytes() });
+
+    unreachable;
 }
 
 pub fn addPath(

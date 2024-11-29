@@ -5,7 +5,7 @@ const RocList = @import("roc/list.zig").RocList;
 const Path = @import("path.zig").Path;
 const fail = @import("fail.zig");
 const Site = @import("site.zig").Site;
-const Watcher = @import("watch.zig").Watcher;
+const Watcher = @import("watch.zig").Watcher(Path, Path.bytes);
 const glob = @import("glob.zig");
 const serve = @import("serve.zig").serve;
 const platform = @import("platform.zig");
@@ -95,7 +95,7 @@ pub fn run() !void {
     // (3) Scan the project to find all the source files and generate site.
     var work = WorkQueue.init(gpa);
     defer work.deinit();
-    var watcher = try Watcher.init(gpa, &paths, try site.openSourceRoot(.{}));
+    var watcher = try Watcher.init(gpa, try site.openSourceRoot(.{}));
     defer watcher.deinit();
 
     if (site.rules.len == 0 and should_bootstrap) {
@@ -115,12 +115,23 @@ pub fn run() !void {
 
     // (5) Watch for changes.
     while (true) {
-        const change = try watcher.next();
-        if (change.is_dir) {
-            try work.push(.{ .scan_dir = change.path });
-        } else {
-            try work.push(.{ .scan_file = change.path });
+        while (try watcher.next_wait(50)) |change| {
+            // TODO: queue work.
+            std.debug.print("{any}\n", .{change});
+            // Cases to handle:
+            // - Known file/dir changed
+            //   - queue path scan
+            // - Unknown file/dir changed
+            //   - check if path exists (to avoid interning temporary paths)
+            //   - check if path is not ignored
+            //   - queue path scan
+            // - build.roc changed
+            //   - queue rebuild
+            // - watcher reports missed events
+            //   - queue path scan for project root (i.e., rescan everything)
         }
+        // No new events in the last watch period, so filesystem changes
+        // have settled.
         try doWork(gpa, &paths, site, &watcher, &work);
     }
 }

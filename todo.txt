@@ -21,9 +21,11 @@ x run local http server
 +html custom attributes
 +html empty attributes
 
-+watch working watch based for linux
-+watch dependency tree with regeneration of changed files
-+watch run on separate thread
++watch combine events for same file
++watch regenerate file on file change
++watch regenerate files on directory change
++watch regenerate dependent files on change
++watch don't exit on error, instead keep list of current errors
 
 +site for jay project with cookbooks
 +site example of gitbook-like site
@@ -52,6 +54,7 @@ x run local http server
 +feature 'break' in a markdown post (snippet of post for index page)
 +feature --output flag for production builds
 +feature automatically reload browser when files change
++feature automatically close browser tab when process exits
 
 +dev integration tests
 +dev changelog

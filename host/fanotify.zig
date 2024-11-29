@@ -242,3 +242,63 @@ pub const file_handle = extern struct {
 
 pub const kernel_fsid_t = fsid_t;
 pub const fsid_t = [2]i32;
+
+pub fn name_to_handle_at(
+    dirfd: std.posix.fd_t,
+    pathname: []const u8,
+    handle: *file_handle,
+    mount_id: *i32,
+    flags: u32,
+) !void {
+    const pathname_c = try toPosixPath(pathname);
+    return name_to_handle_atZ(dirfd, &pathname_c, handle, mount_id, flags);
+}
+
+pub fn name_to_handle_atZ(
+    dirfd: std.posix.fd_t,
+    pathname_z: [*:0]const u8,
+    handle: *file_handle,
+    mount_id: *i32,
+    flags: u32,
+) !void {
+    switch (std.posix.errno(linux_name_to_handle_at(dirfd, pathname_z, handle, mount_id, flags))) {
+        .SUCCESS => {},
+        .FAULT => unreachable, // pathname, mount_id, or handle outside accessible address space
+        .INVAL => unreachable, // bad flags, or handle_bytes too big
+        .NOENT => return error.FileNotFound,
+        .NOTDIR => return error.NotDir,
+        .OPNOTSUPP => return error.OperationNotSupported,
+        .OVERFLOW => return error.NameTooLong,
+        else => |err| return std.posix.unexpectedErrno(err),
+    }
+}
+
+pub fn linux_name_to_handle_at(
+    dirfd: std.posix.fd_t,
+    pathname: [*:0]const u8,
+    handle: *file_handle,
+    mount_id: *i32,
+    flags: u32,
+) usize {
+    return std.os.linux.syscall5(
+        .name_to_handle_at,
+        @as(u32, @bitCast(dirfd)),
+        @intFromPtr(pathname),
+        @intFromPtr(handle),
+        @intFromPtr(mount_id),
+        flags,
+    );
+}
+
+// Used to convert a slice to a null terminated slice on the stack.
+pub fn toPosixPath(file_path: []const u8) error{NameTooLong}![std.posix.PATH_MAX - 1:0]u8 {
+    if (std.debug.runtime_safety) std.debug.assert(std.mem.indexOfScalar(u8, file_path, 0) == null);
+    var path_with_null: [std.posix.PATH_MAX - 1:0]u8 = undefined;
+    // >= rather than > to make room for the null byte
+    if (file_path.len >= std.posix.PATH_MAX) return error.NameTooLong;
+    @memcpy(path_with_null[0..file_path.len], file_path);
+    path_with_null[file_path.len] = 0;
+    return path_with_null;
+}
+
+pub const HANDLE_FID = std.os.linux.AT.REMOVEDIR;

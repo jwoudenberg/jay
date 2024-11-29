@@ -7,7 +7,7 @@ const std = @import("std");
 const Site = @import("site.zig").Site;
 const fail = @import("fail.zig");
 const scan = @import("scan.zig");
-const Watcher = @import("watch.zig").Watcher;
+const Watcher = @import("watch.zig").Watcher(Path, Path.bytes);
 const WorkQueue = @import("work.zig").WorkQueue;
 const Path = @import("path.zig").Path;
 const generate = @import("generate.zig").generate;
@@ -189,7 +189,7 @@ test "bootstrapRules" {
     defer work.deinit();
     var paths = Path.Registry.init(std.testing.allocator);
     defer paths.deinit();
-    var watcher = try Watcher.init(std.testing.allocator, &paths, tmpdir.dir);
+    var watcher = try Watcher.init(std.testing.allocator, tmpdir.dir);
     defer watcher.deinit();
 
     try bootstrapRules(std.testing.allocator, &paths, &site, &watcher, &work, tmpdir.dir);
