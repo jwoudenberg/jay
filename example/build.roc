@@ -4,13 +4,14 @@ app [main] { pf: platform "../zig-out/platform/main.roc" }
 import pf.Pages
 import pf.Html
 
-main = [
-    markdownFiles,
-    Pages.files ["static/*.css"],
-    Pages.ignore ["README.md"],
-]
+main =
+    { Pages.rules <-
+        markdown,
+        static: Pages.files ["static/*.css"],
+        ignore: Pages.ignore ["README.md"],
+    }
 
-markdownFiles =
+markdown =
     Pages.files ["*.md", "posts/*.md"]
     |> Pages.fromMarkdown
     |> Pages.wrapHtml layout

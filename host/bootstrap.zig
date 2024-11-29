@@ -325,15 +325,16 @@ fn generateCodeForRules(site: *const Site, source_root: std.fs.Dir) !void {
         \\import pf.Pages
         \\import pf.Html
         \\
-        \\main = [
+        \\main =
+        \\    { Pages.rules <-
         \\
     );
     for (site.rules) |rule| {
         switch (rule.processing) {
-            .markdown => try writer.writeAll("    markdownFiles,\n"),
+            .markdown => try writer.writeAll("        markdown,\n"),
             .none => {
                 try writer.writeAll(
-                    \\    Pages.files [
+                    \\        Pages.files [
                 );
                 for (rule.patterns, 0..) |pattern, index| {
                     try writer.print("\"{s}\"", .{pattern});
@@ -350,7 +351,7 @@ fn generateCodeForRules(site: *const Site, source_root: std.fs.Dir) !void {
         }
     }
     try writer.writeAll(
-        \\    Pages.ignore [
+        \\        Pages.ignore [
     );
     const user_ignore_patterns = site.user_ignore_patterns();
     for (user_ignore_patterns, 0..) |pattern, index| {
@@ -364,7 +365,7 @@ fn generateCodeForRules(site: *const Site, source_root: std.fs.Dir) !void {
         \\
     );
     try writer.writeAll(
-        \\]
+        \\    }
         \\
         \\
     );
@@ -372,7 +373,7 @@ fn generateCodeForRules(site: *const Site, source_root: std.fs.Dir) !void {
         switch (rule.processing) {
             .markdown => {
                 try writer.writeAll(
-                    \\markdownFiles =
+                    \\markdown =
                     \\    Pages.files [
                 );
                 for (rule.patterns, 0..) |pattern, index| {
@@ -442,19 +443,20 @@ test generateCodeForRules {
 
     const generated = try tmpdir.dir.readFileAlloc(std.testing.allocator, "build.roc", 1024 * 1024);
     defer std.testing.allocator.free(generated);
-    try std.testing.expectEqualStrings(generated,
+    try std.testing.expectEqualStrings(
         \\app [main] { pf: platform "some hash here" }
         \\
         \\import pf.Pages
         \\import pf.Html
         \\
-        \\main = [
-        \\    markdownFiles,
-        \\    Pages.files ["static"],
-        \\    Pages.ignore [".git", ".gitignore"],
-        \\]
+        \\main =
+        \\    { Pages.rules <-
+        \\        markdown,
+        \\        Pages.files ["static"],
+        \\        Pages.ignore [".git", ".gitignore"],
+        \\    }
         \\
-        \\markdownFiles =
+        \\markdown =
         \\    Pages.files ["posts/*.md", "*.md"]
         \\    |> Pages.fromMarkdown
         \\    |> Pages.wrapHtml layout
@@ -465,5 +467,5 @@ test generateCodeForRules {
         \\        Html.body {} [content],
         \\    ]
         \\
-    );
+    , generated);
 }

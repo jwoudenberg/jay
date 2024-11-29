@@ -1,5 +1,5 @@
 platform "jay"
-    requires {} { main : List (Pages.Pages a) }
+    requires {} { main : Pages.Pages a }
     exposes [Pages, Html]
     packages {}
     imports []
@@ -11,13 +11,11 @@ import Pages.Internal
 
 mainForHost : {} -> List Pages.Internal.PageRule
 mainForHost = \{} ->
-    List.map main \page ->
-        internal = Pages.Internal.unwrap page
-        {
-            patterns: internal.patterns,
-            processing: internal.processing,
-            replaceTags: internal.replaceTags,
-        }
+    List.map (Pages.Internal.unwrap main) \page -> {
+        patterns: page.patterns,
+        processing: page.processing,
+        replaceTags: page.replaceTags,
+    }
 
 getMetadataLengthForHost : List U8 -> U64
 getMetadataLengthForHost = \bytes ->
@@ -29,8 +27,8 @@ getMetadataLengthForHost = \bytes ->
 runPipelineForHost! : Pages.Internal.HostPage => Pages.Internal.Xml
 runPipelineForHost! = \hostPage ->
     page =
-        when List.get main (Num.intCast hostPage.ruleIndex) is
-            Ok x -> Pages.Internal.unwrap x
+        when List.get (Pages.Internal.unwrap main) (Num.intCast hostPage.ruleIndex) is
+            Ok x -> x
             Err OutOfBounds -> crash "unexpected out of bounds page rule"
 
     init = [FromSource { start: 0, end: hostPage.len }]

@@ -1,6 +1,8 @@
-module [Pages, Xml, PageRule, HostPage, HostTag, SourceLoc, wrap, unwrap]
+module [Pages, Page, Xml, PageRule, HostPage, HostTag, SourceLoc, wrap, unwrap]
 
-Pages a := {
+Pages a := List Page
+
+Page : {
     patterns : List Str,
     processing : [None, Ignore, Bootstrap, Markdown, Xml],
     replaceTags : List Str,

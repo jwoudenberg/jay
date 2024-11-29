@@ -14,8 +14,6 @@ x implement `replaceHtml`
 x implement list
 x run local http server
 
-+paths no leading slashes in stored output or web paths
-
 +html support data attributes
 +html fix shadowed attributes
 +html add doctype
@@ -60,5 +58,4 @@ x run local http server
 
 +thinking supporting site hosted on subpath, do rss feeds require jay to know the domain?
 
-update top-level API to deal with mismatch phantom param page types
 generate site in remote cache location

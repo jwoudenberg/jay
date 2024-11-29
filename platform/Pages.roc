@@ -1,6 +1,7 @@
 module [
     Pages,
     bootstrap,
+    rules,
     files,
     ignore,
     fromMarkdown,
@@ -20,10 +21,12 @@ Markdown := {}
 
 Pages a : Pages.Internal.Pages a
 
+Bootstrap := {}
+
 # Parse directory structure and rewrite build.roc with initial implementation.
-bootstrap : List (Pages type)
-bootstrap = [
-    wrap {
+bootstrap : Pages Bootstrap
+bootstrap = wrap [
+    {
         patterns: [],
         processing: Bootstrap,
         replaceTags: [],
@@ -31,33 +34,41 @@ bootstrap = [
     },
 ]
 
+rules : Pages a, Pages b, (a, b -> c) -> Pages c
+rules = \pagesA, pagesB, _ ->
+    List.concat (unwrap pagesA) (unwrap pagesB)
+    |> wrap
+
 files : List Str -> Pages type
 files = \patterns ->
-    wrap {
-        patterns,
-        processing: None,
-        replaceTags: [],
-        pipeline!: \content, _ -> content,
-    }
+    wrap [
+        {
+            patterns,
+            processing: None,
+            replaceTags: [],
+            pipeline!: \content, _ -> content,
+        },
+    ]
 
 ignore : List Str -> Pages type
 ignore = \patterns ->
-    wrap {
-        patterns,
-        processing: Ignore,
-        replaceTags: [],
-        pipeline!: \content, _ -> content,
-    }
+    wrap [
+        {
+            patterns,
+            processing: Ignore,
+            replaceTags: [],
+            pipeline!: \content, _ -> content,
+        },
+    ]
 
 fromMarkdown : Pages Markdown -> Pages Html
 fromMarkdown = \pages ->
-    internal = unwrap pages
-    wrap { internal & processing: Markdown }
+    unwrap pages
+    |> List.map \page -> { page & processing: Markdown }
+    |> wrap
 
 wrapHtml : Pages Html, ({ content : Html, path : Str, meta : {}a } => Html) -> Pages Html where a implements Decoding
 wrapHtml = \pages, userWrapper! ->
-    internal = unwrap pages
-
     wrapper! : Xml, Pages.Internal.HostPage => Xml
     wrapper! = \content, page ->
         meta =
@@ -71,14 +82,16 @@ wrapHtml = \pages, userWrapper! ->
         userWrapper! { content: Xml.Internal.wrap content, path: page.path, meta }
         |> Xml.Internal.unwrap
 
-    wrap {
-        patterns: internal.patterns,
-        processing: if internal.processing == None then Xml else internal.processing,
-        replaceTags: internal.replaceTags,
+    unwrap pages
+    |> List.map \page -> {
+        patterns: page.patterns,
+        processing: if page.processing == None then Xml else page.processing,
+        replaceTags: page.replaceTags,
         pipeline!: \content, hostPage ->
-            internal.pipeline! content hostPage
+            page.pipeline! content hostPage
             |> wrapper! hostPage,
     }
+    |> wrap
 
 list! : Str => List { path : Str, meta : {}a }
 list! = \pattern ->
@@ -100,20 +113,18 @@ replaceHtml :
     ({ content : Html, attrs : {}attrs, path : Str, meta : {}a } => Html)
     -> Pages Html
 replaceHtml = \pages, name, userReplacer! ->
-    internal = unwrap pages
-
-    replacer! : Xml, Pages.Internal.HostPage => Xml
-    replacer! = \original, page ->
+    replacer! : Xml, Pages.Internal.Page, Pages.Internal.HostPage => Xml
+    replacer! = \original, page, hostPage ->
         meta =
-            when Decode.fromBytes page.meta Rvn.compact is
+            when Decode.fromBytes hostPage.meta Rvn.compact is
                 Ok x -> x
                 Err _ ->
-                    when Str.fromUtf8 page.meta is
+                    when Str.fromUtf8 hostPage.meta is
                         Ok str -> crash "@$%^&.jayerror*0*$(str)"
                         Err _ -> crash "frontmatter bytes not UTF8-encoded"
 
-        walk! page.tags original \content, tag ->
-            if Num.intCast tag.index == List.len internal.replaceTags then
+        walk! hostPage.tags original \content, tag ->
+            if Num.intCast tag.index == List.len page.replaceTags then
                 attrs =
                     when Decode.fromBytes tag.attributes Xml.Attributes.formatter is
                         Ok x -> x
@@ -125,7 +136,7 @@ replaceHtml = \pages, name, userReplacer! ->
                 replaceTag! content tag \nested ->
                     userReplacer! {
                         content: Xml.Internal.wrap nested,
-                        path: page.path,
+                        path: hostPage.path,
                         attrs,
                         meta,
                     }
@@ -133,14 +144,16 @@ replaceHtml = \pages, name, userReplacer! ->
             else
                 original
 
-    wrap {
-        patterns: internal.patterns,
-        processing: if internal.processing == None then Xml else internal.processing,
-        replaceTags: List.append internal.replaceTags name,
+    unwrap pages
+    |> List.map \page -> {
+        patterns: page.patterns,
+        processing: if page.processing == None then Xml else page.processing,
+        replaceTags: List.append page.replaceTags name,
         pipeline!: \content, hostPage ->
-            internal.pipeline! content hostPage
-            |> replacer! hostPage,
+            page.pipeline! content hostPage
+            |> replacer! page hostPage,
     }
+    |> wrap
 
 replaceTag! : Xml, Pages.Internal.HostTag, (Xml => Xml) => Xml
 replaceTag! = \content, tag, replace! ->
