@@ -146,6 +146,11 @@ fn runTests(
     optimize: std.builtin.OptimizeMode,
     target: std.Build.ResolvedTarget,
 ) void {
+    const libcmark_gfm = b.dependency("libcmark-gfm", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
     const exe_unit_tests = b.addTest(.{
         .root_source_file = b.path("host/tests.zig"),
         .target = target,
@@ -156,6 +161,8 @@ fn runTests(
         .target = target,
         .optimize = optimize,
     }).module("mime"));
+    exe_unit_tests.linkLibrary(libcmark_gfm.artifact("cmark-gfm"));
+    exe_unit_tests.linkLibrary(libcmark_gfm.artifact("cmark-gfm-extensions"));
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
 

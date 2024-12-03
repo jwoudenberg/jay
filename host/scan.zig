@@ -7,7 +7,7 @@ const mime = @import("mime");
 const glob = @import("glob.zig");
 const fail = @import("fail.zig");
 const WorkQueue = @import("work.zig").WorkQueue;
-const platform = @import("platform.zig");
+const platform = @import("platform.zig").platform;
 const Site = @import("site.zig").Site;
 const RocList = @import("roc/list.zig").RocList;
 const Path = @import("path.zig").Path;
@@ -70,181 +70,115 @@ pub fn scanDir(
     }
 }
 
+test scanDir {
+    var tmpdir = std.testing.tmpDir(.{ .iterate = true });
+    defer tmpdir.cleanup();
+
+    var paths = Path.Registry.init(std.testing.allocator);
+    defer paths.deinit();
+
+    var work = WorkQueue.init(std.testing.allocator);
+    defer work.deinit();
+
+    var site = try Site.init(std.testing.allocator, "build.roc", "output", &paths);
+    defer site.deinit();
+
+    var watcher = try Watcher.init(std.testing.allocator, tmpdir.dir);
+    defer watcher.deinit();
+
+    try tmpdir.dir.writeFile(.{ .sub_path = "c", .data = "" });
+    try tmpdir.dir.makeDir("b");
+    try tmpdir.dir.writeFile(.{ .sub_path = "a", .data = "" });
+
+    try scanDir(
+        &work,
+        &paths,
+        &site,
+        &watcher,
+        tmpdir.dir,
+        try paths.intern(""),
+    );
+
+    try std.testing.expectEqualStrings("b", work.pop().?.scan_dir.bytes());
+    try std.testing.expectEqualStrings("c", work.pop().?.scan_file.bytes());
+    try std.testing.expectEqualStrings("a", work.pop().?.scan_file.bytes());
+    try std.testing.expectEqual(null, work.pop());
+}
+
 pub fn scanFile(
-    tmp_arena: std.mem.Allocator,
-    paths: *Path.Registry,
+    arena: std.mem.Allocator,
+    work: *WorkQueue,
     site: *Site,
     source_root: std.fs.Dir,
     source_path: Path,
-    unmatched_paths: *std.ArrayList(Path),
-) !*Site.Page {
-    // TODO: detect patterns that are not matched by any file.
-    var matched_rules = std.ArrayList(usize).init(tmp_arena);
-    defer matched_rules.deinit();
-
-    var page: ?*Site.Page = null;
-
-    for (site.rules, 0..) |rule, rule_index| {
-        if (!glob.matchAny(rule.patterns, source_path.bytes())) continue;
-
-        try matched_rules.append(rule_index);
-        page = try addPath(
-            tmp_arena,
-            paths,
-            site,
-            source_root,
-            rule_index,
-            rule.processing,
-            rule.replace_tags,
-            source_path,
-        );
-    }
-
-    switch (matched_rules.items.len) {
-        0 => try unmatched_paths.append(source_path),
-        1 => {}, // This is what we expect!
-        else => {
-            try fail.prettily(
-                \\The following file is matched by multiple rules:
-                \\
-                \\    {s}
-                \\
-                \\These are the indices of the rules that match:
-                \\
-                \\    {any}
-                \\
-                \\
-            , .{ source_path.bytes(), matched_rules.items });
-        },
-    }
-
-    if (page) |found_page| return found_page;
-
-    try fail.prettily(
-        \\I can't find a pattern matching the following source path:
-        \\
-        \\    {s}
-        \\
-        \\Make sure each path in your project directory is matched by
-        \\a rule, or an ignore pattern.
-        \\
-        \\Tip: Add an extra rule like this:
-        \\
-        \\    Pages.files ["{s}"]
-        \\
-        \\
-    , .{ source_path.bytes(), source_path.bytes() });
-
-    unreachable;
+) !void {
+    const frontmatter = if (Site.isMarkdown(source_path.bytes()))
+        "{}"
+    else
+        try readFrontmatter(arena, source_root, source_path);
+    try site.addPage(source_path, frontmatter);
+    try work.push(.{ .generate_file = source_path });
 }
 
-pub fn addPath(
-    tmp_arena: std.mem.Allocator,
-    paths: *Path.Registry,
-    site: *Site,
+fn readFrontmatter(
+    arena: std.mem.Allocator,
     source_root: std.fs.Dir,
-    rule_index: usize,
-    processing: Site.Processing,
-    replace_tags: []const []const u8,
     source_path: Path,
-) !*Site.Page {
-    const source_path_bytes = source_path.bytes();
-    const output_path = switch (processing) {
-        .xml, .none => source_path,
-        .markdown => blk: {
-            var buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;
-            const output_path_bytes = try outputPathForMarkdownFile(&buffer, source_path_bytes);
-            break :blk try paths.intern(output_path_bytes);
-        },
-    };
+) ![]const u8 {
+    const bytes = try source_root.readFileAlloc(arena, source_path.bytes(), 1024 * 1024);
+    if (firstNonWhitespaceByte(bytes) != '{') return "{}";
 
-    const frontmatter = switch (processing) {
-        .xml, .none => "{}",
-        .markdown => blk: {
-            const bytes = try source_root.readFileAlloc(tmp_arena, source_path_bytes, 1024 * 1024);
-            if (firstNonWhitespaceByte(bytes) != '{') break :blk "{}";
+    var meta_len: u64 = undefined;
+    meta_len = platform.getMetadataLength(bytes);
 
-            const roc_bytes = RocList.fromSlice(u8, bytes, false);
-            var meta_len: u64 = undefined;
+    // Markdown headers start with #, just like Roc comments. RVN
+    // supports comments, so if there's a header below the page
+    // frontmatter it is parsed as well. We'll peel these off.
+    const meta_bytes = dropTrailingHeaderLines(bytes[0..meta_len]);
 
-            // Zig tests can't call out to Roc.
-            if (builtin.is_test) {
-                meta_len = 0;
-            } else {
-                platform.roc__getMetadataLengthForHost_1_exposed_generic(&meta_len, &roc_bytes);
-            }
+    if (meta_bytes.len == 0) {
+        try fail.prettily(
+            \\I ran into an error attempting to decode the metadata
+            \\at the start of this file:
+            \\
+            \\    {s}
+            \\
+        , .{source_path.bytes()});
+    }
 
-            // Markdown headers start with #, just like Roc comments. RVN
-            // supports comments, so if there's a header below the page
-            // frontmatter it is parsed as well. We'll peel these off.
-            const meta_bytes = dropTrailingHeaderLines(bytes[0..meta_len]);
-
-            if (meta_bytes.len == 0) {
-                try fail.prettily(
-                    \\I ran into an error attempting to decode the metadata
-                    \\at the start of this file:
-                    \\
-                    \\    {s}
-                    \\
-                , .{source_path_bytes});
-            }
-
-            break :blk try site.allocator().dupe(u8, meta_bytes);
-        },
-    };
-
-    const extension = std.fs.path.extension(output_path.bytes());
-    const mime_type = mime.extension_map.get(extension) orelse .@"application/octet-stream";
-    const web_path = webPathFromFilePath(output_path.bytes());
-
-    const page = Site.Page{
-        .mutex = std.Thread.Mutex{},
-        .rule_index = rule_index,
-        .processing = processing,
-        .replace_tags = replace_tags,
-        .mime_type = mime_type,
-        .source_path = source_path,
-        .output_path = output_path,
-        .web_path = try paths.intern(web_path),
-        .output_len = null, // We'll know this when we generate the page
-        .frontmatter = frontmatter,
-    };
-    return site.addPage(page);
+    return meta_bytes;
 }
 
-fn outputPathForMarkdownFile(buffer: []u8, path: []const u8) ![]const u8 {
-    if (!isMarkdown(path)) {
-        try fail.prettily("You're asking me to process a file as markdown, but it does not have a markdown file extension: {s}", .{path});
-    }
-    return std.fmt.bufPrint(
-        buffer,
-        "{s}.html",
-        .{path[0..(path.len - std.fs.path.extension(path).len)]},
+test readFrontmatter {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmpdir = std.testing.tmpDir(.{ .iterate = true });
+    defer tmpdir.cleanup();
+
+    var paths = Path.Registry.init(std.testing.allocator);
+    defer paths.deinit();
+
+    // This test makes use of the test platform defined in platform.zig!
+
+    try tmpdir.dir.writeFile(.{ .sub_path = "file1.txt", .data = "no frontmatter" });
+    try std.testing.expectEqualStrings(
+        "{}",
+        try readFrontmatter(arena, tmpdir.dir, try paths.intern("file1.txt")),
     );
-}
 
-test outputPathForMarkdownFile {
-    var buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;
-    const actual = try outputPathForMarkdownFile(&buffer, "file.md");
-    try std.testing.expectEqualStrings("file.html", actual);
+    try tmpdir.dir.writeFile(.{ .sub_path = "file2.txt", .data = "{ hi: 3 }\n# header \x14" });
+    try std.testing.expectEqualStrings(
+        "{ hi: 3 }",
+        try readFrontmatter(arena, tmpdir.dir, try paths.intern("file2.txt")),
+    );
 
-    try std.testing.expectError(
+    try tmpdir.dir.writeFile(.{ .sub_path = "file3.txt", .data = "{ \x00" });
+    try std.testing.expectEqual(
         error.PrettyError,
-        outputPathForMarkdownFile(&buffer, "file.txt"),
+        readFrontmatter(arena, tmpdir.dir, try paths.intern("file3.txt")),
     );
-}
-
-pub fn isMarkdown(path: []const u8) bool {
-    const extension = std.fs.path.extension(path);
-    return std.ascii.eqlIgnoreCase(extension, ".md") or
-        std.ascii.eqlIgnoreCase(extension, ".markdown");
-}
-
-test isMarkdown {
-    try std.testing.expect(isMarkdown("file.md"));
-    try std.testing.expect(isMarkdown("dir/file.MD"));
-    try std.testing.expect(isMarkdown("file.MarkDown"));
-    try std.testing.expect(!isMarkdown("file.txt"));
 }
 
 fn firstNonWhitespaceByte(bytes: []const u8) ?u8 {
@@ -309,20 +243,4 @@ test dropTrailingHeaderLines {
     try std.testing.expectEqualStrings("{\n} #foo", dropTrailingHeaderLines("{\n} #foo"));
     try std.testing.expectEqualStrings("{\n}\t#foo", dropTrailingHeaderLines("{\n}\t#foo"));
     try std.testing.expectEqualStrings("{\n}#foo", dropTrailingHeaderLines("{\n}#foo\n#bar"));
-}
-
-pub fn webPathFromFilePath(path: []const u8) []const u8 {
-    if (std.mem.eql(u8, "index.html", std.fs.path.basename(path))) {
-        return std.fs.path.dirname(path) orelse "";
-    } else if (std.mem.eql(u8, ".html", std.fs.path.extension(path))) {
-        return path[0..(path.len - ".html".len)];
-    } else {
-        return path;
-    }
-}
-
-test webPathFromFilePath {
-    try std.testing.expectEqualStrings("hi/file.css", webPathFromFilePath("hi/file.css"));
-    try std.testing.expectEqualStrings("hi/file", webPathFromFilePath("hi/file.html"));
-    try std.testing.expectEqualStrings("hi", webPathFromFilePath("hi/index.html"));
 }

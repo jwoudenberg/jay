@@ -4,7 +4,7 @@ const std = @import("std");
 const Site = @import("site.zig").Site;
 const RocList = @import("roc/list.zig").RocList;
 const RocStr = @import("roc/str.zig").RocStr;
-const platform = @import("platform.zig");
+const platform = @import("platform.zig").platform;
 const xml = @import("xml.zig");
 const c = @cImport({
     @cInclude("cmark-gfm.h");
@@ -55,8 +55,14 @@ fn writeFile(
         .xml => {
             // TODO: figure out what to do with files larger than this.
             const source = try source_root.readFileAlloc(arena, page.source_path.bytes(), 1024 * 1024);
-            const contents = try runPageTransforms(arena, source, page);
-            try writeRocContents(contents, source, writer);
+            const tags = try xml.parse(arena, source, page.replace_tags);
+            try platform.runPipeline(
+                arena,
+                page,
+                tags,
+                source,
+                writer,
+            );
         },
         .markdown => {
             // TODO: figure out what to do with files larger than this.
@@ -73,60 +79,14 @@ fn writeFile(
             ) orelse return error.OutOfMemory;
             defer std.c.free(html);
             const source = std.mem.span(html);
-            const contents = try runPageTransforms(arena, source, page);
-            try writeRocContents(contents, source, writer);
+            const tags = try xml.parse(arena, source, page.replace_tags);
+            try platform.runPipeline(
+                arena,
+                page,
+                tags,
+                source,
+                writer,
+            );
         },
-    }
-}
-
-fn runPageTransforms(
-    arena: std.mem.Allocator,
-    source: []const u8,
-    page: *Site.Page,
-) !RocList {
-    const tags = try xml.parse(arena, source, page.replace_tags);
-    var roc_tags = std.ArrayList(platform.Tag).init(arena);
-    for (tags) |tag| {
-        try roc_tags.append(platform.Tag{
-            .attributes = RocList.fromSlice(u8, tag.attributes, false),
-            .outerStart = @as(u32, @intCast(tag.outer_start)),
-            .outerEnd = @as(u32, @intCast(tag.outer_end)),
-            .innerStart = @as(u32, @intCast(tag.inner_start)),
-            .innerEnd = @as(u32, @intCast(tag.inner_end)),
-            .index = @as(u32, @intCast(tag.index)),
-        });
-    }
-    const roc_page = platform.Page{
-        .meta = RocList.fromSlice(u8, page.frontmatter, false),
-        .path = RocStr.fromSlice(page.web_path.bytes()),
-        .ruleIndex = @as(u32, @intCast(page.rule_index)),
-        .tags = RocList.fromSlice(platform.Tag, try roc_tags.toOwnedSlice(), true),
-        .len = @as(u32, @intCast(source.len)),
-    };
-    var contents = RocList.empty();
-    platform.roc__runPipelineForHost_1_exposed_generic(&contents, &roc_page);
-    return contents;
-}
-
-fn writeRocContents(
-    contents: RocList,
-    source: []const u8,
-    writer: anytype,
-) !void {
-    var roc_xml_iterator = platform.RocListIterator(platform.Slice).init(contents);
-    while (roc_xml_iterator.next()) |roc_slice| {
-        switch (roc_slice.tag) {
-            .from_source => {
-                const slice = roc_slice.payload.from_source;
-                try writer.writeAll(source[slice.start..slice.end]);
-            },
-            .roc_generated => {
-                const roc_slice_list = roc_slice.payload.roc_generated;
-                const len = roc_slice_list.len();
-                if (len == 0) continue;
-                const slice = roc_slice_list.elements(u8) orelse return error.RocListUnexpectedEmpty;
-                try writer.writeAll(slice[0..len]);
-            },
-        }
     }
 }

@@ -20,6 +20,8 @@ pub const Site = struct {
     ignore_patterns: []const []const u8,
     // The page-construction rules defined in the .roc file we're running.
     rules: []Rule,
+    // Interned path slices
+    paths: *Path.Registry,
 
     // The pages in a project. Using arena-friendly datastructures that don't
     // reallocate when new pages are added.
@@ -31,12 +33,12 @@ pub const Site = struct {
         base_allocator: std.mem.Allocator,
         argv0: []const u8,
         output_root: []const u8,
+        paths: *Path.Registry,
     ) !Site {
         var arena_state = std.heap.ArenaAllocator.init(base_allocator);
         const arena = arena_state.allocator();
-        const argv0_abs = try std.fs.cwd().realpathAlloc(arena, argv0);
-        const source_root = std.fs.path.dirname(argv0_abs) orelse "/";
-        const roc_main = std.fs.path.basename(argv0_abs);
+        const source_root = std.fs.path.dirname(argv0) orelse "./";
+        const roc_main = std.fs.path.basename(argv0);
         const ignore_patterns = try arena.dupe([]const u8, &[implicit_ignore_pattern_count][]const u8{
             output_root,
             roc_main,
@@ -50,6 +52,7 @@ pub const Site = struct {
             .output_root = output_root,
             .ignore_patterns = ignore_patterns,
             .rules = &.{},
+            .paths = paths,
             .pages = std.SegmentedList(Page, 0){},
             .pages_by_path = std.SegmentedList(?u32, 0){},
             .mutex = std.Thread.Mutex{},
@@ -89,14 +92,41 @@ pub const Site = struct {
         return self.pages.at(page_index);
     }
 
-    pub fn addPage(self: *Site, stack_page: Page) !*Page {
+    pub fn addPage(self: *Site, source_path: Path, frontmatter: []const u8) !void {
+        const rule_index = try self.ruleForPath(source_path);
+        const rule = self.rules[rule_index];
+        const source_path_bytes = source_path.bytes();
+        const output_path = switch (rule.processing) {
+            .xml, .none => source_path,
+            .markdown => blk: {
+                var buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+                const output_path_bytes = try outputPathForMarkdownFile(&buffer, source_path_bytes);
+                break :blk try self.paths.intern(output_path_bytes);
+            },
+        };
+        const extension = std.fs.path.extension(output_path.bytes());
+        const mime_type = mime.extension_map.get(extension) orelse .@"application/octet-stream";
+        const web_path = webPathFromFilePath(output_path.bytes());
+        const page = Site.Page{
+            .mutex = std.Thread.Mutex{},
+            .rule_index = rule_index,
+            .processing = rule.processing,
+            .replace_tags = rule.replace_tags,
+            .mime_type = mime_type,
+            .source_path = source_path,
+            .output_path = output_path,
+            .web_path = try self.paths.intern(web_path),
+            .output_len = null, // We'll know this when we generate the page
+            // TODO: don't allocate frontmatter in arena, because it might change.
+            .frontmatter = try self.allocator().dupe(u8, frontmatter),
+        };
+
         self.mutex.lock();
         defer self.mutex.unlock();
 
         // Copy the page into owned memory.
         const page_index: u32 = @intCast(self.pages.count());
-        var page = try self.pages.addOne(self.allocator());
-        page.* = stack_page;
+        try self.pages.append(self.allocator(), page);
 
         const page_ptr = try self.pagePtrForIndex(page.source_path.index());
         std.debug.assert(page_ptr.* == null);
@@ -130,8 +160,51 @@ pub const Site = struct {
             }
             web_ptr.* = page_index;
         }
+    }
 
-        return page;
+    test addPage {
+        var paths = Path.Registry.init(std.testing.allocator);
+        defer paths.deinit();
+        var site = try Site.init(std.testing.allocator, "/test/build.roc", "output", &paths);
+        defer site.deinit();
+        var rules = [_]Site.Rule{
+            Site.Rule{
+                .processing = .markdown,
+                .patterns = &.{"markdown/*"},
+                .replace_tags = &.{ "tag1", "tag2" },
+            },
+            Site.Rule{
+                .processing = .none,
+                .patterns = &.{"static/*"},
+                .replace_tags = &.{"tag3"},
+            },
+        };
+        site.rules = &rules;
+
+        try site.addPage(try paths.intern("markdown/file.md"), "{}");
+        const md_page = site.getPage(try paths.intern("markdown/file.md")).?;
+        try std.testing.expectEqual(0, md_page.rule_index);
+        try std.testing.expectEqualStrings("markdown/file.md", md_page.source_path.bytes());
+        try std.testing.expectEqualStrings("markdown/file.html", md_page.output_path.bytes());
+        try std.testing.expectEqualStrings("markdown/file", md_page.web_path.bytes());
+        try std.testing.expectEqual(.markdown, md_page.processing);
+        try std.testing.expectEqual(site.rules[0].replace_tags, md_page.replace_tags);
+        try std.testing.expectEqual(null, md_page.output_len);
+        try std.testing.expectEqualStrings("{}", md_page.frontmatter);
+        try std.testing.expectEqualStrings("{}", md_page.frontmatter);
+        try std.testing.expectEqualStrings("text/html", @tagName(md_page.mime_type));
+
+        try site.addPage(try paths.intern("static/style.css"), "{}");
+        const css_page = site.getPage(try paths.intern("static/style.css")).?;
+        try std.testing.expectEqual(1, css_page.rule_index);
+        try std.testing.expectEqualStrings("static/style.css", css_page.source_path.bytes());
+        try std.testing.expectEqualStrings("static/style.css", css_page.output_path.bytes());
+        try std.testing.expectEqualStrings("static/style.css", css_page.web_path.bytes());
+        try std.testing.expectEqual(.none, css_page.processing);
+        try std.testing.expectEqual(site.rules[1].replace_tags, css_page.replace_tags);
+        try std.testing.expectEqual(null, css_page.output_len);
+        try std.testing.expectEqualStrings("{}", css_page.frontmatter);
+        try std.testing.expectEqualStrings("text/css", @tagName(css_page.mime_type));
     }
 
     fn pagePtrForIndex(self: *Site, index: usize) !*?u32 {
@@ -188,4 +261,134 @@ pub const Site = struct {
             return page;
         }
     };
+
+    fn ruleForPath(site: *Site, source_path: Path) !usize {
+        var matches: [10]usize = undefined;
+        var len: u8 = 0;
+
+        for (site.rules, 0..) |rule, rule_index| {
+            if (!glob.matchAny(rule.patterns, source_path.bytes())) continue;
+
+            matches[len] = rule_index;
+            len += 1;
+            if (len > matches.len) break;
+        }
+
+        return switch (len) {
+            1 => matches[0],
+            0 => try fail.prettily(
+                \\I can't find a pattern matching the following source path:
+                \\
+                \\    {s}
+                \\
+                \\Make sure each path in your project directory is matched by
+                \\a rule, or an ignore pattern.
+                \\
+                \\Tip: Add an extra rule like this:
+                \\
+                \\    Pages.files ["{s}"]
+                \\
+                \\
+            , .{ source_path.bytes(), source_path.bytes() }),
+            else => try fail.prettily(
+                \\The following file is matched by multiple rules:
+                \\
+                \\    {s}
+                \\
+                \\These are the indices of the rules that match:
+                \\
+                \\    {any}
+                \\
+                \\
+            , .{ source_path.bytes(), matches }),
+        };
+    }
+
+    test ruleForPath {
+        var paths = Path.Registry.init(std.testing.allocator);
+        defer paths.deinit();
+        var site = try Site.init(std.testing.allocator, "/test/build.roc", "output", &paths);
+        defer site.deinit();
+        var rules = [_]Site.Rule{
+            Site.Rule{
+                .processing = .markdown,
+                .patterns = &.{ "rule_one/*", "conflicting/*" },
+                .replace_tags = &.{},
+            },
+            Site.Rule{
+                .processing = .none,
+                .patterns = &.{ "rule_two/*", "conflicting/*" },
+                .replace_tags = &.{},
+            },
+        };
+        site.rules = &rules;
+
+        try std.testing.expectEqual(
+            0,
+            site.ruleForPath(try paths.intern("rule_one/file.txt")),
+        );
+        try std.testing.expectEqual(
+            1,
+            site.ruleForPath(try paths.intern("rule_two/file.txt")),
+        );
+        try std.testing.expectEqual(
+            error.PrettyError,
+            site.ruleForPath(try paths.intern("shared/file.txt")),
+        );
+        try std.testing.expectEqual(
+            error.PrettyError,
+            site.ruleForPath(try paths.intern("missing/file.txt")),
+        );
+    }
+
+    pub fn isMarkdown(path: []const u8) bool {
+        const extension = std.fs.path.extension(path);
+        return std.ascii.eqlIgnoreCase(extension, ".md") or
+            std.ascii.eqlIgnoreCase(extension, ".markdown");
+    }
+
+    test isMarkdown {
+        try std.testing.expect(isMarkdown("file.md"));
+        try std.testing.expect(isMarkdown("dir/file.MD"));
+        try std.testing.expect(isMarkdown("file.MarkDown"));
+        try std.testing.expect(!isMarkdown("file.txt"));
+    }
+
+    fn outputPathForMarkdownFile(buffer: []u8, path: []const u8) ![]const u8 {
+        if (!isMarkdown(path)) {
+            try fail.prettily("You're asking me to process a file as markdown, but it does not have a markdown file extension: {s}", .{path});
+        }
+        return std.fmt.bufPrint(
+            buffer,
+            "{s}.html",
+            .{path[0..(path.len - std.fs.path.extension(path).len)]},
+        );
+    }
+
+    test outputPathForMarkdownFile {
+        var buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+        const actual = try outputPathForMarkdownFile(&buffer, "file.md");
+        try std.testing.expectEqualStrings("file.html", actual);
+
+        try std.testing.expectError(
+            error.PrettyError,
+            outputPathForMarkdownFile(&buffer, "file.txt"),
+        );
+    }
 };
+
+fn webPathFromFilePath(path: []const u8) []const u8 {
+    if (std.mem.eql(u8, "index.html", std.fs.path.basename(path))) {
+        return std.fs.path.dirname(path) orelse "";
+    } else if (std.mem.eql(u8, ".html", std.fs.path.extension(path))) {
+        return path[0..(path.len - ".html".len)];
+    } else {
+        return path;
+    }
+}
+
+test webPathFromFilePath {
+    try std.testing.expectEqualStrings("hi/file.css", webPathFromFilePath("hi/file.css"));
+    try std.testing.expectEqualStrings("hi/file", webPathFromFilePath("hi/file.html"));
+    try std.testing.expectEqualStrings("hi", webPathFromFilePath("hi/index.html"));
+}

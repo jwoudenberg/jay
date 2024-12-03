@@ -57,9 +57,17 @@ pub const WorkQueue = struct {
 
     fn compare(context: void, a: Job, b: Job) std.math.Order {
         _ = context;
-        return std.math.order(
+        const order = std.math.order(
             @intFromEnum(std.meta.activeTag(a)),
             @intFromEnum(std.meta.activeTag(b)),
         );
+        return switch (order) {
+            .lt, .gt => order,
+            .eq => switch (a) {
+                .scan_dir => std.math.order(a.scan_dir.index(), b.scan_dir.index()),
+                .scan_file => std.math.order(a.scan_file.index(), b.scan_file.index()),
+                .generate_file => std.math.order(a.generate_file.index(), b.generate_file.index()),
+            },
+        };
     }
 };
