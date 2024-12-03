@@ -24,7 +24,7 @@ pub const Site = struct {
     // The pages in a project. Using arena-friendly datastructures that don't
     // reallocate when new pages are added.
     pages: std.SegmentedList(Page, 0),
-    pages_by_index: std.SegmentedList(?*Page, 0),
+    pages_by_path: std.SegmentedList(?u32, 0),
     mutex: std.Thread.Mutex,
 
     pub fn init(
@@ -51,7 +51,7 @@ pub const Site = struct {
             .ignore_patterns = ignore_patterns,
             .rules = &.{},
             .pages = std.SegmentedList(Page, 0){},
-            .pages_by_index = std.SegmentedList(?*Page, 0){},
+            .pages_by_path = std.SegmentedList(?u32, 0){},
             .mutex = std.Thread.Mutex{},
         };
     }
@@ -83,9 +83,10 @@ pub const Site = struct {
     pub fn getPage(self: *Site, path: Path) ?*Page {
         self.mutex.lock();
         defer self.mutex.unlock();
-        const index = path.index();
-        if (index >= self.pages_by_index.count()) return null;
-        return self.pages_by_index.at(index).*;
+        const path_index = path.index();
+        if (path_index >= self.pages_by_path.count()) return null;
+        const page_index = self.pages_by_path.at(path_index).* orelse return null;
+        return self.pages.at(page_index);
     }
 
     pub fn addPage(self: *Site, stack_page: Page) !*Page {
@@ -93,22 +94,24 @@ pub const Site = struct {
         defer self.mutex.unlock();
 
         // Copy the page into owned memory.
+        const page_index: u32 = @intCast(self.pages.count());
         var page = try self.pages.addOne(self.allocator());
         page.* = stack_page;
 
         const page_ptr = try self.pagePtrForIndex(page.source_path.index());
         std.debug.assert(page_ptr.* == null);
-        page_ptr.* = page;
+        page_ptr.* = page_index;
 
         if (page.source_path != page.output_path) {
             const output_ptr = try self.pagePtrForIndex(page.output_path.index());
             std.debug.assert(output_ptr.* == null);
-            output_ptr.* = page;
+            output_ptr.* = page_index;
         }
 
         if (page.source_path != page.web_path) {
             const web_ptr = try self.pagePtrForIndex(page.web_path.index());
-            if (web_ptr.*) |existing| {
+            if (web_ptr.*) |existing_index| {
+                const existing = self.pages.at(existing_index);
                 try fail.prettily(
                     \\I found multiple source files for a single page URL.
                     \\
@@ -125,18 +128,18 @@ pub const Site = struct {
                     \\
                 , .{ existing.source_path.bytes(), page.source_path.bytes(), page.web_path.bytes() });
             }
-            web_ptr.* = page;
+            web_ptr.* = page_index;
         }
 
         return page;
     }
 
-    fn pagePtrForIndex(self: *Site, index: usize) !*?*Page {
+    fn pagePtrForIndex(self: *Site, index: usize) !*?u32 {
         const arena = self.allocator();
-        while (index >= self.pages_by_index.count()) {
-            _ = try self.pages_by_index.append(arena, null);
+        while (index >= self.pages_by_path.count()) {
+            _ = try self.pages_by_path.append(arena, null);
         }
-        return self.pages_by_index.at(index);
+        return self.pages_by_path.at(index);
     }
 
     pub fn iterator(self: *Site) Iterator {
