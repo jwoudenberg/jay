@@ -21,10 +21,7 @@ pub fn generate(
 
     const output_path_bytes = page.output_path.bytes();
     if (std.fs.path.dirname(output_path_bytes)) |dir| try output_dir.makePath(dir);
-    const output = try output_dir.createFile(output_path_bytes, .{
-        .truncate = true,
-        .exclusive = true,
-    });
+    const output = try output_dir.createFile(output_path_bytes, .{ .truncate = true });
     defer output.close();
     var counting_writer = std.io.countingWriter(output.writer());
     var writer = counting_writer.writer();

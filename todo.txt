@@ -22,7 +22,6 @@ x run local http server
 +html empty attributes
 
 +watch combine events for same file
-+watch regenerate file on file change
 +watch regenerate files on directory change
 +watch regenerate dependent files on change
 +watch don't exit on error, instead keep list of current errors

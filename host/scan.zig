@@ -113,11 +113,11 @@ pub fn scanFile(
     source_path: Path,
 ) !void {
     const frontmatter = if (Site.isMarkdown(source_path.bytes()))
-        "{}"
+        try readFrontmatter(arena, source_root, source_path)
     else
-        try readFrontmatter(arena, source_root, source_path);
-    try site.addPage(source_path, frontmatter);
-    try work.push(.{ .generate_file = source_path });
+        "{}";
+    const changed = try site.upsert(source_path, frontmatter);
+    if (changed) try work.push(.{ .generate_file = source_path });
 }
 
 fn readFrontmatter(

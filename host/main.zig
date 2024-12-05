@@ -32,9 +32,13 @@ export fn roc_fx_list(pattern: *RocStr) callconv(.C) RocList {
     }
 }
 
-pub fn run() !void {
+fn run() !void {
     var args = std.process.args();
     const argv0 = args.next() orelse return error.EmptyArgv;
+
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
 
     // (1) Construct Site struct
     var paths = Path.Registry.init(gpa);
@@ -59,7 +63,10 @@ pub fn run() !void {
         // the entire project getting scanned and output generated.
         try work.push(.{ .scan_dir = try paths.intern("") });
     }
-    try clearOutputDir(site);
+
+    var source_root = try site.openSourceRoot(.{ .iterate = true });
+    defer source_root.close();
+    try clearOutputDir(source_root, site);
     try doWork(gpa, &paths, site, &watcher, &work);
 
     // (4) Serve the output files.
@@ -69,31 +76,63 @@ pub fn run() !void {
 
     // (5) Watch for changes.
     while (true) {
+        _ = arena_state.reset(.retain_capacity);
         while (try watcher.next_wait(50)) |change| {
-            // TODO: queue work.
-            std.debug.print("{any}\n", .{change});
-            // Cases to handle:
-            // - Known file/dir changed
-            //   - queue path scan
-            // - Unknown file/dir changed
-            //   - check if path exists (to avoid interning temporary paths)
-            //   - check if path is not ignored
-            //   - queue path scan
-            // - build.roc changed
-            //   - queue rebuild
-            // - watcher reports missed events
-            //   - queue path scan for project root (i.e., rescan everything)
+            try handle_change(&paths, &work, change);
         }
         // No new events in the last watch period, so filesystem changes
         // have settled.
-        try doWork(gpa, &paths, site, &watcher, &work);
+        try doWork(arena, &paths, site, &watcher, &work);
     }
 }
 
-pub fn clearOutputDir(site: *Site) !void {
-    var source_root = try site.openSourceRoot(.{ .iterate = true });
-    defer source_root.close();
+fn handle_change(
+    paths: *Path.Registry,
+    work: *WorkQueue,
+    change: Watcher.Change,
+) !void {
+    // TODO: queue work.
+    // Cases to handle:
+    // - Known file/dir changed
+    //   - queue path scan
+    // - Unknown file/dir changed
+    //   - check if path exists (to avoid interning temporary paths)
+    //   - check if path is not ignored
+    //   - queue path scan
+    // - build.roc changed
+    //   - queue rebuild
+    // - watcher reports missed events
+    //   - queue path scan for project root (i.e., rescan everything)
+    switch (change) {
+        .changes_missed => {
+            std.debug.print("TODO: rescan entire project", .{});
+        },
+        .dir_changed => |entry| {
+            std.debug.print(
+                "TODO: re-scan dir {s}/{s}\n",
+                .{ entry.dir.bytes(), entry.file_name },
+            );
+        },
+        .file_changed => |entry| {
+            var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+            const path_bytes = if (entry.dir.bytes().len == 0)
+                entry.file_name
+            else
+                try std.fmt.bufPrint(
+                    &buf,
+                    "{s}/{s}",
+                    .{ entry.dir.bytes(), entry.file_name },
+                );
+            if (paths.get(path_bytes)) |path| {
+                try work.push(.{ .scan_file = path });
+            } else {
+                std.debug.print("TODO: scan new file {s}\n", .{path_bytes});
+            }
+        },
+    }
+}
 
+fn clearOutputDir(source_root: std.fs.Dir, site: *Site) !void {
     source_root.deleteTree(site.output_root) catch |err| {
         if (err != error.NotDir) {
             return err;
@@ -102,17 +141,13 @@ pub fn clearOutputDir(site: *Site) !void {
     try source_root.makeDir(site.output_root);
 }
 
-pub fn doWork(
-    base_allocator: std.mem.Allocator,
+fn doWork(
+    arena: std.mem.Allocator,
     paths: *Path.Registry,
     site: *Site,
     watcher: *Watcher,
     work: *WorkQueue,
 ) !void {
-    var arena_state = std.heap.ArenaAllocator.init(base_allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
     var source_root = try site.openSourceRoot(.{ .iterate = true });
     defer source_root.close();
 
@@ -139,6 +174,5 @@ pub fn doWork(
                 );
             },
         }
-        _ = arena_state.reset(.retain_capacity);
     }
 }

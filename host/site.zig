@@ -92,9 +92,10 @@ pub const Site = struct {
         return self.pages.at(page_index);
     }
 
-    pub fn addPage(self: *Site, source_path: Path, frontmatter: []const u8) !void {
+    pub fn upsert(self: *Site, source_path: Path, frontmatter: []const u8) !bool {
         const rule_index = try self.ruleForPath(source_path);
         const rule = self.rules[rule_index];
+
         const source_path_bytes = source_path.bytes();
         const output_path = switch (rule.processing) {
             .xml, .none => source_path,
@@ -106,21 +107,87 @@ pub const Site = struct {
         };
         const extension = std.fs.path.extension(output_path.bytes());
         const mime_type = mime.extension_map.get(extension) orelse .@"application/octet-stream";
-        const web_path = webPathFromFilePath(output_path.bytes());
-        const page = Site.Page{
-            .mutex = std.Thread.Mutex{},
-            .rule_index = rule_index,
-            .processing = rule.processing,
-            .replace_tags = rule.replace_tags,
-            .mime_type = mime_type,
-            .source_path = source_path,
-            .output_path = output_path,
-            .web_path = try self.paths.intern(web_path),
-            .output_len = null, // We'll know this when we generate the page
-            // TODO: don't allocate frontmatter in arena, because it might change.
-            .frontmatter = try self.allocator().dupe(u8, frontmatter),
-        };
+        const web_path = try self.paths.intern(webPathFromFilePath(output_path.bytes()));
 
+        if (self.getPage(source_path)) |page| {
+            return self.update(page, output_path, web_path, frontmatter);
+        } else {
+            const page = Site.Page{
+                .mutex = std.Thread.Mutex{},
+                .rule_index = rule_index,
+                .processing = rule.processing,
+                .replace_tags = rule.replace_tags,
+                .mime_type = mime_type,
+                .source_path = source_path,
+                .output_path = output_path,
+                .web_path = web_path,
+                .output_len = null, // We'll know this when we generate the page
+                // TODO: don't allocate frontmatter in arena, because it might change.
+                .frontmatter = try self.allocator().dupe(u8, frontmatter),
+            };
+            try self.insert(page);
+            return true;
+        }
+    }
+
+    test upsert {
+        var paths = Path.Registry.init(std.testing.allocator);
+        defer paths.deinit();
+        var site = try Site.init(std.testing.allocator, "/test/build.roc", "output", &paths);
+        defer site.deinit();
+        var rules = [_]Site.Rule{
+            Site.Rule{
+                .processing = .markdown,
+                .patterns = &.{"markdown/*"},
+                .replace_tags = &.{ "tag1", "tag2" },
+            },
+            Site.Rule{
+                .processing = .none,
+                .patterns = &.{"static/*"},
+                .replace_tags = &.{"tag3"},
+            },
+        };
+        site.rules = &rules;
+
+        // Insert markdown file.
+        var changed = try site.upsert(try paths.intern("markdown/file.md"), "{}");
+        const md_page = site.getPage(try paths.intern("markdown/file.md")).?;
+        try std.testing.expect(changed);
+        try std.testing.expectEqual(0, md_page.rule_index);
+        try std.testing.expectEqualStrings("markdown/file.md", md_page.source_path.bytes());
+        try std.testing.expectEqualStrings("markdown/file.html", md_page.output_path.bytes());
+        try std.testing.expectEqualStrings("markdown/file", md_page.web_path.bytes());
+        try std.testing.expectEqual(.markdown, md_page.processing);
+        try std.testing.expectEqual(site.rules[0].replace_tags, md_page.replace_tags);
+        try std.testing.expectEqual(null, md_page.output_len);
+        try std.testing.expectEqualStrings("{}", md_page.frontmatter);
+        try std.testing.expectEqualStrings("text/html", @tagName(md_page.mime_type));
+
+        // Insert static file.
+        changed = try site.upsert(try paths.intern("static/style.css"), "{}");
+        const css_page = site.getPage(try paths.intern("static/style.css")).?;
+        try std.testing.expect(changed);
+        try std.testing.expectEqual(1, css_page.rule_index);
+        try std.testing.expectEqualStrings("static/style.css", css_page.source_path.bytes());
+        try std.testing.expectEqualStrings("static/style.css", css_page.output_path.bytes());
+        try std.testing.expectEqualStrings("static/style.css", css_page.web_path.bytes());
+        try std.testing.expectEqual(.none, css_page.processing);
+        try std.testing.expectEqual(site.rules[1].replace_tags, css_page.replace_tags);
+        try std.testing.expectEqual(null, css_page.output_len);
+        try std.testing.expectEqualStrings("{}", css_page.frontmatter);
+        try std.testing.expectEqualStrings("text/css", @tagName(css_page.mime_type));
+
+        // Update markdown file without making changes.
+        changed = try site.upsert(try paths.intern("markdown/file.md"), "{}");
+        try std.testing.expect(!changed);
+
+        // Update markdown file making changes.
+        changed = try site.upsert(try paths.intern("markdown/file.md"), "{ hi: 4 }");
+        try std.testing.expect(changed);
+        try std.testing.expectEqualStrings("{ hi: 4 }", md_page.frontmatter);
+    }
+
+    fn insert(self: *Site, page: Page) !void {
         self.mutex.lock();
         defer self.mutex.unlock();
 
@@ -129,7 +196,6 @@ pub const Site = struct {
         try self.pages.append(self.allocator(), page);
 
         const page_ptr = try self.pagePtrForIndex(page.source_path.index());
-        std.debug.assert(page_ptr.* == null);
         page_ptr.* = page_index;
 
         if (page.source_path != page.output_path) {
@@ -162,49 +228,28 @@ pub const Site = struct {
         }
     }
 
-    test addPage {
-        var paths = Path.Registry.init(std.testing.allocator);
-        defer paths.deinit();
-        var site = try Site.init(std.testing.allocator, "/test/build.roc", "output", &paths);
-        defer site.deinit();
-        var rules = [_]Site.Rule{
-            Site.Rule{
-                .processing = .markdown,
-                .patterns = &.{"markdown/*"},
-                .replace_tags = &.{ "tag1", "tag2" },
-            },
-            Site.Rule{
-                .processing = .none,
-                .patterns = &.{"static/*"},
-                .replace_tags = &.{"tag3"},
-            },
-        };
-        site.rules = &rules;
+    fn update(
+        self: *Site,
+        page: *Page,
+        output_path: Path,
+        web_path: Path,
+        frontmatter: []const u8,
+    ) !bool {
+        self.mutex.lock();
+        defer self.mutex.unlock();
 
-        try site.addPage(try paths.intern("markdown/file.md"), "{}");
-        const md_page = site.getPage(try paths.intern("markdown/file.md")).?;
-        try std.testing.expectEqual(0, md_page.rule_index);
-        try std.testing.expectEqualStrings("markdown/file.md", md_page.source_path.bytes());
-        try std.testing.expectEqualStrings("markdown/file.html", md_page.output_path.bytes());
-        try std.testing.expectEqualStrings("markdown/file", md_page.web_path.bytes());
-        try std.testing.expectEqual(.markdown, md_page.processing);
-        try std.testing.expectEqual(site.rules[0].replace_tags, md_page.replace_tags);
-        try std.testing.expectEqual(null, md_page.output_len);
-        try std.testing.expectEqualStrings("{}", md_page.frontmatter);
-        try std.testing.expectEqualStrings("{}", md_page.frontmatter);
-        try std.testing.expectEqualStrings("text/html", @tagName(md_page.mime_type));
+        const frontmatter_changed = !std.mem.eql(u8, page.frontmatter, frontmatter);
+        const changed =
+            page.output_path != output_path or
+            page.web_path != web_path or
+            frontmatter_changed;
+        page.output_path = output_path;
+        page.web_path = web_path;
+        if (frontmatter_changed) {
+            page.frontmatter = try self.allocator().dupe(u8, frontmatter);
+        }
 
-        try site.addPage(try paths.intern("static/style.css"), "{}");
-        const css_page = site.getPage(try paths.intern("static/style.css")).?;
-        try std.testing.expectEqual(1, css_page.rule_index);
-        try std.testing.expectEqualStrings("static/style.css", css_page.source_path.bytes());
-        try std.testing.expectEqualStrings("static/style.css", css_page.output_path.bytes());
-        try std.testing.expectEqualStrings("static/style.css", css_page.web_path.bytes());
-        try std.testing.expectEqual(.none, css_page.processing);
-        try std.testing.expectEqual(site.rules[1].replace_tags, css_page.replace_tags);
-        try std.testing.expectEqual(null, css_page.output_len);
-        try std.testing.expectEqualStrings("{}", css_page.frontmatter);
-        try std.testing.expectEqualStrings("text/css", @tagName(css_page.mime_type));
+        return changed;
     }
 
     fn pagePtrForIndex(self: *Site, index: usize) !*?u32 {

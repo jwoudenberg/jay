@@ -107,7 +107,7 @@ pub fn Watcher(
 
         const M = fanotify.fanotify.event_metadata;
 
-        pub fn next(self: *Self) !?Change(Dir) {
+        pub fn next(self: *Self) !?Change {
             var meta: [*]align(1) M = @ptrCast(@as([*]u8, @ptrCast(&self.events_buf)) + self.offset);
             if (self.len < @sizeOf(M) or
                 meta[0].event_len < @sizeOf(M) or
@@ -150,7 +150,7 @@ pub fn Watcher(
                 .{ .file_changed = .{ .dir = dir, .file_name = file_name } };
         }
 
-        pub fn next_wait(self: *Self, max_wait_ms: i32) !?Change(Dir) {
+        pub fn next_wait(self: *Self, max_wait_ms: i32) !?Change {
             if (try self.next()) |change| return change;
             const count = try std.posix.poll(&self.poll_fds, max_wait_ms);
             if (count > 0) return self.next();
@@ -166,19 +166,17 @@ pub fn Watcher(
             .MOVED_TO = true,
             .ONDIR = true,
         };
-    };
-}
 
-fn Change(comptime Dir: type) type {
-    const Entry = struct {
-        dir: Dir,
-        file_name: []const u8,
-    };
+        pub const Change = union(enum) {
+            dir_changed: Entry,
+            file_changed: Entry,
+            changes_missed: void,
+        };
 
-    return union(enum) {
-        dir_changed: Entry,
-        file_changed: Entry,
-        changes_missed: void,
+        pub const Entry = struct {
+            dir: Dir,
+            file_name: []const u8,
+        };
     };
 }
 
@@ -281,7 +279,14 @@ test "file watching produces expected events" {
     try expectChange(&watcher, .{ .dir_changed = .{ .dir = "mid", .file_name = "low2" } });
 }
 
-fn expectChange(watcher: *Watcher([]const u8, id), expected: Change([]const u8)) !void {
+fn identity(path: []const u8) []const u8 {
+    return path;
+}
+
+fn expectChange(
+    watcher: *Watcher([]const u8, id),
+    expected: Watcher([]const u8, identity).Change,
+) !void {
     const actual = try watcher.next_wait(10) orelse return error.ExpectedEvent;
     try std.testing.expectEqualStrings(
         @tagName(std.meta.activeTag(expected)),
