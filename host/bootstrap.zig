@@ -102,7 +102,7 @@ fn bootstrapRules(
                 site.rules[0].patterns = static_patterns.items;
                 site.rules[1].patterns = markdown_patterns.items;
 
-                try scan.scanFile(tmp_arena, &bootstrap_work, site, source_root, source_path);
+                try scan.scanFile(&bootstrap_work, site, source_path);
             },
             .scan_dir => {
                 try scan.scanDir(
@@ -130,25 +130,22 @@ test "bootstrapRules" {
     var tmpdir = std.testing.tmpDir(.{ .iterate = true });
     defer tmpdir.cleanup();
 
-    try tmpdir.dir.writeFile(.{ .sub_path = "build.roc", .data = "" });
-    const roc_main = try tmpdir.dir.realpathAlloc(std.testing.allocator, "build.roc");
-    defer std.testing.allocator.free(roc_main);
     var paths = Path.Registry.init(std.testing.allocator);
     defer paths.deinit();
-    var site = try Site.init(std.testing.allocator, roc_main, "output", &paths);
+    var site = try Site.init(std.testing.allocator, tmpdir.dir, "build.roc", "output", &paths);
     defer site.deinit();
 
     try tmpdir.dir.makeDir("markdown_only");
     try tmpdir.dir.makeDir("static_only");
     try tmpdir.dir.makeDir("mixed");
 
-    try tmpdir.dir.writeFile(.{ .sub_path = "markdown_only/one.md", .data = "" });
-    try tmpdir.dir.writeFile(.{ .sub_path = "markdown_only/two.md", .data = "" });
+    try tmpdir.dir.writeFile(.{ .sub_path = "markdown_only/one.md", .data = "{}\x02" });
+    try tmpdir.dir.writeFile(.{ .sub_path = "markdown_only/two.md", .data = "{}\x02" });
     try tmpdir.dir.writeFile(.{ .sub_path = "static_only/main.css", .data = "" });
     try tmpdir.dir.writeFile(.{ .sub_path = "static_only/logo.png", .data = "" });
-    try tmpdir.dir.writeFile(.{ .sub_path = "mixed/three.md", .data = "" });
+    try tmpdir.dir.writeFile(.{ .sub_path = "mixed/three.md", .data = "{}\x02" });
     try tmpdir.dir.writeFile(.{ .sub_path = "mixed/rss.xml", .data = "" });
-    try tmpdir.dir.writeFile(.{ .sub_path = "index.md", .data = "" });
+    try tmpdir.dir.writeFile(.{ .sub_path = "index.md", .data = "{}\x02" });
     try tmpdir.dir.writeFile(.{ .sub_path = ".gitignore", .data = "" });
 
     var work = WorkQueue.init(std.testing.allocator);
@@ -378,11 +375,9 @@ test generateCodeForRules {
         \\main = Pages.bootstrap
         ,
     });
-    const roc_main = try tmpdir.dir.realpathAlloc(std.testing.allocator, "build.roc");
-    defer std.testing.allocator.free(roc_main);
     var paths = Path.Registry.init(std.testing.allocator);
     defer paths.deinit();
-    var site = try Site.init(std.testing.allocator, roc_main, "output", &paths);
+    var site = try Site.init(std.testing.allocator, tmpdir.dir, "build.roc", "output", &paths);
     defer site.deinit();
     var rules = [_]Site.Rule{
         Site.Rule{

@@ -43,7 +43,7 @@ fn run() !void {
     // (1) Construct Site struct
     var paths = Path.Registry.init(gpa);
     defer paths.deinit();
-    global_site = try Site.init(gpa, argv0, "output", &paths);
+    global_site = try Site.init(gpa, std.fs.cwd(), argv0, "output", &paths);
     defer global_site.deinit();
     var site = &global_site;
 
@@ -157,7 +157,7 @@ fn doWork(
     while (work.pop()) |job| {
         switch (job) {
             .scan_file => {
-                try scan.scanFile(arena, work, site, source_root, job.scan_file);
+                try scan.scanFile(work, site, job.scan_file);
             },
             .generate_file => {
                 const page = site.getPage(job.generate_file) orelse return error.CantGenerateMissingPage;
