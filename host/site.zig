@@ -92,17 +92,29 @@ pub const Site = struct {
     pub fn getPage(self: *Site, path: Path) ?*Page {
         self.mutex.lock();
         defer self.mutex.unlock();
+        return self.getPageUnlocked(path);
+    }
+
+    fn getPageUnlocked(self: *Site, path: Path) ?*Page {
         const path_index = path.index();
         if (path_index >= self.pages_by_path.count()) return null;
         const page_index = self.pages_by_path.at(path_index).* orelse return null;
-        return self.pages.at(page_index);
+        const page = self.pages.at(page_index);
+        return if (page.deleted) null else page;
     }
 
     pub fn upsert(self: *Site, source_path: Path) !bool {
-        const opt_page = self.getPage(source_path);
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const opt_page = self.getPageUnlocked(source_path);
         const stat = self.source_root.statFile(source_path.bytes()) catch |err| {
             if (err == error.FileNotFound) {
-                if (opt_page) |page| try self.delete(page);
+                if (opt_page) |page| {
+                    page.mutex.lock();
+                    defer page.mutex.unlock();
+                    page.deleted = true;
+                }
                 return false;
             } else {
                 return err;
@@ -110,45 +122,16 @@ pub const Site = struct {
         };
 
         if (opt_page) |page| {
-            if (page.last_modified == stat.mtime) return false;
-        }
-
-        const rule_index = try self.ruleForPath(source_path);
-        const rule = self.rules[rule_index];
-
-        const source_path_bytes = source_path.bytes();
-        const output_path = switch (rule.processing) {
-            .xml, .none => source_path,
-            .markdown => blk: {
-                var buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;
-                const output_path_bytes = try outputPathForMarkdownFile(&buffer, source_path_bytes);
-                break :blk try self.paths.intern(output_path_bytes);
-            },
-        };
-        const extension = std.fs.path.extension(output_path.bytes());
-        const mime_type = mime.extension_map.get(extension) orelse .@"application/octet-stream";
-        const web_path = try self.paths.intern(webPathFromFilePath(output_path.bytes()));
-
-        if (opt_page) |page| {
-            return self.update(page, stat, output_path, web_path);
+            page.mutex.lock();
+            defer page.mutex.unlock();
+            if (page.last_modified == stat.mtime) {
+                return false;
+            } else {
+                page.last_modified = stat.mtime;
+                return self.update(page);
+            }
         } else {
-            const frontmatter = try self.frontmatters.read(self.source_root, source_path) orelse {
-                return error.UnexpectedFrontmatterMissing;
-            };
-            const page = Site.Page{
-                .mutex = std.Thread.Mutex{},
-                .rule_index = rule_index,
-                .processing = rule.processing,
-                .replace_tags = rule.replace_tags,
-                .mime_type = mime_type,
-                .source_path = source_path,
-                .output_path = output_path,
-                .web_path = web_path,
-                .frontmatter = frontmatter,
-                .output_len = null, // We'll know this when we generate the page
-                .last_modified = stat.mtime,
-            };
-            try self.insert(page);
+            try self.insert(stat, source_path);
             return true;
         }
     }
@@ -178,9 +161,10 @@ pub const Site = struct {
         site.rules = &rules;
 
         // Insert markdown file.
-        var changed = try site.upsert(try paths.intern("file.md"));
-        const md_page = site.getPage(try paths.intern("file.md")).?;
-        try std.testing.expect(changed);
+        const file_md = try paths.intern("file.md");
+        var generate = try site.upsert(file_md);
+        const md_page = site.getPage(file_md).?;
+        try std.testing.expect(generate);
         try std.testing.expectEqual(0, md_page.rule_index);
         try std.testing.expectEqualStrings("file.md", md_page.source_path.bytes());
         try std.testing.expectEqualStrings("file.html", md_page.output_path.bytes());
@@ -192,9 +176,10 @@ pub const Site = struct {
         try std.testing.expectEqualStrings("text/html", @tagName(md_page.mime_type));
 
         // Insert static file.
-        changed = try site.upsert(try paths.intern("style.css"));
-        const css_page = site.getPage(try paths.intern("style.css")).?;
-        try std.testing.expect(changed);
+        const style_css = try paths.intern("style.css");
+        generate = try site.upsert(style_css);
+        const css_page = site.getPage(style_css).?;
+        try std.testing.expect(generate);
         try std.testing.expectEqual(1, css_page.rule_index);
         try std.testing.expectEqualStrings("style.css", css_page.source_path.bytes());
         try std.testing.expectEqualStrings("style.css", css_page.output_path.bytes());
@@ -206,24 +191,46 @@ pub const Site = struct {
         try std.testing.expectEqualStrings("text/css", @tagName(css_page.mime_type));
 
         // Update markdown file without making changes.
-        changed = try site.upsert(try paths.intern("file.md"));
-        try std.testing.expect(!changed);
+        generate = try site.upsert(file_md);
+        try std.testing.expect(!generate);
 
         // Update markdown file making changes.
         try tmpdir.dir.writeFile(.{ .sub_path = "file.md", .data = "{ hi: 4 }\x09" });
-        changed = try site.upsert(try paths.intern("file.md"));
-        try std.testing.expect(changed);
+        generate = try site.upsert(file_md);
+        try std.testing.expect(generate);
         try std.testing.expectEqualStrings("{ hi: 4 }", md_page.frontmatter);
+
+        // Delete markdown file
+        try tmpdir.dir.deleteFile("file.md");
+        generate = try site.upsert(file_md);
+        try std.testing.expect(!generate);
+        try std.testing.expectEqual(null, site.getPage(file_md));
     }
 
-    fn insert(self: *Site, page: Page) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+    fn insert(self: *Site, stat: std.fs.File.Stat, source_path: Path) !void {
+        const frontmatter = try self.frontmatters.read(self.source_root, source_path) orelse {
+            return error.UnexpectedFrontmatterMissing;
+        };
+        var page = Site.Page{
+            .mutex = std.Thread.Mutex{},
+            .frontmatter = frontmatter,
+            .source_path = source_path,
+            .last_modified = stat.mtime,
+            .output_len = null, // We'll know this when we generate the page
+            .deleted = false,
+            // Set in `setPageFields` helper:
+            .rule_index = undefined,
+            .processing = undefined,
+            .replace_tags = undefined,
+            .mime_type = undefined,
+            .output_path = undefined,
+            .web_path = undefined,
+        };
+        try self.setPageFields(&page);
 
         // Copy the page into owned memory.
         const page_index: u32 = @intCast(self.pages.count());
         try self.pages.append(self.allocator(), page);
-
         const page_ptr = try self.pagePtrForIndex(page.source_path.index());
         page_ptr.* = page_index;
 
@@ -257,39 +264,62 @@ pub const Site = struct {
         }
     }
 
-    fn update(
-        self: *Site,
-        page: *Page,
-        stat: std.fs.File.Stat,
-        output_path: Path,
-        web_path: Path,
-    ) !bool {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+    fn update(self: *Site, page: *Page) !bool {
+        var changed = false;
+        const old_output_path = page.output_path;
+        const old_web_path = page.web_path;
+        const page_index = self.pages_by_path.at(page.source_path.index()).* orelse {
+            return error.MissingPageByPathEntry;
+        };
+        try self.setPageFields(page);
 
-        const new_frontmatter = try self.frontmatters.read(
-            self.source_root,
-            page.source_path,
-        );
-        const changed =
-            stat.mtime != page.last_modified or
-            page.output_path != output_path or
-            page.web_path != web_path or
-            new_frontmatter != null;
+        if (page.deleted) {
+            changed = true;
+            page.deleted = false;
+        }
 
-        page.output_path = output_path;
-        page.web_path = web_path;
-        page.last_modified = stat.mtime;
-        if (new_frontmatter) |frontmatter| page.frontmatter = frontmatter;
+        if (try self.frontmatters.read(self.source_root, page.source_path)) |frontmatter| {
+            changed = true;
+            page.frontmatter = frontmatter;
+        }
+
+        if (page.output_path != old_output_path) {
+            self.pages_by_path.at(old_output_path.index()).* = null;
+            self.pages_by_path.at(page.output_path.index()).* = page_index;
+            changed = true;
+        }
+
+        if (page.web_path != old_web_path) {
+            self.pages_by_path.at(old_web_path.index()).* = null;
+            self.pages_by_path.at(page.web_path.index()).* = page_index;
+            changed = true;
+        }
 
         return changed;
     }
 
-    fn delete(self: *Site, page: *Page) !void {
-        _ = self;
-        _ = page;
-        // TODO: implement this.
-        unreachable;
+    fn setPageFields(self: *Site, page: *Page) !void {
+        const rule_index = try self.ruleForPath(page.source_path);
+        const rule = self.rules[rule_index];
+        const source_path_bytes = page.source_path.bytes();
+        const output_path = switch (rule.processing) {
+            .xml, .none => page.source_path,
+            .markdown => blk: {
+                var buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+                const output_path_bytes = try outputPathForMarkdownFile(&buffer, source_path_bytes);
+                break :blk try self.paths.intern(output_path_bytes);
+            },
+        };
+        const extension = std.fs.path.extension(output_path.bytes());
+        const mime_type = mime.extension_map.get(extension) orelse .@"application/octet-stream";
+        const web_path = try self.paths.intern(webPathFromFilePath(output_path.bytes()));
+
+        page.rule_index = rule_index;
+        page.processing = rule.processing;
+        page.replace_tags = rule.replace_tags;
+        page.mime_type = mime_type;
+        page.output_path = output_path;
+        page.web_path = web_path;
     }
 
     fn pagePtrForIndex(self: *Site, index: usize) !*?u32 {
@@ -325,6 +355,7 @@ pub const Site = struct {
         web_path: Path,
         frontmatter: []const u8,
         last_modified: i128,
+        deleted: bool,
     };
 
     // Enum pairs should be a subset of those in Platform.Processing enum.
