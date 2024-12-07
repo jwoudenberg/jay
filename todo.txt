@@ -21,6 +21,10 @@ x run local http server
 +html custom attributes
 +html empty attributes
 
++refactor cache glob results in a pattern=>[page] map
++refactor run generate as part of scan-file, accept generate reruns
++refactor regenerate dependent pages as part of scan-file, detect loops
+
 +watch combine events for same file
 +watch regenerate files on directory change
 +watch regenerate dependent files on change

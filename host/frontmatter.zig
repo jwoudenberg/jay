@@ -30,14 +30,14 @@ pub const Frontmatters = struct {
         self: *const Frontmatters,
         source_path: Path,
     ) ?[]const u8 {
-        return self.frontmatters.get(source_path);
+        return self.frontmatters.get(source_path.index());
     }
 
     pub fn read(
         self: *Frontmatters,
         source_root: std.fs.Dir,
         source_path: Path,
-    ) !?[]const u8 {
+    ) ![]const u8 {
         const gpa = self.arena_state.child_allocator;
         _ = self.arena_state.reset(.{ .retain_with_limit = 1024 * 1024 });
         const arena = self.arena_state.allocator();
@@ -69,10 +69,8 @@ pub const Frontmatters = struct {
             if (!std.mem.eql(u8, get_or_put.value_ptr.*, meta_bytes)) {
                 gpa.free(get_or_put.value_ptr.*);
                 get_or_put.value_ptr.* = try gpa.dupe(u8, meta_bytes);
-                return get_or_put.value_ptr.*;
-            } else {
-                return null;
             }
+            return get_or_put.value_ptr.*;
         } else {
             get_or_put.value_ptr.* = try gpa.dupe(u8, meta_bytes);
             return get_or_put.value_ptr.*;
@@ -94,13 +92,13 @@ pub const Frontmatters = struct {
         try tmpdir.dir.writeFile(.{ .sub_path = "file1.txt", .data = "no frontmatter" });
         try std.testing.expectEqualStrings(
             "{}",
-            (try frontmatters.read(tmpdir.dir, try paths.intern("file1.txt"))).?,
+            (try frontmatters.read(tmpdir.dir, try paths.intern("file1.txt"))),
         );
 
         try tmpdir.dir.writeFile(.{ .sub_path = "file2.txt", .data = "{ hi: 3 }\n# header \x14" });
         try std.testing.expectEqualStrings(
             "{ hi: 3 }",
-            (try frontmatters.read(tmpdir.dir, try paths.intern("file2.txt"))).?,
+            (try frontmatters.read(tmpdir.dir, try paths.intern("file2.txt"))),
         );
 
         try tmpdir.dir.writeFile(.{ .sub_path = "file3.txt", .data = "{ \x00" });

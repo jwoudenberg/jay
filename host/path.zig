@@ -6,19 +6,34 @@ const mime = @import("mime");
 const glob = @import("glob.zig");
 const native_endian = @import("builtin").target.cpu.arch.endian();
 
+// Pointer to an interned slice of bytes.
+//
+//     | index | len   | slice bytes ..
+//     | usize | usize | ..
+//             ^
+//           pointer
+//
+// The index is used to store the page index for file paths. For other types
+// of strings it is currently unused.
 pub const Path = enum(usize) {
     _,
 
+    pub const init_index = std.math.maxInt(usize);
+
     pub fn bytes(self: Path) []const u8 {
         const ptr: [*]u8 = @ptrFromInt(@intFromEnum(self));
-        const len = std.mem.readInt(usize, ptr[@sizeOf(usize) .. 2 * @sizeOf(usize)], native_endian);
-        const start = 2 * @sizeOf(usize);
-        return ptr[start .. start + len];
+        const len: *usize = @ptrFromInt(@intFromEnum(self));
+        return (ptr + @sizeOf(usize))[0..len.*];
     }
 
     pub fn index(self: Path) usize {
-        const ptr = @as([*]u8, @ptrFromInt(@intFromEnum(self)));
-        return std.mem.readInt(usize, ptr[0..@sizeOf(usize)], native_endian);
+        const ptr: *usize = @ptrFromInt(@intFromEnum(self) - @sizeOf(usize));
+        return @atomicLoad(usize, ptr, .monotonic);
+    }
+
+    pub fn replaceIndex(self: Path, new: usize) usize {
+        const ptr: *usize = @ptrFromInt(@intFromEnum(self) - @sizeOf(usize));
+        return @atomicRmw(usize, ptr, .Xchg, new, .monotonic);
     }
 
     pub const Registry = struct {
@@ -55,17 +70,16 @@ pub const Path = enum(usize) {
                 return get_or_put.value_ptr.*;
             }
 
-            const next_index = self.paths.count() - 1;
             var buffer = try self.arena_state.allocator().alignedAlloc(
                 u8,
                 @sizeOf(usize),
                 2 * @sizeOf(usize) + path.len,
             );
-            std.mem.writeInt(usize, buffer[0..@sizeOf(usize)], next_index, native_endian);
+            std.mem.writeInt(usize, buffer[0..@sizeOf(usize)], init_index, native_endian);
             std.mem.writeInt(usize, buffer[@sizeOf(usize) .. 2 * @sizeOf(usize)], path.len, native_endian);
             const interned_path = buffer[2 * @sizeOf(usize) ..];
             @memcpy(interned_path, path);
-            const wrapped_path: Path = @enumFromInt(@intFromPtr(&buffer[0]));
+            const wrapped_path: Path = @enumFromInt(@intFromPtr(&buffer[@sizeOf(usize)]));
             get_or_put.key_ptr.* = interned_path;
             get_or_put.value_ptr.* = wrapped_path;
             return wrapped_path;
@@ -82,11 +96,14 @@ test "Path.Registry" {
     const path3 = try paths.intern("/other/file.txt");
 
     try std.testing.expectEqualStrings("/some/path/file.txt", path1.bytes());
-    try std.testing.expectEqual(0, path1.index());
     try std.testing.expectEqualStrings("/other/file.txt", path2.bytes());
-    try std.testing.expectEqual(1, path2.index());
     try std.testing.expectEqualStrings("/other/file.txt", path3.bytes());
-    try std.testing.expectEqual(1, path2.index());
+
+    try std.testing.expectEqual(Path.init_index, path1.replaceIndex(4));
+    try std.testing.expectEqual(4, path1.index());
+    try std.testing.expectEqual(4, path1.replaceIndex(5));
+    try std.testing.expectEqual(5, path1.index());
+    try std.testing.expectEqual(Path.init_index, path2.index());
 
     try std.testing.expect(path2 == path3);
     try std.testing.expect(path1 != path2);
