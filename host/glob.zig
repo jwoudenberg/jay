@@ -77,11 +77,3 @@ test match {
     try std.testing.expect(!match("di", "dir/file.txt"));
     try std.testing.expect(!match("dir/file", "dir/file.txt"));
 }
-
-pub fn matchAny(patterns: []const []const u8, path: []const u8) bool {
-    for (patterns) |pattern| {
-        if (match(pattern, path)) return true;
-    } else {
-        return false;
-    }
-}

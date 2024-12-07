@@ -52,7 +52,9 @@ fn writeFile(
         .xml => {
             // TODO: figure out what to do with files larger than this.
             const source = try source_root.readFileAlloc(arena, page.source_path.bytes(), 1024 * 1024);
-            const tags = try xml.parse(arena, source, page.replace_tags);
+            var replace_tags = try arena.alloc([]const u8, page.replace_tags.len);
+            for (page.replace_tags, 0..) |tag, index| replace_tags[index] = tag.bytes();
+            const tags = try xml.parse(arena, source, replace_tags);
             try platform.runPipeline(
                 arena,
                 page,
@@ -76,7 +78,9 @@ fn writeFile(
             ) orelse return error.OutOfMemory;
             defer std.c.free(html);
             const source = std.mem.span(html);
-            const tags = try xml.parse(arena, source, page.replace_tags);
+            var replace_tags = try arena.alloc([]const u8, page.replace_tags.len);
+            for (page.replace_tags, 0..) |tag, index| replace_tags[index] = tag.bytes();
+            const tags = try xml.parse(arena, source, replace_tags);
             try platform.runPipeline(
                 arena,
                 page,

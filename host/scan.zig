@@ -32,7 +32,7 @@ pub fn scanDir(
         } else blk: {
             break :blk try std.fmt.bufPrint(&buffer, "{s}/{s}", .{ dir_path.bytes(), entry.name });
         };
-        if (glob.matchAny(site.ignore_patterns, path_bytes)) continue;
+        if (Site.matchAny(site.ignore_patterns, path_bytes)) continue;
 
         const path = try strs.intern(path_bytes);
         switch (entry.kind) {

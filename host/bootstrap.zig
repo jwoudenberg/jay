@@ -13,14 +13,6 @@ const Str = @import("str.zig").Str;
 const generate = @import("generate.zig").generate;
 const platform = @import("generate.zig").platform;
 
-// When running the bootstrap script we have to guess which files the user
-// might want to be ignored. This is our list of such guesses.
-const bootstrap_ignore_patterns = [_][]const u8{
-    ".git",
-    ".gitignore",
-    "README*",
-};
-
 pub fn bootstrap(
     gpa: std.mem.Allocator,
     strs: *Str.Registry,
@@ -51,10 +43,10 @@ fn bootstrapRules(
     var tmp_arena_state = std.heap.ArenaAllocator.init(gpa);
     defer tmp_arena_state.deinit();
     const tmp_arena = tmp_arena_state.allocator();
-    var ignore_patterns = std.ArrayList([]const u8).init(tmp_arena);
+    var ignore_patterns = std.ArrayList(Str).init(tmp_arena);
     try ignore_patterns.appendSlice(site.ignore_patterns);
-    var markdown_patterns = std.ArrayList([]const u8).init(tmp_arena);
-    var static_patterns = std.ArrayList([]const u8).init(tmp_arena);
+    var markdown_patterns = std.ArrayList(Str).init(tmp_arena);
+    var static_patterns = std.ArrayList(Str).init(tmp_arena);
 
     site.rules = try site_arena.dupe(Site.Rule, &.{
         Site.Rule{
@@ -75,6 +67,14 @@ fn bootstrapRules(
     // the entire project getting scanned and output generated.
     try bootstrap_work.push(.{ .scan_dir = try strs.intern("") });
 
+    // When running the bootstrap script we have to guess which files the user
+    // might want to be ignored. This is our list of such guesses.
+    const bootstrap_ignore_patterns = [_]Str{
+        try strs.intern(".git"),
+        try strs.intern(".gitignore"),
+        try strs.intern("README*"),
+    };
+
     // TODO: reinit arena after each iteration.
     jobs_loop: while (bootstrap_work.pop()) |job| {
         switch (job) {
@@ -82,22 +82,23 @@ fn bootstrapRules(
                 const source_path = job.scan_file;
                 const source_path_bytes = source_path.bytes();
 
-                for (bootstrap_ignore_patterns) |bootstrap_ignore_pattern| {
-                    if (std.mem.eql(u8, bootstrap_ignore_pattern, source_path_bytes)) {
-                        try ignore_patterns.append(try site_arena.dupe(u8, source_path_bytes));
-                        continue :jobs_loop;
-                    }
+                pattern_loop: for (bootstrap_ignore_patterns) |bootstrap_ignore_pattern| {
+                    const path = strs.get(source_path_bytes) orelse continue :pattern_loop;
+                    if (path != bootstrap_ignore_pattern) continue :pattern_loop;
+                    try ignore_patterns.append(path);
+                    continue :jobs_loop;
                 }
 
-                const new_pattern = try patternForPath(tmp_arena, source_path_bytes);
+                const pattern_bytes = try patternForPath(tmp_arena, source_path_bytes);
+                const pattern = try strs.intern(pattern_bytes);
                 var patterns = if (Site.isMarkdown(source_path_bytes))
                     &markdown_patterns
                 else
                     &static_patterns;
                 for (patterns.items) |existing_pattern| {
-                    if (std.mem.eql(u8, existing_pattern, new_pattern)) break;
+                    if (pattern == existing_pattern) break;
                 } else {
-                    try patterns.append(try site_arena.dupe(u8, new_pattern));
+                    try patterns.append(pattern);
                 }
                 site.rules[0].patterns = static_patterns.items;
                 site.rules[1].patterns = markdown_patterns.items;
@@ -121,9 +122,9 @@ fn bootstrapRules(
         }
     }
 
-    site.rules[0].patterns = try site_arena.dupe([]const u8, site.rules[0].patterns);
-    site.rules[1].patterns = try site_arena.dupe([]const u8, site.rules[1].patterns);
-    site.ignore_patterns = try site_arena.dupe([]const u8, ignore_patterns.items);
+    site.rules[0].patterns = try site_arena.dupe(Str, site.rules[0].patterns);
+    site.rules[1].patterns = try site_arena.dupe(Str, site.rules[1].patterns);
+    site.ignore_patterns = try site_arena.dupe(Str, ignore_patterns.items);
 }
 
 test "bootstrapRules" {
@@ -156,30 +157,30 @@ test "bootstrapRules" {
     try bootstrapRules(std.testing.allocator, &strs, &site, &watcher, &work, tmpdir.dir);
 
     try std.testing.expectEqual(4, site.ignore_patterns.len);
-    try std.testing.expectEqualStrings("output", site.ignore_patterns[0]);
-    try std.testing.expectEqualStrings("build.roc", site.ignore_patterns[1]);
-    try std.testing.expectEqualStrings("build", site.ignore_patterns[2]);
-    try std.testing.expectEqualStrings(".gitignore", site.ignore_patterns[3]);
+    try std.testing.expectEqualStrings("output", site.ignore_patterns[0].bytes());
+    try std.testing.expectEqualStrings("build.roc", site.ignore_patterns[1].bytes());
+    try std.testing.expectEqualStrings("build", site.ignore_patterns[2].bytes());
+    try std.testing.expectEqualStrings(".gitignore", site.ignore_patterns[3].bytes());
 
     try std.testing.expectEqual(2, site.rules.len);
 
     try std.testing.expectEqual(.none, site.rules[0].processing);
     try std.testing.expectEqual(3, site.rules[0].patterns.len);
-    const static_patterns = try std.testing.allocator.dupe([]const u8, site.rules[0].patterns);
+    const static_patterns = try std.testing.allocator.dupe(Str, site.rules[0].patterns);
     defer std.testing.allocator.free(static_patterns);
-    std.sort.insertion([]const u8, static_patterns, {}, compareStrings);
-    try std.testing.expectEqualStrings("mixed/*.xml", static_patterns[0]);
-    try std.testing.expectEqualStrings("static_only/*.css", static_patterns[1]);
-    try std.testing.expectEqualStrings("static_only/*.png", static_patterns[2]);
+    std.sort.insertion(Str, static_patterns, {}, compareStrings);
+    try std.testing.expectEqualStrings("mixed/*.xml", static_patterns[0].bytes());
+    try std.testing.expectEqualStrings("static_only/*.css", static_patterns[1].bytes());
+    try std.testing.expectEqualStrings("static_only/*.png", static_patterns[2].bytes());
 
     try std.testing.expectEqual(.markdown, site.rules[1].processing);
     try std.testing.expectEqual(3, site.rules[1].patterns.len);
-    const markdown_patterns = try std.testing.allocator.dupe([]const u8, site.rules[1].patterns);
+    const markdown_patterns = try std.testing.allocator.dupe(Str, site.rules[1].patterns);
     defer std.testing.allocator.free(markdown_patterns);
-    std.sort.insertion([]const u8, markdown_patterns, {}, compareStrings);
-    try std.testing.expectEqualStrings("*.md", markdown_patterns[0]);
-    try std.testing.expectEqualStrings("markdown_only/*.md", markdown_patterns[1]);
-    try std.testing.expectEqualStrings("mixed/*.md", markdown_patterns[2]);
+    std.sort.insertion(Str, markdown_patterns, {}, compareStrings);
+    try std.testing.expectEqualStrings("*.md", markdown_patterns[0].bytes());
+    try std.testing.expectEqualStrings("markdown_only/*.md", markdown_patterns[1].bytes());
+    try std.testing.expectEqualStrings("mixed/*.md", markdown_patterns[2].bytes());
 
     const one_md = site.getPage(try strs.intern("markdown_only/one")).?;
     try std.testing.expectEqualStrings("markdown_only/one.md", one_md.source_path.bytes());
@@ -217,8 +218,8 @@ test "bootstrapRules" {
     try std.testing.expectEqual(index_md.rule_index, 1);
 }
 
-fn compareStrings(_: void, lhs: []const u8, rhs: []const u8) bool {
-    return std.mem.order(u8, lhs, rhs).compare(std.math.CompareOperator.lt);
+fn compareStrings(_: void, lhs: Str, rhs: Str) bool {
+    return std.mem.order(u8, lhs.bytes(), rhs.bytes()).compare(std.math.CompareOperator.lt);
 }
 
 fn patternForPath(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
@@ -298,7 +299,7 @@ fn generateCodeForRules(site: *const Site, source_root: std.fs.Dir) !void {
                     \\        Pages.files [
                 );
                 for (rule.patterns, 0..) |pattern, index| {
-                    try writer.print("\"{s}\"", .{pattern});
+                    try writer.print("\"{s}\"", .{pattern.bytes()});
                     if (index < rule.patterns.len - 1) {
                         try writer.writeAll(", ");
                     }
@@ -316,7 +317,7 @@ fn generateCodeForRules(site: *const Site, source_root: std.fs.Dir) !void {
     );
     const user_ignore_patterns = site.user_ignore_patterns();
     for (user_ignore_patterns, 0..) |pattern, index| {
-        try writer.print("\"{s}\"", .{pattern});
+        try writer.print("\"{s}\"", .{pattern.bytes()});
         if (index < user_ignore_patterns.len - 1) {
             try writer.writeAll(", ");
         }
@@ -338,7 +339,7 @@ fn generateCodeForRules(site: *const Site, source_root: std.fs.Dir) !void {
                     \\    Pages.files [
                 );
                 for (rule.patterns, 0..) |pattern, index| {
-                    try writer.print("\"{s}\"", .{pattern});
+                    try writer.print("\"{s}\"", .{pattern.bytes()});
                     if (index < rule.patterns.len - 1) {
                         try writer.writeAll(", ");
                     }
@@ -382,23 +383,24 @@ test generateCodeForRules {
     var rules = [_]Site.Rule{
         Site.Rule{
             .processing = .markdown,
-            .patterns = ([_][]const u8{ "posts/*.md", "*.md" })[0..],
+            .patterns = try site.strsFromSlices(&.{ "posts/*.md", "*.md" }),
             .replace_tags = &.{},
         },
         Site.Rule{
             .processing = .none,
-            .patterns = ([_][]const u8{"static"})[0..],
+            .patterns = try site.strsFromSlices(&.{"static"}),
             .replace_tags = &.{},
         },
     };
     site.rules = rules[0..];
-    site.ignore_patterns = &.{
-        "build.roc",
-        "build",
-        "output",
-        ".git",
-        ".gitignore",
+    var ignore_patterns = [_]Str{
+        try strs.intern("build.roc"),
+        try strs.intern("build"),
+        try strs.intern("output"),
+        try strs.intern(".git"),
+        try strs.intern(".gitignore"),
     };
+    site.ignore_patterns = &ignore_patterns;
 
     try generateCodeForRules(&site, tmpdir.dir);
 

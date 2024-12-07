@@ -6,6 +6,7 @@ const std = @import("std");
 const RocStr = @import("roc/str.zig").RocStr;
 const RocList = @import("roc/list.zig").RocList;
 const Site = @import("site.zig").Site;
+const Str = @import("str.zig").Str;
 const xml = @import("xml.zig");
 const glob = @import("glob.zig");
 
@@ -76,9 +77,9 @@ fn getRules(gpa: std.mem.Allocator, site: *Site) !bool {
     var should_bootstrap = false;
     var rules = std.ArrayList(Site.Rule).init(gpa);
     errdefer rules.deinit();
-    var ignore_patterns = std.ArrayList([]const u8).fromOwnedSlice(
+    var ignore_patterns = std.ArrayList(Str).fromOwnedSlice(
         gpa,
-        try gpa.dupe([]const u8, site.ignore_patterns),
+        try gpa.dupe(Str, site.ignore_patterns),
     );
     errdefer ignore_patterns.deinit();
     var roc_rule_iterator = RocListIterator(Rule).init(roc_rules);
@@ -89,16 +90,20 @@ fn getRules(gpa: std.mem.Allocator, site: *Site) !bool {
                 const rule = .{
                     .patterns = try rocListMapToOwnedSlice(
                         RocStr,
-                        []const u8,
+                        Str,
+                        *Str.Registry,
                         fromRocStr,
                         arena,
+                        site.strs,
                         platform_rule.patterns,
                     ),
                     .replace_tags = try rocListMapToOwnedSlice(
                         RocStr,
-                        []const u8,
+                        Str,
+                        *Str.Registry,
                         fromRocStr,
                         arena,
+                        site.strs,
                         platform_rule.replace_tags,
                     ),
                     .processing = @as(Site.Processing, @enumFromInt(@intFromEnum(platform_rule.processing))),
@@ -108,9 +113,11 @@ fn getRules(gpa: std.mem.Allocator, site: *Site) !bool {
             .ignore => {
                 const patterns = try rocListMapToOwnedSlice(
                     RocStr,
-                    []const u8,
+                    Str,
+                    *Str.Registry,
                     fromRocStr,
                     arena,
+                    site.strs,
                     platform_rule.patterns,
                 );
                 try ignore_patterns.appendSlice(patterns);
@@ -121,7 +128,7 @@ fn getRules(gpa: std.mem.Allocator, site: *Site) !bool {
         }
     }
     site.rules = try arena.dupe(Site.Rule, try rules.toOwnedSlice());
-    site.ignore_patterns = try arena.dupe([]const u8, try ignore_patterns.toOwnedSlice());
+    site.ignore_patterns = try arena.dupe(Str, try ignore_patterns.toOwnedSlice());
     return should_bootstrap;
 }
 
@@ -364,8 +371,10 @@ fn RocListIterator(comptime T: type) type {
 fn rocListMapToOwnedSlice(
     comptime T: type,
     comptime O: type,
-    comptime map: fn (allocator: std.mem.Allocator, elem: T) anyerror!O,
+    comptime C: type,
+    comptime map: fn (context: C, elem: T) anyerror!O,
     allocator: std.mem.Allocator,
+    context: C,
     list: RocList,
 ) ![]O {
     const len = list.len();
@@ -373,13 +382,13 @@ fn rocListMapToOwnedSlice(
     const elements = list.elements(T) orelse return error.RocListUnexpectedlyEmpty;
     const slice = try allocator.alloc(O, len);
     for (elements, 0..len) |element, index| {
-        slice[index] = try map(allocator, element);
+        slice[index] = try map(context, element);
     }
     return slice;
 }
 
-fn fromRocStr(allocator: std.mem.Allocator, roc_pattern: RocStr) ![]const u8 {
-    return try allocator.dupe(u8, roc_pattern.asSlice());
+fn fromRocStr(strs: *Str.Registry, roc_pattern: RocStr) !Str {
+    return strs.intern(roc_pattern.asSlice());
 }
 
 fn getRulesTest(gpa: std.mem.Allocator, site: *Site) anyerror!bool {

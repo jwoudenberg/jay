@@ -1,5 +1,6 @@
 // Contains the main data structure the host code is built around.
 
+const builtin = @import("builtin");
 const std = @import("std");
 const fail = @import("fail.zig");
 const mime = @import("mime");
@@ -17,7 +18,7 @@ pub const Site = struct {
     // Str to the directory that will contain the generated site.
     output_root: []const u8,
     // Source patterns that should not be turned into pages.
-    ignore_patterns: []const []const u8,
+    ignore_patterns: []Str,
     // The page-construction rules defined in the .roc file we're running.
     rules: []Rule,
     // Interned path slices
@@ -47,10 +48,10 @@ pub const Site = struct {
             );
         };
         const roc_main = std.fs.path.basename(argv0);
-        const ignore_patterns = try arena.dupe([]const u8, &[implicit_ignore_pattern_count][]const u8{
-            output_root,
-            roc_main,
-            std.fs.path.stem(roc_main),
+        const ignore_patterns = try arena.dupe(Str, &[implicit_ignore_pattern_count]Str{
+            try strs.intern(output_root),
+            try strs.intern(roc_main),
+            try strs.intern(std.fs.path.stem(roc_main)),
         });
 
         return Site{
@@ -69,7 +70,7 @@ pub const Site = struct {
 
     const implicit_ignore_pattern_count = 3;
 
-    pub fn user_ignore_patterns(self: *const Site) []const []const u8 {
+    pub fn user_ignore_patterns(self: *const Site) []Str {
         return self.ignore_patterns[implicit_ignore_pattern_count..];
     }
 
@@ -149,13 +150,13 @@ pub const Site = struct {
         var rules = [_]Site.Rule{
             Site.Rule{
                 .processing = .markdown,
-                .patterns = &.{"*.md"},
-                .replace_tags = &.{ "tag1", "tag2" },
+                .patterns = try site.strsFromSlices(&.{"*.md"}),
+                .replace_tags = try site.strsFromSlices(&.{ "tag1", "tag2" }),
             },
             Site.Rule{
                 .processing = .none,
-                .patterns = &.{"*.css"},
-                .replace_tags = &.{"tag3"},
+                .patterns = try site.strsFromSlices(&.{"*.css"}),
+                .replace_tags = try site.strsFromSlices(&.{"tag3"}),
             },
         };
         site.rules = &rules;
@@ -348,15 +349,15 @@ pub const Site = struct {
     }
 
     pub const Rule = struct {
-        patterns: []const []const u8,
-        replace_tags: []const []const u8,
+        patterns: []Str,
+        replace_tags: []Str,
         processing: Processing,
     };
 
     pub const Page = struct {
         mutex: std.Thread.Mutex,
         rule_index: usize,
-        replace_tags: []const []const u8,
+        replace_tags: []Str,
         processing: Processing,
         mime_type: mime.Type,
         output_len: ?u64,
@@ -394,7 +395,7 @@ pub const Site = struct {
         var len: u8 = 0;
 
         for (site.rules, 0..) |rule, rule_index| {
-            if (!glob.matchAny(rule.patterns, source_path.bytes())) continue;
+            if (!matchAny(rule.patterns, source_path.bytes())) continue;
 
             matches[len] = rule_index;
             len += 1;
@@ -441,12 +442,12 @@ pub const Site = struct {
         var rules = [_]Site.Rule{
             Site.Rule{
                 .processing = .markdown,
-                .patterns = &.{ "rule_one/*", "conflicting/*" },
+                .patterns = try site.strsFromSlices(&.{ "rule_one/*", "conflicting/*" }),
                 .replace_tags = &.{},
             },
             Site.Rule{
                 .processing = .none,
-                .patterns = &.{ "rule_two/*", "conflicting/*" },
+                .patterns = try site.strsFromSlices(&.{ "rule_two/*", "conflicting/*" }),
                 .replace_tags = &.{},
             },
         };
@@ -503,6 +504,23 @@ pub const Site = struct {
             error.PrettyError,
             outputPathForMarkdownFile(&buffer, "file.txt"),
         );
+    }
+
+    pub fn matchAny(patterns: []Str, path: []const u8) bool {
+        for (patterns) |pattern| {
+            if (glob.match(pattern.bytes(), path)) return true;
+        } else {
+            return false;
+        }
+    }
+
+    pub fn strsFromSlices(self: *Site, slices: []const []const u8) ![]Str {
+        if (!builtin.is_test) @panic("strsFromSlices is intended for tests only");
+        var strs = try self.allocator().alloc(Str, slices.len);
+        for (slices, 0..) |slice, index| {
+            strs[index] = try self.strs.intern(slice);
+        }
+        return strs;
     }
 };
 
