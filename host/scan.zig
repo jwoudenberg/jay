@@ -96,8 +96,8 @@ test scanDir {
     );
 
     try std.testing.expectEqualStrings("b", work.pop().?.scan_dir.bytes());
-    try std.testing.expectEqualStrings("c", work.pop().?.scan_file.bytes());
     try std.testing.expectEqualStrings("a", work.pop().?.scan_file.bytes());
+    try std.testing.expectEqualStrings("c", work.pop().?.scan_file.bytes());
     try std.testing.expectEqual(null, work.pop());
 }
 

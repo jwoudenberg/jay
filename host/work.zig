@@ -64,9 +64,9 @@ pub const WorkQueue = struct {
         return switch (order) {
             .lt, .gt => order,
             .eq => switch (a) {
-                .scan_dir => std.math.order(a.scan_dir.index(), b.scan_dir.index()),
-                .scan_file => std.math.order(a.scan_file.index(), b.scan_file.index()),
-                .generate_file => std.math.order(a.generate_file.index(), b.generate_file.index()),
+                .scan_dir => std.ascii.orderIgnoreCase(a.scan_dir.bytes(), b.scan_dir.bytes()),
+                .scan_file => std.ascii.orderIgnoreCase(a.scan_file.bytes(), b.scan_file.bytes()),
+                .generate_file => std.ascii.orderIgnoreCase(a.generate_file.bytes(), b.generate_file.bytes()),
             },
         };
     }
