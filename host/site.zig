@@ -5,7 +5,7 @@ const fail = @import("fail.zig");
 const mime = @import("mime");
 const Frontmatters = @import("frontmatter.zig").Frontmatters;
 const glob = @import("glob.zig");
-const Path = @import("path.zig").Path;
+const Str = @import("str.zig").Str;
 
 pub const Site = struct {
     // The allocator that should be used for content of the struct.
@@ -14,14 +14,14 @@ pub const Site = struct {
     source_root: std.fs.Dir,
     // basename of the .roc file we're currently running.
     roc_main: []const u8,
-    // Path to the directory that will contain the generated site.
+    // Str to the directory that will contain the generated site.
     output_root: []const u8,
     // Source patterns that should not be turned into pages.
     ignore_patterns: []const []const u8,
     // The page-construction rules defined in the .roc file we're running.
     rules: []Rule,
     // Interned path slices
-    paths: *Path.Registry,
+    strs: *Str.Registry,
     // Stored frontmatters
     frontmatters: Frontmatters,
 
@@ -35,7 +35,7 @@ pub const Site = struct {
         cwd: std.fs.Dir,
         argv0: []const u8,
         output_root: []const u8,
-        paths: *Path.Registry,
+        strs: *Str.Registry,
     ) !Site {
         var arena_state = std.heap.ArenaAllocator.init(gpa);
         const arena = arena_state.allocator();
@@ -60,7 +60,7 @@ pub const Site = struct {
             .output_root = output_root,
             .ignore_patterns = ignore_patterns,
             .rules = &.{},
-            .paths = paths,
+            .strs = strs,
             .frontmatters = Frontmatters.init(gpa),
             .pages = std.SegmentedList(Page, 0){},
             .mutex = std.Thread.Mutex{},
@@ -87,24 +87,24 @@ pub const Site = struct {
         return self.source_root.openDir(".", args);
     }
 
-    pub fn getPage(self: *Site, path: Path) ?*Page {
+    pub fn getPage(self: *Site, path: Str) ?*Page {
         self.mutex.lock();
         defer self.mutex.unlock();
         const page_index = path.index();
-        if (page_index == Path.init_index) return null;
+        if (page_index == Str.init_index) return null;
         const page = self.pages.at(page_index);
         page.mutex.lock();
         defer page.mutex.unlock();
         return if (page.deleted) null else page;
     }
 
-    pub fn upsert(self: *Site, source_path: Path) !bool {
+    pub fn upsert(self: *Site, source_path: Str) !bool {
         self.mutex.lock();
         defer self.mutex.unlock();
 
         const opt_page: ?*Page = blk: {
             const page_index = source_path.index();
-            break :blk if (page_index == Path.init_index) null else self.pages.at(page_index);
+            break :blk if (page_index == Str.init_index) null else self.pages.at(page_index);
         };
 
         const stat = self.source_root.statFile(source_path.bytes()) catch |err| {
@@ -142,9 +142,9 @@ pub const Site = struct {
         try tmpdir.dir.writeFile(.{ .sub_path = "file.md", .data = "{}\x02" });
         try tmpdir.dir.writeFile(.{ .sub_path = "style.css", .data = "" });
 
-        var paths = Path.Registry.init(std.testing.allocator);
-        defer paths.deinit();
-        var site = try Site.init(std.testing.allocator, tmpdir.dir, "./build.roc", "output", &paths);
+        var strs = Str.Registry.init(std.testing.allocator);
+        defer strs.deinit();
+        var site = try Site.init(std.testing.allocator, tmpdir.dir, "./build.roc", "output", &strs);
         defer site.deinit();
         var rules = [_]Site.Rule{
             Site.Rule{
@@ -161,7 +161,7 @@ pub const Site = struct {
         site.rules = &rules;
 
         // Insert markdown file.
-        const file_md = try paths.intern("file.md");
+        const file_md = try strs.intern("file.md");
         var generate = try site.upsert(file_md);
         const md_page = site.getPage(file_md).?;
         try std.testing.expect(generate);
@@ -180,7 +180,7 @@ pub const Site = struct {
         try std.testing.expectEqualStrings("text/html", @tagName(md_page.mime_type));
 
         // Insert static file.
-        const style_css = try paths.intern("style.css");
+        const style_css = try strs.intern("style.css");
         generate = try site.upsert(style_css);
         const css_page = site.getPage(style_css).?;
         try std.testing.expect(generate);
@@ -216,8 +216,8 @@ pub const Site = struct {
         try std.testing.expect(!generate);
         try std.testing.expect(md_page.deleted);
         try std.testing.expectEqual(null, site.getPage(file_md));
-        try std.testing.expectEqual(Path.init_index, (try paths.intern("file.html")).index());
-        try std.testing.expectEqual(Path.init_index, (try paths.intern("file")).index());
+        try std.testing.expectEqual(Str.init_index, (try strs.intern("file.html")).index());
+        try std.testing.expectEqual(Str.init_index, (try strs.intern("file")).index());
 
         // Recreate a markdown file
         try tmpdir.dir.writeFile(.{ .sub_path = "file.md", .data = "{}\x02" });
@@ -240,7 +240,7 @@ pub const Site = struct {
         try std.testing.expectEqual(2, site.pages.count());
     }
 
-    fn insert(self: *Site, stat: std.fs.File.Stat, source_path: Path) !void {
+    fn insert(self: *Site, stat: std.fs.File.Stat, source_path: Str) !void {
         const page = Site.Page{
             .mutex = std.Thread.Mutex{},
             .source_path = source_path,
@@ -286,10 +286,10 @@ pub const Site = struct {
     fn delete(self: *Site, page: *Page) !void {
         _ = self;
         page.deleted = true;
-        // Clear the page index on output and web paths, so that other pages
+        // Clear the page index on output and web strs, so that other pages
         // might reuse these without reporting a conflict.
-        _ = page.output_path.replaceIndex(Path.init_index);
-        _ = page.web_path.replaceIndex(Path.init_index);
+        _ = page.output_path.replaceIndex(Str.init_index);
+        _ = page.web_path.replaceIndex(Str.init_index);
     }
 
     fn setPageFields(self: *Site, page_index: usize) !void {
@@ -307,18 +307,18 @@ pub const Site = struct {
             .markdown => blk: {
                 var buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;
                 const output_path_bytes = try outputPathForMarkdownFile(&buffer, source_path_bytes);
-                break :blk try self.paths.intern(output_path_bytes);
+                break :blk try self.strs.intern(output_path_bytes);
             },
         };
 
         const extension = std.fs.path.extension(page.output_path.bytes());
         page.mime_type = mime.extension_map.get(extension) orelse .@"application/octet-stream";
-        page.web_path = try self.paths.intern(webPathFromFilePath(page.output_path.bytes()));
+        page.web_path = try self.strs.intern(webPathFromFilePath(page.output_path.bytes()));
 
         _ = page.source_path.replaceIndex(page_index);
         _ = page.output_path.replaceIndex(page_index);
         const old_web_path_index = page.web_path.replaceIndex(page_index);
-        if (old_web_path_index != Path.init_index and old_web_path_index != page_index) {
+        if (old_web_path_index != Str.init_index and old_web_path_index != page_index) {
             const existing = self.pages.at(old_web_path_index);
             try fail.prettily(
                 \\I found multiple source files for a single page URL.
@@ -360,9 +360,9 @@ pub const Site = struct {
         processing: Processing,
         mime_type: mime.Type,
         output_len: ?u64,
-        source_path: Path,
-        output_path: Path,
-        web_path: Path,
+        source_path: Str,
+        output_path: Str,
+        web_path: Str,
         frontmatter: []const u8,
         last_modified: i128,
         deleted: bool,
@@ -389,7 +389,7 @@ pub const Site = struct {
         }
     };
 
-    fn ruleForPath(site: *Site, source_path: Path) !usize {
+    fn ruleForPath(site: *Site, source_path: Str) !usize {
         var matches: [10]usize = undefined;
         var len: u8 = 0;
 
@@ -434,9 +434,9 @@ pub const Site = struct {
     test ruleForPath {
         var tmpdir = std.testing.tmpDir(.{});
         defer tmpdir.cleanup();
-        var paths = Path.Registry.init(std.testing.allocator);
-        defer paths.deinit();
-        var site = try Site.init(std.testing.allocator, tmpdir.dir, "build.roc", "output", &paths);
+        var strs = Str.Registry.init(std.testing.allocator);
+        defer strs.deinit();
+        var site = try Site.init(std.testing.allocator, tmpdir.dir, "build.roc", "output", &strs);
         defer site.deinit();
         var rules = [_]Site.Rule{
             Site.Rule{
@@ -454,19 +454,19 @@ pub const Site = struct {
 
         try std.testing.expectEqual(
             0,
-            site.ruleForPath(try paths.intern("rule_one/file.txt")),
+            site.ruleForPath(try strs.intern("rule_one/file.txt")),
         );
         try std.testing.expectEqual(
             1,
-            site.ruleForPath(try paths.intern("rule_two/file.txt")),
+            site.ruleForPath(try strs.intern("rule_two/file.txt")),
         );
         try std.testing.expectEqual(
             error.PrettyError,
-            site.ruleForPath(try paths.intern("shared/file.txt")),
+            site.ruleForPath(try strs.intern("shared/file.txt")),
         );
         try std.testing.expectEqual(
             error.PrettyError,
-            site.ruleForPath(try paths.intern("missing/file.txt")),
+            site.ruleForPath(try strs.intern("missing/file.txt")),
         );
     }
 

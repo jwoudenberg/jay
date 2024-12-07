@@ -2,7 +2,7 @@
 // we scanned.
 
 const std = @import("std");
-const Path = @import("path.zig").Path;
+const Str = @import("str.zig").Str;
 const platform = @import("platform.zig").platform;
 const fail = @import("fail.zig");
 
@@ -28,7 +28,7 @@ pub const Frontmatters = struct {
 
     pub fn get(
         self: *const Frontmatters,
-        source_path: Path,
+        source_path: Str,
     ) ?[]const u8 {
         return self.frontmatters.get(source_path.index());
     }
@@ -36,7 +36,7 @@ pub const Frontmatters = struct {
     pub fn read(
         self: *Frontmatters,
         source_root: std.fs.Dir,
-        source_path: Path,
+        source_path: Str,
     ) ![]const u8 {
         const gpa = self.arena_state.child_allocator;
         _ = self.arena_state.reset(.{ .retain_with_limit = 1024 * 1024 });
@@ -84,27 +84,27 @@ pub const Frontmatters = struct {
         var tmpdir = std.testing.tmpDir(.{ .iterate = true });
         defer tmpdir.cleanup();
 
-        var paths = Path.Registry.init(std.testing.allocator);
-        defer paths.deinit();
+        var strs = Str.Registry.init(std.testing.allocator);
+        defer strs.deinit();
 
         // This test makes use of the test platform defined in platform.zig!
 
         try tmpdir.dir.writeFile(.{ .sub_path = "file1.txt", .data = "no frontmatter" });
         try std.testing.expectEqualStrings(
             "{}",
-            (try frontmatters.read(tmpdir.dir, try paths.intern("file1.txt"))),
+            (try frontmatters.read(tmpdir.dir, try strs.intern("file1.txt"))),
         );
 
         try tmpdir.dir.writeFile(.{ .sub_path = "file2.txt", .data = "{ hi: 3 }\n# header \x14" });
         try std.testing.expectEqualStrings(
             "{ hi: 3 }",
-            (try frontmatters.read(tmpdir.dir, try paths.intern("file2.txt"))),
+            (try frontmatters.read(tmpdir.dir, try strs.intern("file2.txt"))),
         );
 
         try tmpdir.dir.writeFile(.{ .sub_path = "file3.txt", .data = "{ \x00" });
         try std.testing.expectEqual(
             error.PrettyError,
-            frontmatters.read(tmpdir.dir, try paths.intern("file3.txt")),
+            frontmatters.read(tmpdir.dir, try strs.intern("file3.txt")),
         );
     }
 };

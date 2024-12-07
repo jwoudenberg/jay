@@ -3,7 +3,7 @@
 // parallization.
 
 const std = @import("std");
-const Path = @import("path.zig").Path;
+const Str = @import("str.zig").Str;
 
 pub const WorkQueue = struct {
     // In the current (single-threaded) setup we use a priority queue to ensure
@@ -44,15 +44,15 @@ pub const WorkQueue = struct {
         // - A directory has been moved into the source file directory
         // - Our watcher lost the plot and we have to do a fresh scan
         // This will recursively start more of itself for subdirectories.
-        scan_dir: Path,
+        scan_dir: Str,
         // Scan a file, to:
         // - Add it, if we're not tracking it yet and it's un-ignored
         // - Remove it, if we area tracking it and now it's deleted / ignored
         // - Regenerate it, if we're tracking it and it was changed
         // - Add it, if we're not tracking it yet and it's un-ignored
         //   This requires a Page stub to have been written first!
-        scan_file: Path,
-        generate_file: Path,
+        scan_file: Str,
+        generate_file: Str,
     };
 
     fn compare(context: void, a: Job, b: Job) std.math.Order {

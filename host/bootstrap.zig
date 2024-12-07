@@ -7,9 +7,9 @@ const std = @import("std");
 const Site = @import("site.zig").Site;
 const fail = @import("fail.zig");
 const scan = @import("scan.zig");
-const Watcher = @import("watch.zig").Watcher(Path, Path.bytes);
+const Watcher = @import("watch.zig").Watcher(Str, Str.bytes);
 const WorkQueue = @import("work.zig").WorkQueue;
-const Path = @import("path.zig").Path;
+const Str = @import("str.zig").Str;
 const generate = @import("generate.zig").generate;
 const platform = @import("generate.zig").platform;
 
@@ -23,7 +23,7 @@ const bootstrap_ignore_patterns = [_][]const u8{
 
 pub fn bootstrap(
     gpa: std.mem.Allocator,
-    paths: *Path.Registry,
+    strs: *Str.Registry,
     site: *Site,
     watcher: *Watcher,
     work: *WorkQueue,
@@ -31,7 +31,7 @@ pub fn bootstrap(
     var source_root = try site.openSourceRoot(.{ .iterate = true });
     defer source_root.close();
 
-    try bootstrapRules(gpa, paths, site, watcher, work, source_root);
+    try bootstrapRules(gpa, strs, site, watcher, work, source_root);
     try generateCodeForRules(site, source_root);
 }
 
@@ -40,7 +40,7 @@ pub fn bootstrap(
 // possible makes it a bit hacky.
 fn bootstrapRules(
     gpa: std.mem.Allocator,
-    paths: *Path.Registry,
+    strs: *Str.Registry,
     site: *Site,
     watcher: *Watcher,
     work: *WorkQueue,
@@ -73,7 +73,7 @@ fn bootstrapRules(
 
     // Queue a job to scan the root source directory. This will result in
     // the entire project getting scanned and output generated.
-    try bootstrap_work.push(.{ .scan_dir = try paths.intern("") });
+    try bootstrap_work.push(.{ .scan_dir = try strs.intern("") });
 
     // TODO: reinit arena after each iteration.
     jobs_loop: while (bootstrap_work.pop()) |job| {
@@ -107,7 +107,7 @@ fn bootstrapRules(
             .scan_dir => {
                 try scan.scanDir(
                     &bootstrap_work,
-                    paths,
+                    strs,
                     site,
                     watcher,
                     source_root,
@@ -130,9 +130,9 @@ test "bootstrapRules" {
     var tmpdir = std.testing.tmpDir(.{ .iterate = true });
     defer tmpdir.cleanup();
 
-    var paths = Path.Registry.init(std.testing.allocator);
-    defer paths.deinit();
-    var site = try Site.init(std.testing.allocator, tmpdir.dir, "build.roc", "output", &paths);
+    var strs = Str.Registry.init(std.testing.allocator);
+    defer strs.deinit();
+    var site = try Site.init(std.testing.allocator, tmpdir.dir, "build.roc", "output", &strs);
     defer site.deinit();
 
     try tmpdir.dir.makeDir("markdown_only");
@@ -153,7 +153,7 @@ test "bootstrapRules" {
     var watcher = try Watcher.init(std.testing.allocator, tmpdir.dir);
     defer watcher.deinit();
 
-    try bootstrapRules(std.testing.allocator, &paths, &site, &watcher, &work, tmpdir.dir);
+    try bootstrapRules(std.testing.allocator, &strs, &site, &watcher, &work, tmpdir.dir);
 
     try std.testing.expectEqual(4, site.ignore_patterns.len);
     try std.testing.expectEqualStrings("output", site.ignore_patterns[0]);
@@ -181,37 +181,37 @@ test "bootstrapRules" {
     try std.testing.expectEqualStrings("markdown_only/*.md", markdown_patterns[1]);
     try std.testing.expectEqualStrings("mixed/*.md", markdown_patterns[2]);
 
-    const one_md = site.getPage(try paths.intern("markdown_only/one")).?;
+    const one_md = site.getPage(try strs.intern("markdown_only/one")).?;
     try std.testing.expectEqualStrings("markdown_only/one.md", one_md.source_path.bytes());
     try std.testing.expectEqualStrings("markdown_only/one.html", one_md.output_path.bytes());
     try std.testing.expectEqual(one_md.rule_index, 1);
 
-    const two_md = site.getPage(try paths.intern("markdown_only/two")).?;
+    const two_md = site.getPage(try strs.intern("markdown_only/two")).?;
     try std.testing.expectEqualStrings("markdown_only/two.md", two_md.source_path.bytes());
     try std.testing.expectEqualStrings("markdown_only/two.html", two_md.output_path.bytes());
     try std.testing.expectEqual(two_md.rule_index, 1);
 
-    const main_css = site.getPage(try paths.intern("static_only/main.css")).?;
+    const main_css = site.getPage(try strs.intern("static_only/main.css")).?;
     try std.testing.expectEqualStrings("static_only/main.css", main_css.source_path.bytes());
     try std.testing.expectEqualStrings("static_only/main.css", main_css.output_path.bytes());
     try std.testing.expectEqual(main_css.rule_index, 0);
 
-    const logo_png = site.getPage(try paths.intern("static_only/logo.png")).?;
+    const logo_png = site.getPage(try strs.intern("static_only/logo.png")).?;
     try std.testing.expectEqualStrings("static_only/logo.png", logo_png.source_path.bytes());
     try std.testing.expectEqualStrings("static_only/logo.png", logo_png.output_path.bytes());
     try std.testing.expectEqual(logo_png.rule_index, 0);
 
-    const three_md = site.getPage(try paths.intern("mixed/three")).?;
+    const three_md = site.getPage(try strs.intern("mixed/three")).?;
     try std.testing.expectEqualStrings("mixed/three.md", three_md.source_path.bytes());
     try std.testing.expectEqualStrings("mixed/three.html", three_md.output_path.bytes());
     try std.testing.expectEqual(three_md.rule_index, 1);
 
-    const rss_xml = site.getPage(try paths.intern("mixed/rss.xml")).?;
+    const rss_xml = site.getPage(try strs.intern("mixed/rss.xml")).?;
     try std.testing.expectEqualStrings("mixed/rss.xml", rss_xml.source_path.bytes());
     try std.testing.expectEqualStrings("mixed/rss.xml", rss_xml.output_path.bytes());
     try std.testing.expectEqual(rss_xml.rule_index, 0);
 
-    const index_md = site.getPage(try paths.intern("")).?;
+    const index_md = site.getPage(try strs.intern("")).?;
     try std.testing.expectEqualStrings("index.md", index_md.source_path.bytes());
     try std.testing.expectEqualStrings("index.html", index_md.output_path.bytes());
     try std.testing.expectEqual(index_md.rule_index, 1);
@@ -375,9 +375,9 @@ test generateCodeForRules {
         \\main = Pages.bootstrap
         ,
     });
-    var paths = Path.Registry.init(std.testing.allocator);
-    defer paths.deinit();
-    var site = try Site.init(std.testing.allocator, tmpdir.dir, "build.roc", "output", &paths);
+    var strs = Str.Registry.init(std.testing.allocator);
+    defer strs.deinit();
+    var site = try Site.init(std.testing.allocator, tmpdir.dir, "build.roc", "output", &strs);
     defer site.deinit();
     var rules = [_]Site.Rule{
         Site.Rule{

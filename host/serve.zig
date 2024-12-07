@@ -2,10 +2,10 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
-const Path = @import("path.zig").Path;
+const Str = @import("str.zig").Str;
 const Site = @import("site.zig").Site;
 
-pub fn serve(paths: *Path.Registry, site: *Site) !void {
+pub fn serve(strs: *Str.Registry, site: *Site) !void {
     const loopback = try std.net.Ip4Address.parse("127.0.0.1", 0);
     const localhost = std.net.Address{ .in = loopback };
     var http_server = try localhost.listen(.{
@@ -37,19 +37,19 @@ pub fn serve(paths: *Path.Registry, site: *Site) !void {
                 try stdout.print("Failed receiving request: {s}\n", .{@errorName(err)});
                 continue :accept;
             };
-            try respond(paths, site, &request, output_dir);
+            try respond(strs, site, &request, output_dir);
         }
     }
 }
 
 fn respond(
-    paths: *Path.Registry,
+    strs: *Str.Registry,
     site: *Site,
     request: *std.http.Server.Request,
     output_dir: std.fs.Dir,
 ) !void {
     blk: {
-        const requested_path = paths.get(request.head.target[1..]) orelse break :blk;
+        const requested_path = strs.get(request.head.target[1..]) orelse break :blk;
         const page = site.getPage(requested_path) orelse break :blk;
         page.mutex.lock();
         defer page.mutex.unlock();
@@ -57,7 +57,7 @@ fn respond(
         return servePage(page, .ok, request, output_dir);
     }
     blk: {
-        const custom_404 = paths.get("404") orelse break :blk;
+        const custom_404 = strs.get("404") orelse break :blk;
         const page = site.getPage(custom_404) orelse break :blk;
         page.mutex.lock();
         defer page.mutex.unlock();

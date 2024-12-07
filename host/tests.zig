@@ -7,7 +7,7 @@ comptime {
     _ = @import("generate.zig");
     _ = @import("glob.zig");
     _ = @import("main.zig");
-    _ = @import("path.zig");
+    _ = @import("str.zig");
     _ = @import("platform.zig");
     _ = @import("scan.zig");
     _ = @import("serve.zig");

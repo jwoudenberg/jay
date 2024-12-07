@@ -1,4 +1,4 @@
-// Module responsible for evaluating glob patterns against file paths.
+// Module responsible for evaluating glob patterns against file strs.
 
 const std = @import("std");
 

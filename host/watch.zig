@@ -12,7 +12,7 @@ pub fn Watcher(
         // the poll syscall expects.
         poll_fds: [1]std.posix.pollfd,
 
-        // The root path all dir paths passed in are assumed relative to.
+        // The root path all dir strs passed in are assumed relative to.
         root_dir: std.fs.Dir,
 
         gpa: std.mem.Allocator,

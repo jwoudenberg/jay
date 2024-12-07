@@ -6,16 +6,16 @@ const glob = @import("glob.zig");
 const fail = @import("fail.zig");
 const WorkQueue = @import("work.zig").WorkQueue;
 const Site = @import("site.zig").Site;
-const Path = @import("path.zig").Path;
-const Watcher = @import("watch.zig").Watcher(Path, Path.bytes);
+const Str = @import("str.zig").Str;
+const Watcher = @import("watch.zig").Watcher(Str, Str.bytes);
 
 pub fn scanDir(
     work: *WorkQueue,
-    paths: *Path.Registry,
+    strs: *Str.Registry,
     site: *Site,
     watcher: *Watcher,
     source_root: std.fs.Dir,
-    dir_path: Path,
+    dir_path: Str,
 ) !void {
     try watcher.watchDir(dir_path);
     const dir = if (dir_path.bytes().len == 0) blk: {
@@ -34,7 +34,7 @@ pub fn scanDir(
         };
         if (glob.matchAny(site.ignore_patterns, path_bytes)) continue;
 
-        const path = try paths.intern(path_bytes);
+        const path = try strs.intern(path_bytes);
         switch (entry.kind) {
             .file => {
                 try work.push(.{ .scan_file = path });
@@ -70,13 +70,13 @@ test scanDir {
     var tmpdir = std.testing.tmpDir(.{ .iterate = true });
     defer tmpdir.cleanup();
 
-    var paths = Path.Registry.init(std.testing.allocator);
-    defer paths.deinit();
+    var strs = Str.Registry.init(std.testing.allocator);
+    defer strs.deinit();
 
     var work = WorkQueue.init(std.testing.allocator);
     defer work.deinit();
 
-    var site = try Site.init(std.testing.allocator, tmpdir.dir, "build.roc", "output", &paths);
+    var site = try Site.init(std.testing.allocator, tmpdir.dir, "build.roc", "output", &strs);
     defer site.deinit();
 
     var watcher = try Watcher.init(std.testing.allocator, tmpdir.dir);
@@ -88,11 +88,11 @@ test scanDir {
 
     try scanDir(
         &work,
-        &paths,
+        &strs,
         &site,
         &watcher,
         tmpdir.dir,
-        try paths.intern(""),
+        try strs.intern(""),
     );
 
     try std.testing.expectEqualStrings("b", work.pop().?.scan_dir.bytes());
@@ -101,7 +101,7 @@ test scanDir {
     try std.testing.expectEqual(null, work.pop());
 }
 
-pub fn scanFile(work: *WorkQueue, site: *Site, source_path: Path) !void {
+pub fn scanFile(work: *WorkQueue, site: *Site, source_path: Str) !void {
     const changed = try site.upsert(source_path);
     if (changed) try work.push(.{ .generate_file = source_path });
 }
