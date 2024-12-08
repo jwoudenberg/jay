@@ -21,15 +21,11 @@ x run local http server
 +html custom attributes
 +html empty attributes
 
-+refactor add test for run() in main.zig
-+refactor run generate as part of scan-file, accept generate reruns
-+refactor regenerate dependent pages as part of scan-file, detect loops, dependency order
-
-+watch combine events for same file
-+watch regenerate files on directory change
-+watch regenerate dependent files on change
++watch add test for run() in main.zig
++watch schedule regenerations for dependent pages
++watch call touchPage for deleted file in scan
++watch rescan dependent files if they changed at generate time
 +watch don't exit on error, instead keep list of current errors
-+watch ensure page build arena's are cleared between builds
 
 +site for jay project with cookbooks
 +site example of gitbook-like site

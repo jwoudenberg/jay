@@ -4,69 +4,63 @@
 const std = @import("std");
 const glob = @import("glob.zig");
 const fail = @import("fail.zig");
-const WorkQueue = @import("work.zig").WorkQueue;
 const Site = @import("site.zig").Site;
 const TestSite = @import("site.zig").TestSite;
 const Str = @import("str.zig").Str;
 const Watcher = @import("watch.zig").Watcher(Str, Str.bytes);
 
-pub fn scanDir(
-    work: *WorkQueue,
+pub fn scanRecursively(
+    allocator: std.mem.Allocator,
     site: *Site,
     watcher: *Watcher,
-    source_root: std.fs.Dir,
-    dir_path: Str,
+    init_dir: Str,
 ) !void {
-    try watcher.watchDir(dir_path);
-    var iterator = try SourceDirIterator.init(site, source_root, dir_path);
-    while (try iterator.next()) |entry| {
-        if (entry.is_dir) {
-            try work.push(.{ .scan_dir = entry.path });
-        } else {
-            try site.ensurePage(entry.path);
-            try work.push(.{ .scan_file = entry.path });
+    var scan_queue = std.ArrayList(Str).init(allocator);
+    defer scan_queue.deinit();
+    try scan_queue.append(init_dir);
+    while (scan_queue.popOrNull()) |dir| {
+        try watcher.watchDir(dir);
+        var iterator = try SourceDirIterator.init(site, site.source_root, dir);
+        while (try iterator.next()) |entry| {
+            if (entry.is_dir) {
+                try scan_queue.append(entry.path);
+            } else {
+                try site.touchPage(entry.path);
+            }
         }
     }
 }
 
-test scanDir {
+test scanRecursively {
     var test_site = try TestSite.init();
     defer test_site.deinit();
     var site = test_site.site;
     var rules = [_]Site.Rule{
         Site.Rule{
             .processing = .none,
-            .patterns = try test_site.strsFromSlices(&.{"*"}),
+            .patterns = try test_site.strsFromSlices(&.{ "*", "dir/*" }),
             .replace_tags = &.{},
         },
     };
     site.rules = &rules;
-    var work = WorkQueue.init(std.testing.allocator);
-    defer work.deinit();
     var watcher = try Watcher.init(std.testing.allocator, site.source_root);
     defer watcher.deinit();
 
-    try site.source_root.writeFile(.{ .sub_path = "c", .data = "" });
-    try site.source_root.makeDir("b");
-    try site.source_root.writeFile(.{ .sub_path = "a", .data = "" });
+    try site.source_root.makeDir("dir");
+    try site.source_root.writeFile(.{ .sub_path = "one", .data = "" });
+    try site.source_root.writeFile(.{ .sub_path = "two", .data = "" });
+    try site.source_root.writeFile(.{ .sub_path = "dir/three", .data = "" });
 
-    try scanDir(
-        &work,
+    try scanRecursively(
+        std.testing.allocator,
         site,
         &watcher,
-        site.source_root,
         try site.strs.intern(""),
     );
 
-    try std.testing.expectEqualStrings("b", work.pop().?.scan_dir.bytes());
-    try std.testing.expectEqualStrings("a", work.pop().?.scan_file.bytes());
-    try std.testing.expectEqualStrings("c", work.pop().?.scan_file.bytes());
-    try std.testing.expectEqual(null, work.pop());
-}
-
-pub fn scanFile(work: *WorkQueue, site: *Site, source_path: Str) !void {
-    const changed = try site.scanPage(source_path);
-    if (changed) try work.push(.{ .generate_file = source_path });
+    try std.testing.expect(null != site.getPage(try site.strs.intern("one")));
+    try std.testing.expect(null != site.getPage(try site.strs.intern("two")));
+    try std.testing.expect(null != site.getPage(try site.strs.intern("dir/three")));
 }
 
 pub const SourceDirIterator = struct {

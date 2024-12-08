@@ -12,27 +12,21 @@ const c = @cImport({
 
 pub fn generate(
     arena: std.mem.Allocator,
-    source_root: std.fs.Dir,
-    output_dir: std.fs.Dir,
     site: *Site,
     page: *Site.Page,
 ) !void {
-    page.mutex.lock();
-    defer page.mutex.unlock();
-
     const output_path_bytes = page.output_path.bytes();
-    if (std.fs.path.dirname(output_path_bytes)) |dir| try output_dir.makePath(dir);
-    const output = try output_dir.createFile(output_path_bytes, .{ .truncate = true });
+    if (std.fs.path.dirname(output_path_bytes)) |dir| try site.output_root.makePath(dir);
+    const output = try site.output_root.createFile(output_path_bytes, .{ .truncate = true });
     defer output.close();
     var counting_writer = std.io.countingWriter(output.writer());
     var writer = counting_writer.writer();
-    try writeFile(arena, source_root, &writer, site, page);
+    try writeFile(arena, &writer, site, page);
     page.output_len = counting_writer.bytes_written;
 }
 
 fn writeFile(
     arena: std.mem.Allocator,
-    source_root: std.fs.Dir,
     writer: anytype,
     site: *Site,
     page: *Site.Page,
@@ -41,19 +35,23 @@ fn writeFile(
         .none => {
             // I'd like to use the below, but get the following error when I do:
             //     hidden symbol `__dso_handle' isn't defined
-            // try state.source_root.copyFile(source_path, output_dir, output_path, .{});
+            // try state.source_root.copyFile(source_path, output_root, output_path, .{});
 
             const buffer = try arena.alloc(u8, 1024);
             var fifo = std.fifo.LinearFifo(u8, .Slice).init(buffer);
             defer fifo.deinit();
 
-            const source = try source_root.openFile(page.source_path.bytes(), .{});
+            const source = try site.source_root.openFile(page.source_path.bytes(), .{});
             defer source.close();
             try fifo.pump(source.reader(), writer);
         },
         .xml => {
             // TODO: figure out what to do with files larger than this.
-            const source = try source_root.readFileAlloc(arena, page.source_path.bytes(), 1024 * 1024);
+            const source = try site.source_root.readFileAlloc(
+                arena,
+                page.source_path.bytes(),
+                1024 * 1024,
+            );
             var replace_tags = try arena.alloc([]const u8, page.replace_tags.len);
             for (page.replace_tags, 0..) |tag, index| replace_tags[index] = tag.bytes();
             const tags = try xml.parse(arena, source, replace_tags);
@@ -68,7 +66,7 @@ fn writeFile(
         },
         .markdown => {
             // TODO: figure out what to do with files larger than this.
-            const raw_source = try source_root.readFileAlloc(
+            const raw_source = try site.source_root.readFileAlloc(
                 arena,
                 page.source_path.bytes(),
                 1024 * 1024,

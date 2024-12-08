@@ -1,6 +1,7 @@
 // Run tests on this module to ensure they run on all the modules below.
 
 comptime {
+    _ = @import("bitset.zig");
     _ = @import("bootstrap.zig");
     _ = @import("fail.zig");
     _ = @import("frontmatter.zig");
@@ -13,6 +14,5 @@ comptime {
     _ = @import("serve.zig");
     _ = @import("site.zig");
     _ = @import("watch.zig");
-    _ = @import("work.zig");
     _ = @import("xml.zig");
 }

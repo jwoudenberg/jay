@@ -7,50 +7,69 @@ const mime = @import("mime");
 const Frontmatters = @import("frontmatter.zig").Frontmatters;
 const glob = @import("glob.zig");
 const Str = @import("str.zig").Str;
+const BitSet = @import("bitset.zig").BitSet;
+const generate = @import("generate.zig").generate;
 
 pub const Site = struct {
-    // The allocator that should be used for content of the struct.
+    // The allocator that should be used for content of this struct.
     arena_state: std.heap.ArenaAllocator,
+    // An extra arena for short-lived jobs.
+    tmp_arena_state: std.heap.ArenaAllocator,
     // Absolute path of the directory containing the static site project.
     source_root: std.fs.Dir,
     // basename of the .roc file we're currently running.
     roc_main: []const u8,
     // Str to the directory that will contain the generated site.
-    output_root: []const u8,
+    output_root: std.fs.Dir,
     // Source patterns that should not be turned into pages.
     ignore_patterns: []Str,
     // The page-construction rules defined in the .roc file we're running.
     rules: []Rule,
-    // pattern-caching for 'list'
+    // The patterns we've seen passed to `list!` calls in the plastform.
     list_patterns: std.SegmentedList(ListPattern, 0),
-    patterns_matched_by_page: std.SegmentedList(std.DynamicBitSetUnmanaged, 0),
+    // For each page, which `list!`-patterns it maches.
+    patterns_matched_by_page: std.SegmentedList(BitSet, 0),
+    // A bitset containing the source pages we need to (re)scan outputs for.
+    pages_to_scan: BitSet,
+    // A bitset containing the source pages we need to (re)generate outputs for.
+    pages_to_generate: BitSet,
     // Interned path slices
     strs: Str.Registry,
     // Stored frontmatters
     frontmatters: Frontmatters,
 
-    // The pages in a project. Using arena-friendly datastructures that don't
-    // reallocate when new pages are added.
-    pages: std.SegmentedList(Page, 0),
-    mutex: std.Thread.Mutex,
+    // The pages in a project. This is a SegmentedList because it's an
+    // arena-friendly datastructure and we don't require slicing pages. The
+    // SegmentedList is put in a wrapper with a mutex for safer access, given
+    // both the watch/build and serve threads read from it.
+    pages: Pages,
 
     pub fn init(
         gpa: std.mem.Allocator,
         source_root: std.fs.Dir,
         roc_main: []const u8,
-        output_root: []const u8,
+        output_path: []const u8,
         strs: Str.Registry,
     ) !Site {
         var arena_state = std.heap.ArenaAllocator.init(gpa);
         const arena = arena_state.allocator();
         const ignore_patterns = try arena.dupe(Str, &[implicit_ignore_pattern_count]Str{
-            try strs.intern(output_root),
+            try strs.intern(output_path),
             try strs.intern(roc_main),
             try strs.intern(std.fs.path.stem(roc_main)),
         });
 
+        source_root.deleteTree(output_path) catch |err| {
+            if (err != error.NotDir) {
+                return err;
+            }
+        };
+        try source_root.makePath(output_path);
+        const output_root = try source_root.openDir(output_path, .{});
+
         return Site{
             .arena_state = arena_state,
+            .tmp_arena_state = std.heap.ArenaAllocator.init(gpa),
             .source_root = source_root,
             .roc_main = roc_main,
             .output_root = output_root,
@@ -58,10 +77,11 @@ pub const Site = struct {
             .rules = &.{},
             .strs = strs,
             .list_patterns = std.SegmentedList(ListPattern, 0){},
-            .patterns_matched_by_page = std.SegmentedList(std.DynamicBitSetUnmanaged, 0){},
+            .patterns_matched_by_page = std.SegmentedList(BitSet, 0){},
+            .pages_to_scan = BitSet{},
+            .pages_to_generate = BitSet{},
             .frontmatters = Frontmatters.init(gpa),
-            .pages = std.SegmentedList(Page, 0){},
-            .mutex = std.Thread.Mutex{},
+            .pages = .{},
         };
     }
 
@@ -74,6 +94,7 @@ pub const Site = struct {
     pub fn deinit(self: *Site) void {
         self.frontmatters.deinit();
         self.arena_state.deinit();
+        self.tmp_arena_state.deinit();
     }
 
     // TODO: would be nice to remove this, avoid external access to allocator.
@@ -86,8 +107,6 @@ pub const Site = struct {
     }
 
     pub fn getPage(self: *Site, path: Str) ?*Page {
-        self.mutex.lock();
-        defer self.mutex.unlock();
         const page_index = path.index();
         if (page_index == Str.init_index) return null;
         const page = self.pages.at(page_index);
@@ -96,15 +115,14 @@ pub const Site = struct {
         return if (page.deleted) null else page;
     }
 
-    // Init a Page record for a source path if none exists yet.
-    pub fn ensurePage(self: *Site, source_path: Str) !void {
+    // Init a Page record for a source path if none exists yet and schedule it
+    // for scanning.
+    pub fn touchPage(self: *Site, source_path: Str) !void {
         if (source_path.index() != Str.init_index) return;
-
-        self.mutex.lock();
-        defer self.mutex.unlock();
 
         const page_index: usize = self.pages.count();
         _ = source_path.replaceIndex(page_index);
+        try self.pages_to_scan.setValue(self.allocator(), page_index, true);
 
         // Find matching rule.
         const rule_index = try self.ruleForPath(source_path);
@@ -128,6 +146,8 @@ pub const Site = struct {
         const old_web_path_index = web_path.replaceIndex(page_index);
         if (old_web_path_index != Str.init_index and old_web_path_index != page_index) {
             const existing = self.pages.at(old_web_path_index);
+            existing.mutex.lock();
+            defer existing.mutex.unlock();
             try fail.prettily(
                 \\I found multiple source files for a single page URL.
                 \\
@@ -170,12 +190,12 @@ pub const Site = struct {
         while (list_patterns.next()) |list_pattern| {
             const pattern = list_pattern.pattern;
             if (glob.match(pattern.bytes(), source_path.bytes())) {
-                patterns_matched.set(pattern.index());
+                try patterns_matched.setValue(self.allocator(), pattern.index(), true);
             }
         }
     }
 
-    test ensurePage {
+    test touchPage {
         var test_site = try TestSite.init();
         defer test_site.deinit();
         var site = test_site.site;
@@ -198,7 +218,7 @@ pub const Site = struct {
 
         // Insert markdown file.
         const file_md = try site.strs.intern("file.md");
-        try site.ensurePage(file_md);
+        try site.touchPage(file_md);
         const md_page = site.getPage(file_md).?;
         try std.testing.expectEqual(0, md_page.rule_index);
         try std.testing.expectEqualStrings("file.md", md_page.source_path.bytes());
@@ -213,7 +233,7 @@ pub const Site = struct {
 
         // Insert static file.
         const style_css = try site.strs.intern("style.css");
-        try site.ensurePage(style_css);
+        try site.touchPage(style_css);
         const css_page = site.getPage(style_css).?;
         try std.testing.expectEqual(1, css_page.rule_index);
         try std.testing.expectEqualStrings("style.css", css_page.source_path.bytes());
@@ -227,41 +247,73 @@ pub const Site = struct {
         try std.testing.expectEqual(null, css_page.output_len);
     }
 
-    pub fn scanPage(self: *Site, source_path: Str) !bool {
-        std.debug.assert(source_path.index() != Str.init_index);
-        self.mutex.lock();
-        defer self.mutex.unlock();
+    // Perform page scans and generations in a loop, until none are left to-do.
+    // We first scan all pages in the queue, then generate output for all those
+    // pages. The reason is that page generation might use `list!` to get
+    // metadata on other pages that requires scanning them first.
+    //
+    // The separate scan and generate phases have the downside that we read the
+    // file twice, once during scanning to get the frontmatter, then again
+    // during generation to read the full file. The source file might have
+    // changed in the meanwhile, resulting in bad content being generated.
+    // We're currently relying on the bad generated content only existing
+    // briefly because the change to source content will have queued another
+    // scan.
+    //
+    // TODO: Prevent bad generated content by writing output content to a
+    // temporary file, checking after if the source file modified timestamp
+    // hasn't changed, and only then moving the generated output to the output
+    // directory.
+    pub fn scanAndGeneratePages(self: *Site) !void {
+        while (true) {
+            _ = self.tmp_arena_state.reset(.{ .retain_with_limit = 1024 * 1024 });
+            if (self.pages_to_scan.findFirstSet()) |page_index| {
+                const page = self.pages.at(page_index);
+                page.mutex.lock();
+                defer page.mutex.unlock();
+                try self.pages_to_scan.setValue(self.allocator(), page_index, false);
+                try self.scanPage(page);
+                continue;
+            }
+            if (self.pages_to_generate.findFirstSet()) |page_index| {
+                const page = self.pages.at(page_index);
+                page.mutex.lock();
+                defer page.mutex.unlock();
+                try self.pages_to_generate.setValue(self.allocator(), page_index, false);
+                try generate(self.tmp_arena_state.allocator(), self, page);
+                continue;
+            }
+            return;
+        }
+    }
 
-        const page = self.pages.at(source_path.index());
-        page.mutex.lock();
-        defer page.mutex.unlock();
-
+    fn scanPage(self: *Site, page: *Page) !void {
         // Check file modification time and existence.
-        const stat = self.source_root.statFile(source_path.bytes()) catch |err| {
+        const stat = self.source_root.statFile(page.source_path.bytes()) catch |err| {
             if (err == error.FileNotFound) {
                 page.deleted = true;
                 // Clear the page index on output and web strs, so that other pages
                 // might reuse these without reporting a conflict.
                 _ = page.output_path.replaceIndex(Str.init_index);
                 _ = page.web_path.replaceIndex(Str.init_index);
-                return false;
+                return;
             } else return err;
         };
-        if (!page.deleted and page.last_modified == stat.mtime) return false;
-        page.last_modified = stat.mtime;
-
-        var should_regenerate = false;
 
         if (page.deleted) {
-            should_regenerate = true;
+            try self.pages_to_generate.setValue(self.allocator(), page.source_path.index(), true);
             page.deleted = false;
+        } else if (page.last_modified == stat.mtime) {
+            return;
         }
+        page.last_modified = stat.mtime;
 
         const old_frontmatter = page.frontmatter;
-        page.frontmatter = try self.frontmatters.read(self.source_root, page.source_path);
-        if (old_frontmatter.ptr != page.frontmatter.ptr) should_regenerate = true;
-
-        return should_regenerate;
+        const arena = self.tmp_arena_state.allocator();
+        page.frontmatter = try self.frontmatters.read(arena, self.source_root, page.source_path);
+        if (old_frontmatter.ptr != page.frontmatter.ptr) {
+            try self.pages_to_generate.setValue(self.allocator(), page.source_path.index(), true);
+        }
     }
 
     test scanPage {
@@ -285,9 +337,10 @@ pub const Site = struct {
         // Insert markdown file.
         try site.source_root.writeFile(.{ .sub_path = "file.md", .data = "{}\x02" });
         const file_md = try site.strs.intern("file.md");
-        try site.ensurePage(file_md);
-        try std.testing.expect(try site.scanPage(file_md));
+        try site.touchPage(file_md);
         const md_page = site.getPage(file_md).?;
+        try site.scanPage(md_page);
+        try std.testing.expect(site.pages_to_generate.isSet(md_page.source_path.index()));
         try std.testing.expect(!md_page.deleted);
         try std.testing.expectEqual(null, md_page.output_len);
         try std.testing.expectEqualStrings("{}", md_page.frontmatter);
@@ -296,35 +349,44 @@ pub const Site = struct {
         // Insert static file.
         try site.source_root.writeFile(.{ .sub_path = "style.css", .data = "" });
         const style_css = try site.strs.intern("style.css");
-        try site.ensurePage(style_css);
-        try std.testing.expect(try site.scanPage(style_css));
+        try site.touchPage(style_css);
         const css_page = site.getPage(style_css).?;
+        try site.scanPage(css_page);
+        try std.testing.expect(site.pages_to_generate.isSet(css_page.source_path.index()));
         try std.testing.expect(!css_page.deleted);
         try std.testing.expectEqual(null, css_page.output_len);
         try std.testing.expectEqualStrings("{}", css_page.frontmatter);
         try std.testing.expectEqualStrings("text/css", @tagName(css_page.mime_type));
 
         // Update markdown file without making changes.
-        try std.testing.expect(!try site.scanPage(file_md));
+        site.pages_to_generate.unsetAll(); // clear flags
+        try site.scanPage(md_page);
+        try std.testing.expect(!site.pages_to_generate.isSet(md_page.source_path.index()));
         try std.testing.expect(!md_page.deleted);
 
         // Update markdown file making changes.
+        site.pages_to_generate.unsetAll(); // clear flags
         try site.source_root.writeFile(.{ .sub_path = "file.md", .data = "{ hi: 4 }\x09" });
-        try std.testing.expect(try site.scanPage(file_md));
+        try site.scanPage(md_page);
+        try std.testing.expect(site.pages_to_generate.isSet(md_page.source_path.index()));
         try std.testing.expect(!md_page.deleted);
         try std.testing.expectEqualStrings("{ hi: 4 }", md_page.frontmatter);
 
         // Delete markdown file
+        site.pages_to_generate.unsetAll(); // clear flags
         try site.source_root.deleteFile("file.md");
-        try std.testing.expect(!try site.scanPage(file_md));
+        try site.scanPage(md_page);
+        try std.testing.expect(!site.pages_to_generate.isSet(md_page.source_path.index()));
         try std.testing.expect(md_page.deleted);
         try std.testing.expectEqual(null, site.getPage(file_md));
         try std.testing.expectEqual(Str.init_index, (try site.strs.intern("file.html")).index());
         try std.testing.expectEqual(Str.init_index, (try site.strs.intern("file")).index());
 
         // Recreate a markdown file
+        site.pages_to_generate.unsetAll(); // clear flags
         try site.source_root.writeFile(.{ .sub_path = "file.md", .data = "{}\x02" });
-        try std.testing.expect(try site.scanPage(file_md));
+        try site.scanPage(md_page);
+        try std.testing.expect(site.pages_to_generate.isSet(md_page.source_path.index()));
         try std.testing.expect(!md_page.deleted);
         try std.testing.expectEqual(null, md_page.output_len);
         try std.testing.expectEqualStrings("{}", md_page.frontmatter);
@@ -339,7 +401,7 @@ pub const Site = struct {
 
     pub const ListPattern = struct {
         pattern: Str,
-        page_uses: std.DynamicBitSetUnmanaged,
+        page_uses: BitSet,
     };
 
     pub const Page = struct {
@@ -368,35 +430,11 @@ pub const Site = struct {
         xml = 4,
     };
 
-    pub fn iterator(self: *Site) Iterator {
-        return Iterator{
-            .site = self,
-            .next_index = 0,
-        };
-    }
-
-    pub const Iterator = struct {
-        site: *Site,
-        next_index: usize,
-
-        pub fn next(self: *Iterator) ?*Page {
-            self.site.mutex.lock();
-            defer self.site.mutex.unlock();
-            if (self.next_index >= self.site.pages.count()) return null;
-            const page = self.site.pages.at(self.next_index);
-            self.next_index += 1;
-            return page;
-        }
-    };
-
     pub fn pagesMatchingPattern(
         self: *Site,
         requester: Str,
         pattern_bytes: []const u8,
     ) !PatternIterator {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
         // Ensure list pattern is stored.
         const pattern = try self.strs.intern(pattern_bytes);
         if (pattern.index() == Str.init_index) {
@@ -404,10 +442,7 @@ pub const Site = struct {
             _ = pattern.replaceIndex(pattern_index);
             var list_pattern = .{
                 .pattern = pattern,
-                .page_uses = try std.DynamicBitSetUnmanaged.initEmpty(
-                    self.allocator(),
-                    2 * self.pages.count(),
-                ),
+                .page_uses = BitSet{},
             };
             try self.list_patterns.append(self.allocator(), list_pattern);
             try self.backfillPagesMatched(&list_pattern);
@@ -420,14 +455,7 @@ pub const Site = struct {
         // regenerated output file, but it should be pretty rare.
         const list_pattern = self.list_patterns.at(pattern.index());
         const page_index = requester.index();
-        if (page_index < list_pattern.page_uses.capacity()) {
-            try list_pattern.page_uses.resize(
-                self.allocator(),
-                2 * self.pages.count(),
-                false,
-            );
-        }
-        list_pattern.page_uses.set(page_index);
+        try list_pattern.page_uses.setValue(self.allocator(), page_index, true);
 
         return PatternIterator{
             .site = self,
@@ -437,39 +465,24 @@ pub const Site = struct {
     }
 
     fn backfillPagesMatched(self: *Site, list_pattern: *ListPattern) !void {
-        std.debug.assert(list_pattern.page_uses.capacity() >= self.pages.count());
-        var pages = self.pages.constIterator(0);
+        var pages = self.pages.iterator(0);
         const pattern_bytes = list_pattern.pattern.bytes();
         while (pages.next()) |page| {
             var patterns_matched = try self.ensurePatternsMatchedForPage(page.source_path);
             if (glob.match(pattern_bytes, page.source_path.bytes())) {
-                patterns_matched.set(list_pattern.pattern.index());
+                try patterns_matched.setValue(self.allocator(), list_pattern.pattern.index(), true);
             }
         }
     }
 
-    fn ensurePatternsMatchedForPage(self: *Site, source_path: Str) !*std.DynamicBitSetUnmanaged {
+    fn ensurePatternsMatchedForPage(self: *Site, source_path: Str) !*BitSet {
         const page_index = source_path.index();
-        const pattern_count = self.list_patterns.count();
         while (page_index >= self.patterns_matched_by_page.count()) {
             const arena = self.allocator();
-            const patterns_matched = try std.DynamicBitSetUnmanaged.initEmpty(
-                arena,
-                2 * pattern_count,
-            );
+            const patterns_matched = BitSet{};
             try self.patterns_matched_by_page.append(arena, patterns_matched);
         }
-
-        var patterns_matched = self.patterns_matched_by_page.at(page_index);
-        if (pattern_count > patterns_matched.capacity()) {
-            try patterns_matched.resize(
-                self.allocator(),
-                2 * pattern_count,
-                false,
-            );
-        }
-
-        return patterns_matched;
+        return self.patterns_matched_by_page.at(page_index);
     }
 
     pub const PatternIterator = struct {
@@ -478,8 +491,6 @@ pub const Site = struct {
         next_page_index: usize,
 
         pub fn next(self: *PatternIterator) ?*Page {
-            self.site.mutex.lock();
-            defer self.site.mutex.unlock();
             const pattern_index = self.pattern.index();
             while (self.next_page_index < self.site.pages.count()) {
                 const page_index = self.next_page_index;
@@ -611,6 +622,57 @@ pub const Site = struct {
             return false;
         }
     }
+
+    // SegmentedList wrapped together with a Mutex to allow threadsafe access.
+    // There's plans to make this unnecessary:
+    // https://github.com/ziglang/zig/issues/20491
+    const Pages = struct {
+        internal: std.SegmentedList(Page, 0) = .{},
+        mutex: std.Thread.Mutex = .{},
+
+        fn deinit(self: *Pages) void {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            self.internal.deinit();
+        }
+
+        fn at(self: *Pages, index: usize) *Page {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            return self.internal.at(index);
+        }
+
+        fn append(self: *Pages, alloc: std.mem.Allocator, item: Page) !void {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            return self.internal.append(alloc, item);
+        }
+
+        fn count(self: *Pages) usize {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            return self.internal.count();
+        }
+
+        fn iterator(self: *Pages, start: usize) Iterator {
+            return .{
+                .pages = self,
+                .next_index = start,
+            };
+        }
+
+        const Iterator = struct {
+            pages: *Pages,
+            next_index: usize,
+
+            pub fn next(self: *Iterator) ?*Page {
+                if (self.next_index >= self.pages.count()) return null;
+                const page = self.pages.at(self.next_index);
+                self.next_index += 1;
+                return page;
+            }
+        };
+    };
 };
 
 pub const TestSite = struct {
