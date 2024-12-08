@@ -7,23 +7,20 @@ const platform = @import("platform.zig").platform;
 const fail = @import("fail.zig");
 
 pub const Frontmatters = struct {
-    arena_state: std.heap.ArenaAllocator,
+    gpa: std.mem.Allocator,
     frontmatters: std.AutoHashMapUnmanaged(usize, []const u8),
 
     pub fn init(gpa: std.mem.Allocator) Frontmatters {
-        const arena_state = std.heap.ArenaAllocator.init(gpa);
         return .{
-            .arena_state = arena_state,
+            .gpa = gpa,
             .frontmatters = std.AutoHashMapUnmanaged(usize, []const u8){},
         };
     }
 
     pub fn deinit(self: *Frontmatters) void {
-        const gpa = self.arena_state.child_allocator;
         var iterator = self.frontmatters.valueIterator();
-        while (iterator.next()) |frontmatter| gpa.free(frontmatter.*);
-        self.frontmatters.deinit(gpa);
-        self.arena_state.deinit();
+        while (iterator.next()) |frontmatter| self.gpa.free(frontmatter.*);
+        self.frontmatters.deinit(self.gpa);
     }
 
     pub fn get(
@@ -35,13 +32,10 @@ pub const Frontmatters = struct {
 
     pub fn read(
         self: *Frontmatters,
+        arena: std.mem.Allocator,
         source_root: std.fs.Dir,
         source_path: Str,
     ) ![]const u8 {
-        const gpa = self.arena_state.child_allocator;
-        _ = self.arena_state.reset(.{ .retain_with_limit = 1024 * 1024 });
-        const arena = self.arena_state.allocator();
-
         const bytes = try source_root.readFileAlloc(arena, source_path.bytes(), 1024 * 1024);
         var meta_bytes: []const u8 = "{}";
         if (firstNonWhitespaceByte(bytes) == '{') {
@@ -64,15 +58,15 @@ pub const Frontmatters = struct {
             , .{source_path.bytes()});
         }
 
-        const get_or_put = try self.frontmatters.getOrPut(gpa, source_path.index());
+        const get_or_put = try self.frontmatters.getOrPut(self.gpa, source_path.index());
         if (get_or_put.found_existing) {
             if (!std.mem.eql(u8, get_or_put.value_ptr.*, meta_bytes)) {
-                gpa.free(get_or_put.value_ptr.*);
-                get_or_put.value_ptr.* = try gpa.dupe(u8, meta_bytes);
+                self.gpa.free(get_or_put.value_ptr.*);
+                get_or_put.value_ptr.* = try self.gpa.dupe(u8, meta_bytes);
             }
             return get_or_put.value_ptr.*;
         } else {
-            get_or_put.value_ptr.* = try gpa.dupe(u8, meta_bytes);
+            get_or_put.value_ptr.* = try self.gpa.dupe(u8, meta_bytes);
             return get_or_put.value_ptr.*;
         }
     }
@@ -87,24 +81,28 @@ pub const Frontmatters = struct {
         var strs = try Str.Registry.init(std.testing.allocator);
         defer strs.deinit();
 
+        var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+
         // This test makes use of the test platform defined in platform.zig!
 
         try tmpdir.dir.writeFile(.{ .sub_path = "file1.txt", .data = "no frontmatter" });
         try std.testing.expectEqualStrings(
             "{}",
-            (try frontmatters.read(tmpdir.dir, try strs.intern("file1.txt"))),
+            (try frontmatters.read(arena, tmpdir.dir, try strs.intern("file1.txt"))),
         );
 
         try tmpdir.dir.writeFile(.{ .sub_path = "file2.txt", .data = "{ hi: 3 }\n# header \x14" });
         try std.testing.expectEqualStrings(
             "{ hi: 3 }",
-            (try frontmatters.read(tmpdir.dir, try strs.intern("file2.txt"))),
+            (try frontmatters.read(arena, tmpdir.dir, try strs.intern("file2.txt"))),
         );
 
         try tmpdir.dir.writeFile(.{ .sub_path = "file3.txt", .data = "{ \x00" });
         try std.testing.expectEqual(
             error.PrettyError,
-            frontmatters.read(tmpdir.dir, try strs.intern("file3.txt")),
+            frontmatters.read(arena, tmpdir.dir, try strs.intern("file3.txt")),
         );
     }
 };

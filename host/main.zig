@@ -10,9 +10,7 @@ const glob = @import("glob.zig");
 const serve = @import("serve.zig").serve;
 const platform = @import("platform.zig").platform;
 const bootstrap = @import("bootstrap.zig").bootstrap;
-const scan = @import("scan.zig");
-const WorkQueue = @import("work.zig").WorkQueue;
-const generate = @import("generate.zig").generate;
+const scanRecursively = @import("scan.zig").scanRecursively;
 
 pub fn main() void {
     if (run()) {} else |err| {
@@ -24,10 +22,6 @@ var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
 const gpa = gpa_state.allocator();
 
 fn run() !void {
-    var arena_state = std.heap.ArenaAllocator.init(gpa);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
     // (1) Construct Site struct
     var strs = try Str.Registry.init(gpa);
     defer strs.deinit();
@@ -38,8 +32,6 @@ fn run() !void {
     const should_bootstrap = try platform.getRules(gpa, &site);
 
     // (3) Scan the project to find all the source files and generate site.
-    var work = WorkQueue.init(gpa);
-    defer work.deinit();
     var watcher = try Watcher.init(gpa, try site.openSourceRoot(.{}));
     defer watcher.deinit();
 
@@ -47,26 +39,24 @@ fn run() !void {
         try bootstrap(gpa, &site);
     }
 
-    // Queue a job to scan the root source directory. This will result in
-    // the entire project getting scanned and output generated.
-    try work.push(.{ .scan_dir = try strs.intern("") });
-    try clearOutputDir(site.source_root, &site);
-    try doWork(gpa, &site, &watcher, &work);
+    // Scan the source directory to build a list of pages and then generate
+    // outputs for these pages.
+    try scanRecursively(gpa, &site, &watcher, try site.strs.intern(""));
+    try site.scanAndGeneratePages();
 
     // (4) Serve the output files.
     // TODO: handle thread failures.
-    const thread = try std.Thread.spawn(.{}, serve, .{ &strs, &site });
+    const thread = try std.Thread.spawn(.{}, serve, .{&site});
     thread.detach();
 
     // (5) Watch for changes.
     while (true) {
-        _ = arena_state.reset(.retain_capacity);
         while (try watcher.next_wait(50)) |change| {
-            try handle_change(strs, &work, change);
+            try handle_change(&site, &watcher, change);
         }
         // No new events in the last watch period, so filesystem changes
         // have settled.
-        try doWork(arena, &site, &watcher, &work);
+        try site.scanAndGeneratePages();
     }
 }
 
@@ -85,31 +75,33 @@ fn createSite(strs: Str.Registry) !Site {
 }
 
 fn handle_change(
-    strs: Str.Registry,
-    work: *WorkQueue,
+    site: *Site,
+    watcher: *Watcher,
     change: Watcher.Change,
 ) !void {
-    // TODO: queue work.
-    // Cases to handle:
-    // - Known file/dir changed
-    //   - queue path scan
-    // - Unknown file/dir changed
-    //   - check if path exists (to avoid interning temporary strs)
-    //   - check if path is not ignored
-    //   - queue path scan
-    // - build.roc changed
-    //   - queue rebuild
-    // - watcher reports missed events
-    //   - queue path scan for project root (i.e., rescan everything)
     switch (change) {
         .changes_missed => {
-            std.debug.print("TODO: rescan entire project", .{});
+            try scanRecursively(
+                gpa,
+                site,
+                watcher,
+                try site.strs.intern(""),
+            );
         },
         .dir_changed => |entry| {
-            std.debug.print(
-                "TODO: re-scan dir {s}/{s}\n",
-                .{ entry.dir.bytes(), entry.file_name },
-            );
+            var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+            const path_bytes = if (entry.dir.bytes().len == 0)
+                entry.file_name
+            else
+                try std.fmt.bufPrint(
+                    &buf,
+                    "{s}/{s}",
+                    .{ entry.dir.bytes(), entry.file_name },
+                );
+            if (!Site.matchAny(site.ignore_patterns, path_bytes)) {
+                const path = try site.strs.intern(path_bytes);
+                try scanRecursively(gpa, site, watcher, path);
+            }
         },
         .file_changed => |entry| {
             var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
@@ -121,54 +113,10 @@ fn handle_change(
                     "{s}/{s}",
                     .{ entry.dir.bytes(), entry.file_name },
                 );
-            if (strs.get(path_bytes)) |path| {
-                try work.push(.{ .scan_file = path });
-            } else {
-                std.debug.print("TODO: scan new file {s}\n", .{path_bytes});
+            if (!Site.matchAny(site.ignore_patterns, path_bytes)) {
+                const path = try site.strs.intern(path_bytes);
+                try site.touchPage(path);
             }
         },
-    }
-}
-
-fn clearOutputDir(source_root: std.fs.Dir, site: *Site) !void {
-    source_root.deleteTree(site.output_root) catch |err| {
-        if (err != error.NotDir) {
-            return err;
-        }
-    };
-    try source_root.makeDir(site.output_root);
-}
-
-fn doWork(
-    arena: std.mem.Allocator,
-    site: *Site,
-    watcher: *Watcher,
-    work: *WorkQueue,
-) !void {
-    var source_root = try site.openSourceRoot(.{ .iterate = true });
-    defer source_root.close();
-
-    var output_dir = try source_root.openDir(site.output_root, .{});
-    defer output_dir.close();
-
-    while (work.pop()) |job| {
-        switch (job) {
-            .scan_file => {
-                try scan.scanFile(work, site, job.scan_file);
-            },
-            .generate_file => {
-                const page = site.getPage(job.generate_file) orelse return error.CantGenerateMissingPage;
-                try generate(arena, source_root, output_dir, site, page);
-            },
-            .scan_dir => {
-                try scan.scanDir(
-                    work,
-                    site,
-                    watcher,
-                    source_root,
-                    job.scan_dir,
-                );
-            },
-        }
     }
 }

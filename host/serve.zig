@@ -5,7 +5,7 @@ const std = @import("std");
 const Str = @import("str.zig").Str;
 const Site = @import("site.zig").Site;
 
-pub fn serve(strs: *Str.Registry, site: *Site) !void {
+pub fn serve(site: *Site) !void {
     const loopback = try std.net.Ip4Address.parse("127.0.0.1", 0);
     const localhost = std.net.Address{ .in = loopback };
     var http_server = try localhost.listen(.{
@@ -17,7 +17,6 @@ pub fn serve(strs: *Str.Registry, site: *Site) !void {
     const stdout = std.io.getStdOut().writer();
     var source_root = try site.openSourceRoot(.{});
     defer source_root.close();
-    const output_dir = try source_root.openDir(site.output_root, .{});
     var buffer: ["http://localhost:00000".len]u8 = undefined;
     const url = try std.fmt.bufPrint(&buffer, "http://localhost:{}", .{addr.getPort()});
     try stdout.print("Listening on {s}\n", .{url});
@@ -37,31 +36,26 @@ pub fn serve(strs: *Str.Registry, site: *Site) !void {
                 try stdout.print("Failed receiving request: {s}\n", .{@errorName(err)});
                 continue :accept;
             };
-            try respond(strs, site, &request, output_dir);
+            try respond(site, &request);
         }
     }
 }
 
-fn respond(
-    strs: *Str.Registry,
-    site: *Site,
-    request: *std.http.Server.Request,
-    output_dir: std.fs.Dir,
-) !void {
+fn respond(site: *Site, request: *std.http.Server.Request) !void {
     blk: {
-        const requested_path = strs.get(request.head.target[1..]) orelse break :blk;
+        const requested_path = site.strs.get(request.head.target[1..]) orelse break :blk;
         const page = site.getPage(requested_path) orelse break :blk;
         page.mutex.lock();
         defer page.mutex.unlock();
         if (page.web_path != requested_path) break :blk;
-        return servePage(page, .ok, request, output_dir);
+        return servePage(page, .ok, request, site.output_root);
     }
     blk: {
-        const custom_404 = strs.get("404") orelse break :blk;
+        const custom_404 = site.strs.get("404") orelse break :blk;
         const page = site.getPage(custom_404) orelse break :blk;
         page.mutex.lock();
         defer page.mutex.unlock();
-        return servePage(page, .not_found, request, output_dir);
+        return servePage(page, .not_found, request, site.output_root);
     }
     return request.respond("404 Not Found", .{ .status = .not_found });
 }
