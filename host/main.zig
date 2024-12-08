@@ -24,17 +24,14 @@ var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
 const gpa = gpa_state.allocator();
 
 fn run() !void {
-    var args = std.process.args();
-    const argv0 = args.next() orelse return error.EmptyArgv;
-
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
     // (1) Construct Site struct
-    var strs = Str.Registry.init(gpa);
+    var strs = try Str.Registry.init(gpa);
     defer strs.deinit();
-    var site = try Site.init(gpa, std.fs.cwd(), argv0, "output", &strs);
+    var site = try createSite(strs);
     defer site.deinit();
 
     // (2) Call platform to get page rules.
@@ -47,17 +44,14 @@ fn run() !void {
     defer watcher.deinit();
 
     if (site.rules.len == 0 and should_bootstrap) {
-        try bootstrap(gpa, &strs, &site, &watcher, &work);
-    } else {
-        // Queue a job to scan the root source directory. This will result in
-        // the entire project getting scanned and output generated.
-        try work.push(.{ .scan_dir = try strs.intern("") });
+        try bootstrap(gpa, &site);
     }
 
-    var source_root = try site.openSourceRoot(.{ .iterate = true });
-    defer source_root.close();
-    try clearOutputDir(source_root, &site);
-    try doWork(gpa, &strs, &site, &watcher, &work);
+    // Queue a job to scan the root source directory. This will result in
+    // the entire project getting scanned and output generated.
+    try work.push(.{ .scan_dir = try strs.intern("") });
+    try clearOutputDir(site.source_root, &site);
+    try doWork(gpa, &site, &watcher, &work);
 
     // (4) Serve the output files.
     // TODO: handle thread failures.
@@ -68,16 +62,30 @@ fn run() !void {
     while (true) {
         _ = arena_state.reset(.retain_capacity);
         while (try watcher.next_wait(50)) |change| {
-            try handle_change(&strs, &work, change);
+            try handle_change(strs, &work, change);
         }
         // No new events in the last watch period, so filesystem changes
         // have settled.
-        try doWork(arena, &strs, &site, &watcher, &work);
+        try doWork(arena, &site, &watcher, &work);
     }
 }
 
+fn createSite(strs: Str.Registry) !Site {
+    var args = std.process.args();
+    const argv0 = args.next() orelse return error.EmptyArgv;
+    const source_root_path = std.fs.path.dirname(argv0) orelse "./";
+    const roc_main = std.fs.path.basename(argv0);
+    const source_root = std.fs.cwd().openDir(source_root_path, .{}) catch |err| {
+        try fail.prettily(
+            "Cannot access directory containing {s}: '{}'\n",
+            .{ source_root_path, err },
+        );
+    };
+    return Site.init(gpa, source_root, roc_main, "output", strs);
+}
+
 fn handle_change(
-    strs: *Str.Registry,
+    strs: Str.Registry,
     work: *WorkQueue,
     change: Watcher.Change,
 ) !void {
@@ -133,7 +141,6 @@ fn clearOutputDir(source_root: std.fs.Dir, site: *Site) !void {
 
 fn doWork(
     arena: std.mem.Allocator,
-    strs: *Str.Registry,
     site: *Site,
     watcher: *Watcher,
     work: *WorkQueue,
@@ -156,7 +163,6 @@ fn doWork(
             .scan_dir => {
                 try scan.scanDir(
                     work,
-                    strs,
                     site,
                     watcher,
                     source_root,

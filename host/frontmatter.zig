@@ -84,7 +84,7 @@ pub const Frontmatters = struct {
         var tmpdir = std.testing.tmpDir(.{ .iterate = true });
         defer tmpdir.cleanup();
 
-        var strs = Str.Registry.init(std.testing.allocator);
+        var strs = try Str.Registry.init(std.testing.allocator);
         defer strs.deinit();
 
         // This test makes use of the test platform defined in platform.zig!

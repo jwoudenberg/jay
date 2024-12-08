@@ -37,40 +37,50 @@ pub const Str = enum(usize) {
     }
 
     pub const Registry = struct {
-        arena_state: std.heap.ArenaAllocator,
-        strs: std.StringHashMapUnmanaged(Str),
-        mutex: std.Thread.Mutex,
+        state: *State,
 
-        pub fn init(gpa: std.mem.Allocator) Registry {
-            const arena_state = std.heap.ArenaAllocator.init(gpa);
-            return Registry{
-                .arena_state = arena_state,
-                .strs = std.StringHashMapUnmanaged(Str){},
-                .mutex = std.Thread.Mutex{},
+        const State = struct {
+            arena_state: std.heap.ArenaAllocator,
+            strs: std.StringHashMapUnmanaged(Str),
+            mutex: std.Thread.Mutex,
+        };
+
+        pub fn init(gpa: std.mem.Allocator) !Registry {
+            const state = try gpa.create(State);
+            state.* = .{
+                .arena_state = std.heap.ArenaAllocator.init(gpa),
+                .strs = .{},
+                .mutex = .{},
             };
+            return Registry{ .state = state };
         }
 
-        pub fn deinit(self: *Registry) void {
-            self.strs.deinit(self.arena_state.child_allocator);
-            self.arena_state.deinit();
+        pub fn deinit(self: Registry) void {
+            var state = self.state;
+            var child_allocator = state.arena_state.child_allocator;
+            state.strs.deinit(child_allocator);
+            state.arena_state.deinit();
+            child_allocator.destroy(state);
         }
 
-        pub fn get(self: *Registry, slice: []const u8) ?Str {
-            self.mutex.lock();
-            defer self.mutex.unlock();
-            return self.strs.get(slice);
+        pub fn get(self: Registry, slice: []const u8) ?Str {
+            var state = self.state;
+            state.mutex.lock();
+            defer state.mutex.unlock();
+            return state.strs.get(slice);
         }
 
-        pub fn intern(self: *Registry, slice: []const u8) !Str {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+        pub fn intern(self: Registry, slice: []const u8) !Str {
+            var state = self.state;
+            state.mutex.lock();
+            defer state.mutex.unlock();
 
-            const get_or_put = try self.strs.getOrPut(self.arena_state.child_allocator, slice);
+            const get_or_put = try state.strs.getOrPut(state.arena_state.child_allocator, slice);
             if (get_or_put.found_existing) {
                 return get_or_put.value_ptr.*;
             }
 
-            var buffer = try self.arena_state.allocator().alignedAlloc(
+            var buffer = try state.arena_state.allocator().alignedAlloc(
                 u8,
                 @sizeOf(usize),
                 2 * @sizeOf(usize) + slice.len,
@@ -88,7 +98,7 @@ pub const Str = enum(usize) {
 };
 
 test "Str.Registry" {
-    var strs = Str.Registry.init(std.testing.allocator);
+    var strs = try Str.Registry.init(std.testing.allocator);
     defer strs.deinit();
 
     const str1 = try strs.intern("/some/str/file.txt");

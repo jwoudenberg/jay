@@ -4,42 +4,33 @@
 
 const std = @import("std");
 const Site = @import("site.zig").Site;
+const TestSite = @import("site.zig").TestSite;
 const fail = @import("fail.zig");
-const scan = @import("scan.zig");
+const SourceDirIterator = @import("scan.zig").SourceDirIterator;
 const Watcher = @import("watch.zig").Watcher(Str, Str.bytes);
-const WorkQueue = @import("work.zig").WorkQueue;
 const Str = @import("str.zig").Str;
 
 pub fn bootstrap(
     gpa: std.mem.Allocator,
-    strs: *Str.Registry,
     site: *Site,
-    watcher: *Watcher,
-    work: *WorkQueue,
 ) !void {
     var source_root = try site.openSourceRoot(.{ .iterate = true });
     defer source_root.close();
 
-    try bootstrapRules(gpa, strs, site, watcher, work, source_root);
+    try bootstrapRules(gpa, site, source_root);
     try generateCodeForRules(site, source_root);
 }
 
-// To bootstrap we scan the project and build up the site rules while also
-// adding pages. An attempt to reuse logic from other places as much as
-// possible makes it a bit hacky.
 fn bootstrapRules(
     gpa: std.mem.Allocator,
-    strs: *Str.Registry,
     site: *Site,
-    watcher: *Watcher,
-    work: *WorkQueue,
     source_root: std.fs.Dir,
 ) !void {
     const site_arena = site.allocator();
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const tmp_arena = arena_state.allocator();
 
-    var tmp_arena_state = std.heap.ArenaAllocator.init(gpa);
-    defer tmp_arena_state.deinit();
-    const tmp_arena = tmp_arena_state.allocator();
     var ignore_patterns = std.ArrayList(Str).init(tmp_arena);
     try ignore_patterns.appendSlice(site.ignore_patterns);
     var markdown_patterns = std.ArrayList(Str).init(tmp_arena);
@@ -58,64 +49,47 @@ fn bootstrapRules(
         },
     });
 
-    var bootstrap_work = WorkQueue.init(tmp_arena);
-
-    // Queue a job to scan the root source directory. This will result in
-    // the entire project getting scanned and output generated.
-    try bootstrap_work.push(.{ .scan_dir = try strs.intern("") });
-
     // When running the bootstrap script we have to guess which files the user
     // might want to be ignored. This is our list of such guesses.
     const bootstrap_ignore_patterns = [_]Str{
-        try strs.intern(".git"),
-        try strs.intern(".gitignore"),
-        try strs.intern("README*"),
+        try site.strs.intern(".git"),
+        try site.strs.intern(".gitignore"),
+        try site.strs.intern("README*"),
     };
 
-    // TODO: reinit arena after each iteration.
-    jobs_loop: while (bootstrap_work.pop()) |job| {
-        switch (job) {
-            .scan_file => {
-                const source_path = job.scan_file;
-                const source_path_bytes = source_path.bytes();
+    var scan_queue = std.ArrayList(Str).init(tmp_arena);
+    try scan_queue.append(try site.strs.intern(""));
 
-                pattern_loop: for (bootstrap_ignore_patterns) |bootstrap_ignore_pattern| {
-                    const path = strs.get(source_path_bytes) orelse continue :pattern_loop;
-                    if (path != bootstrap_ignore_pattern) continue :pattern_loop;
-                    try ignore_patterns.append(path);
-                    continue :jobs_loop;
-                }
+    jobs_loop: while (scan_queue.popOrNull()) |dir| {
+        var iterator = try SourceDirIterator.init(site, source_root, dir);
+        paths_loop: while (try iterator.next()) |entry| {
+            const source_path = entry.path;
+            if (entry.is_dir) {
+                try scan_queue.append(source_path);
+                continue :paths_loop;
+            }
 
-                const pattern_bytes = try patternForPath(tmp_arena, source_path_bytes);
-                const pattern = try strs.intern(pattern_bytes);
-                var patterns = if (Site.isMarkdown(source_path_bytes))
-                    &markdown_patterns
-                else
-                    &static_patterns;
-                for (patterns.items) |existing_pattern| {
-                    if (pattern == existing_pattern) break;
-                } else {
-                    try patterns.append(pattern);
-                }
-                site.rules[0].patterns = static_patterns.items;
-                site.rules[1].patterns = markdown_patterns.items;
+            const source_path_bytes = source_path.bytes();
+            pattern_loop: for (bootstrap_ignore_patterns) |bootstrap_ignore_pattern| {
+                const path = site.strs.get(source_path_bytes) orelse continue :pattern_loop;
+                if (path != bootstrap_ignore_pattern) continue :pattern_loop;
+                try ignore_patterns.append(path);
+                continue :jobs_loop;
+            }
 
-                try scan.scanFile(&bootstrap_work, site, source_path);
-            },
-            .scan_dir => {
-                try scan.scanDir(
-                    &bootstrap_work,
-                    strs,
-                    site,
-                    watcher,
-                    source_root,
-                    job.scan_dir,
-                );
-            },
-            .generate_file => {
-                // Push generate jobs into the main queue, to run later.
-                try work.push(job);
-            },
+            const pattern_bytes = try patternForPath(tmp_arena, source_path_bytes);
+            const pattern = try site.strs.intern(pattern_bytes);
+            var patterns = if (Site.isMarkdown(source_path_bytes))
+                &markdown_patterns
+            else
+                &static_patterns;
+            for (patterns.items) |existing_pattern| {
+                if (pattern == existing_pattern) break;
+            } else {
+                try patterns.append(pattern);
+            }
+            site.rules[0].patterns = static_patterns.items;
+            site.rules[1].patterns = markdown_patterns.items;
         }
     }
 
@@ -124,34 +98,32 @@ fn bootstrapRules(
     site.ignore_patterns = try site_arena.dupe(Str, ignore_patterns.items);
 }
 
-test "bootstrapRules" {
-    var tmpdir = std.testing.tmpDir(.{ .iterate = true });
-    defer tmpdir.cleanup();
+test bootstrapRules {
+    var test_site = try TestSite.init();
+    defer test_site.deinit();
+    var site = test_site.site;
 
-    var strs = Str.Registry.init(std.testing.allocator);
-    defer strs.deinit();
-    var site = try Site.init(std.testing.allocator, tmpdir.dir, "build.roc", "output", &strs);
-    defer site.deinit();
+    try site.source_root.makeDir("markdown_only");
+    try site.source_root.makeDir("static_only");
+    try site.source_root.makeDir("mixed");
 
-    try tmpdir.dir.makeDir("markdown_only");
-    try tmpdir.dir.makeDir("static_only");
-    try tmpdir.dir.makeDir("mixed");
+    try site.source_root.writeFile(.{ .sub_path = "markdown_only/one.md", .data = "{}\x02" });
+    try site.source_root.writeFile(.{ .sub_path = "markdown_only/two.md", .data = "{}\x02" });
+    try site.source_root.writeFile(.{ .sub_path = "static_only/main.css", .data = "" });
+    try site.source_root.writeFile(.{ .sub_path = "static_only/logo.png", .data = "" });
+    try site.source_root.writeFile(.{ .sub_path = "mixed/three.md", .data = "{}\x02" });
+    try site.source_root.writeFile(.{ .sub_path = "mixed/rss.xml", .data = "" });
+    try site.source_root.writeFile(.{ .sub_path = "index.md", .data = "{}\x02" });
+    try site.source_root.writeFile(.{ .sub_path = ".gitignore", .data = "" });
 
-    try tmpdir.dir.writeFile(.{ .sub_path = "markdown_only/one.md", .data = "{}\x02" });
-    try tmpdir.dir.writeFile(.{ .sub_path = "markdown_only/two.md", .data = "{}\x02" });
-    try tmpdir.dir.writeFile(.{ .sub_path = "static_only/main.css", .data = "" });
-    try tmpdir.dir.writeFile(.{ .sub_path = "static_only/logo.png", .data = "" });
-    try tmpdir.dir.writeFile(.{ .sub_path = "mixed/three.md", .data = "{}\x02" });
-    try tmpdir.dir.writeFile(.{ .sub_path = "mixed/rss.xml", .data = "" });
-    try tmpdir.dir.writeFile(.{ .sub_path = "index.md", .data = "{}\x02" });
-    try tmpdir.dir.writeFile(.{ .sub_path = ".gitignore", .data = "" });
+    var source_root = try site.openSourceRoot(.{ .iterate = true });
+    defer source_root.close();
 
-    var work = WorkQueue.init(std.testing.allocator);
-    defer work.deinit();
-    var watcher = try Watcher.init(std.testing.allocator, tmpdir.dir);
-    defer watcher.deinit();
-
-    try bootstrapRules(std.testing.allocator, &strs, &site, &watcher, &work, tmpdir.dir);
+    try bootstrapRules(
+        std.testing.allocator,
+        site,
+        source_root,
+    );
 
     try std.testing.expectEqual(4, site.ignore_patterns.len);
     try std.testing.expectEqualStrings("output", site.ignore_patterns[0].bytes());
@@ -178,41 +150,6 @@ test "bootstrapRules" {
     try std.testing.expectEqualStrings("*.md", markdown_patterns[0].bytes());
     try std.testing.expectEqualStrings("markdown_only/*.md", markdown_patterns[1].bytes());
     try std.testing.expectEqualStrings("mixed/*.md", markdown_patterns[2].bytes());
-
-    const one_md = site.getPage(try strs.intern("markdown_only/one")).?;
-    try std.testing.expectEqualStrings("markdown_only/one.md", one_md.source_path.bytes());
-    try std.testing.expectEqualStrings("markdown_only/one.html", one_md.output_path.bytes());
-    try std.testing.expectEqual(one_md.rule_index, 1);
-
-    const two_md = site.getPage(try strs.intern("markdown_only/two")).?;
-    try std.testing.expectEqualStrings("markdown_only/two.md", two_md.source_path.bytes());
-    try std.testing.expectEqualStrings("markdown_only/two.html", two_md.output_path.bytes());
-    try std.testing.expectEqual(two_md.rule_index, 1);
-
-    const main_css = site.getPage(try strs.intern("static_only/main.css")).?;
-    try std.testing.expectEqualStrings("static_only/main.css", main_css.source_path.bytes());
-    try std.testing.expectEqualStrings("static_only/main.css", main_css.output_path.bytes());
-    try std.testing.expectEqual(main_css.rule_index, 0);
-
-    const logo_png = site.getPage(try strs.intern("static_only/logo.png")).?;
-    try std.testing.expectEqualStrings("static_only/logo.png", logo_png.source_path.bytes());
-    try std.testing.expectEqualStrings("static_only/logo.png", logo_png.output_path.bytes());
-    try std.testing.expectEqual(logo_png.rule_index, 0);
-
-    const three_md = site.getPage(try strs.intern("mixed/three")).?;
-    try std.testing.expectEqualStrings("mixed/three.md", three_md.source_path.bytes());
-    try std.testing.expectEqualStrings("mixed/three.html", three_md.output_path.bytes());
-    try std.testing.expectEqual(three_md.rule_index, 1);
-
-    const rss_xml = site.getPage(try strs.intern("mixed/rss.xml")).?;
-    try std.testing.expectEqualStrings("mixed/rss.xml", rss_xml.source_path.bytes());
-    try std.testing.expectEqualStrings("mixed/rss.xml", rss_xml.output_path.bytes());
-    try std.testing.expectEqual(rss_xml.rule_index, 0);
-
-    const index_md = site.getPage(try strs.intern("")).?;
-    try std.testing.expectEqualStrings("index.md", index_md.source_path.bytes());
-    try std.testing.expectEqualStrings("index.html", index_md.output_path.bytes());
-    try std.testing.expectEqual(index_md.rule_index, 1);
 }
 
 fn compareStrings(_: void, lhs: Str, rhs: Str) bool {
@@ -361,9 +298,24 @@ fn generateCodeForRules(site: *const Site, source_root: std.fs.Dir) !void {
 }
 
 test generateCodeForRules {
-    var tmpdir = std.testing.tmpDir(.{});
-    defer tmpdir.cleanup();
-    try tmpdir.dir.writeFile(.{
+    var test_site = try TestSite.init();
+    defer test_site.deinit();
+    var site = test_site.site;
+    var rules = [_]Site.Rule{
+        Site.Rule{
+            .processing = .markdown,
+            .patterns = try test_site.strsFromSlices(&.{ "posts/*.md", "*.md" }),
+            .replace_tags = &.{},
+        },
+        Site.Rule{
+            .processing = .none,
+            .patterns = try test_site.strsFromSlices(&.{"static"}),
+            .replace_tags = &.{},
+        },
+    };
+    site.rules = &rules;
+
+    try site.source_root.writeFile(.{
         .sub_path = "build.roc",
         .data =
         \\app [main] { pf: platform "some hash here" }
@@ -373,35 +325,18 @@ test generateCodeForRules {
         \\main = Pages.bootstrap
         ,
     });
-    var strs = Str.Registry.init(std.testing.allocator);
-    defer strs.deinit();
-    var site = try Site.init(std.testing.allocator, tmpdir.dir, "build.roc", "output", &strs);
-    defer site.deinit();
-    var rules = [_]Site.Rule{
-        Site.Rule{
-            .processing = .markdown,
-            .patterns = try site.strsFromSlices(&.{ "posts/*.md", "*.md" }),
-            .replace_tags = &.{},
-        },
-        Site.Rule{
-            .processing = .none,
-            .patterns = try site.strsFromSlices(&.{"static"}),
-            .replace_tags = &.{},
-        },
-    };
-    site.rules = rules[0..];
     var ignore_patterns = [_]Str{
-        try strs.intern("build.roc"),
-        try strs.intern("build"),
-        try strs.intern("output"),
-        try strs.intern(".git"),
-        try strs.intern(".gitignore"),
+        try site.strs.intern("build.roc"),
+        try site.strs.intern("build"),
+        try site.strs.intern("output"),
+        try site.strs.intern(".git"),
+        try site.strs.intern(".gitignore"),
     };
     site.ignore_patterns = &ignore_patterns;
 
-    try generateCodeForRules(&site, tmpdir.dir);
+    try generateCodeForRules(site, site.source_root);
 
-    const generated = try tmpdir.dir.readFileAlloc(std.testing.allocator, "build.roc", 1024 * 1024);
+    const generated = try site.source_root.readFileAlloc(std.testing.allocator, "build.roc", 1024 * 1024);
     defer std.testing.allocator.free(generated);
     try std.testing.expectEqualStrings(
         \\app [main] { pf: platform "some hash here" }

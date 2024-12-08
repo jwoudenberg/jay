@@ -101,7 +101,7 @@ fn getRules(gpa: std.mem.Allocator, site: *Site) !bool {
                     .patterns = try rocListMapToOwnedSlice(
                         RocStr,
                         Str,
-                        *Str.Registry,
+                        Str.Registry,
                         fromRocStr,
                         arena,
                         site.strs,
@@ -110,7 +110,7 @@ fn getRules(gpa: std.mem.Allocator, site: *Site) !bool {
                     .replace_tags = try rocListMapToOwnedSlice(
                         RocStr,
                         Str,
-                        *Str.Registry,
+                        Str.Registry,
                         fromRocStr,
                         arena,
                         site.strs,
@@ -124,7 +124,7 @@ fn getRules(gpa: std.mem.Allocator, site: *Site) !bool {
                 const patterns = try rocListMapToOwnedSlice(
                     RocStr,
                     Str,
-                    *Str.Registry,
+                    Str.Registry,
                     fromRocStr,
                     arena,
                     site.strs,
@@ -407,7 +407,7 @@ fn rocListMapToOwnedSlice(
     return slice;
 }
 
-fn fromRocStr(strs: *Str.Registry, roc_pattern: RocStr) !Str {
+fn fromRocStr(strs: Str.Registry, roc_pattern: RocStr) !Str {
     return strs.intern(roc_pattern.asSlice());
 }
 

@@ -6,93 +6,56 @@ const glob = @import("glob.zig");
 const fail = @import("fail.zig");
 const WorkQueue = @import("work.zig").WorkQueue;
 const Site = @import("site.zig").Site;
+const TestSite = @import("site.zig").TestSite;
 const Str = @import("str.zig").Str;
 const Watcher = @import("watch.zig").Watcher(Str, Str.bytes);
 
 pub fn scanDir(
     work: *WorkQueue,
-    strs: *Str.Registry,
     site: *Site,
     watcher: *Watcher,
     source_root: std.fs.Dir,
     dir_path: Str,
 ) !void {
     try watcher.watchDir(dir_path);
-    const dir = if (dir_path.bytes().len == 0) blk: {
-        break :blk source_root;
-    } else blk: {
-        break :blk try source_root.openDir(dir_path.bytes(), .{ .iterate = true });
-    };
-    var iterator = dir.iterateAssumeFirstIteration();
-    while (true) {
-        const entry = try iterator.next() orelse break;
-        var buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;
-        const path_bytes = if (dir_path.bytes().len == 0) blk: {
-            break :blk entry.name;
-        } else blk: {
-            break :blk try std.fmt.bufPrint(&buffer, "{s}/{s}", .{ dir_path.bytes(), entry.name });
-        };
-        if (Site.matchAny(site.ignore_patterns, path_bytes)) continue;
-
-        const path = try strs.intern(path_bytes);
-        switch (entry.kind) {
-            .file => {
-                try work.push(.{ .scan_file = path });
-            },
-            .directory => {
-                try work.push(.{ .scan_dir = path });
-            },
-            .block_device,
-            .character_device,
-            .named_pipe,
-            .sym_link,
-            .unix_domain_socket,
-            .whiteout,
-            .door,
-            .event_port,
-            .unknown,
-            => {
-                try fail.prettily(
-                    \\Encountered a path of type {s}:
-                    \\
-                    \\    {s}
-                    \\
-                    \\I don't support generating pages from this type of file!
-                    \\
-                    \\Tip: Remove the path from the source directory.
-                , .{ @tagName(entry.kind), path.bytes() });
-            },
+    var iterator = try SourceDirIterator.init(site, source_root, dir_path);
+    while (try iterator.next()) |entry| {
+        if (entry.is_dir) {
+            try work.push(.{ .scan_dir = entry.path });
+        } else {
+            try site.ensurePage(entry.path);
+            try work.push(.{ .scan_file = entry.path });
         }
     }
 }
 
 test scanDir {
-    var tmpdir = std.testing.tmpDir(.{ .iterate = true });
-    defer tmpdir.cleanup();
-
-    var strs = Str.Registry.init(std.testing.allocator);
-    defer strs.deinit();
-
+    var test_site = try TestSite.init();
+    defer test_site.deinit();
+    var site = test_site.site;
+    var rules = [_]Site.Rule{
+        Site.Rule{
+            .processing = .none,
+            .patterns = try test_site.strsFromSlices(&.{"*"}),
+            .replace_tags = &.{},
+        },
+    };
+    site.rules = &rules;
     var work = WorkQueue.init(std.testing.allocator);
     defer work.deinit();
-
-    var site = try Site.init(std.testing.allocator, tmpdir.dir, "build.roc", "output", &strs);
-    defer site.deinit();
-
-    var watcher = try Watcher.init(std.testing.allocator, tmpdir.dir);
+    var watcher = try Watcher.init(std.testing.allocator, site.source_root);
     defer watcher.deinit();
 
-    try tmpdir.dir.writeFile(.{ .sub_path = "c", .data = "" });
-    try tmpdir.dir.makeDir("b");
-    try tmpdir.dir.writeFile(.{ .sub_path = "a", .data = "" });
+    try site.source_root.writeFile(.{ .sub_path = "c", .data = "" });
+    try site.source_root.makeDir("b");
+    try site.source_root.writeFile(.{ .sub_path = "a", .data = "" });
 
     try scanDir(
         &work,
-        &strs,
-        &site,
+        site,
         &watcher,
-        tmpdir.dir,
-        try strs.intern(""),
+        site.source_root,
+        try site.strs.intern(""),
     );
 
     try std.testing.expectEqualStrings("b", work.pop().?.scan_dir.bytes());
@@ -102,6 +65,82 @@ test scanDir {
 }
 
 pub fn scanFile(work: *WorkQueue, site: *Site, source_path: Str) !void {
-    const changed = try site.upsert(source_path);
+    const changed = try site.scanPage(source_path);
     if (changed) try work.push(.{ .generate_file = source_path });
 }
+
+pub const SourceDirIterator = struct {
+    iterator: std.fs.Dir.Iterator,
+    site: *Site,
+    dir_path: Str,
+
+    const Entry = struct {
+        path: Str,
+        is_dir: bool,
+    };
+
+    pub fn init(site: *Site, source_root: std.fs.Dir, dir_path: Str) !SourceDirIterator {
+        const path = if (dir_path.bytes().len == 0) "./" else dir_path.bytes();
+        const dir = try source_root.openDir(path, .{ .iterate = true });
+        const iterator = dir.iterate();
+        return .{
+            .iterator = iterator,
+            .site = site,
+            .dir_path = dir_path,
+        };
+    }
+
+    pub fn next(self: *SourceDirIterator) !?Entry {
+        var buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+        while (true) {
+            const entry = try self.iterator.next() orelse break;
+            const path_bytes = if (self.dir_path.bytes().len == 0) blk: {
+                break :blk entry.name;
+            } else blk: {
+                break :blk try std.fmt.bufPrint(
+                    &buffer,
+                    "{s}/{s}",
+                    .{ self.dir_path.bytes(), entry.name },
+                );
+            };
+            if (Site.matchAny(self.site.ignore_patterns, path_bytes)) continue;
+
+            const path = try self.site.strs.intern(path_bytes);
+            switch (entry.kind) {
+                .file => {
+                    return .{
+                        .path = path,
+                        .is_dir = false,
+                    };
+                },
+                .directory => {
+                    return .{
+                        .path = path,
+                        .is_dir = true,
+                    };
+                },
+                .block_device,
+                .character_device,
+                .named_pipe,
+                .sym_link,
+                .unix_domain_socket,
+                .whiteout,
+                .door,
+                .event_port,
+                .unknown,
+                => {
+                    try fail.prettily(
+                        \\Encountered a path of type {s}:
+                        \\
+                        \\    {s}
+                        \\
+                        \\I don't support generating pages from this type of file!
+                        \\
+                        \\Tip: Remove the path from the source directory.
+                    , .{ @tagName(entry.kind), path.bytes() });
+                },
+            }
+        }
+        return null;
+    }
+};
