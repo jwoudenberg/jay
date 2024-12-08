@@ -10,9 +10,26 @@ const Str = @import("str.zig").Str;
 const xml = @import("xml.zig");
 const glob = @import("glob.zig");
 
+// When we call out to the platform, it in turn might run effects calling back
+// into the host, specifically this code. Those incoming calls will lack the
+// stack variables of the outgoing ones, so we store that on this variable.
+threadlocal var pipelineState: ?PipelineState = null;
+const PipelineState = struct {
+    site: *Site,
+    arena: std.mem.Allocator,
+};
+
 extern fn roc__mainForHost_1_exposed_generic(*RocList, *const void) callconv(.C) void;
 extern fn roc__getMetadataLengthForHost_1_exposed_generic(*u64, *const RocList) callconv(.C) void;
 extern fn roc__runPipelineForHost_1_exposed_generic(*RocList, *const Page) callconv(.C) void;
+
+export fn roc_fx_list(pattern: *RocStr) callconv(.C) RocList {
+    if (platform.getPagesMatchingPattern(pattern)) |results| {
+        return results;
+    } else |err| {
+        fail.crudely(err, @errorReturnTrace());
+    }
+}
 
 pub const Platform = struct {
     getRules: fn (gpa: std.mem.Allocator, site: *Site) anyerror!bool,
@@ -21,17 +38,14 @@ pub const Platform = struct {
 
     runPipeline: fn (
         arena: std.mem.Allocator,
+        site: *Site,
         page: *Site.Page,
         tags: []const xml.Tag,
         source: []const u8,
         writer: anytype,
     ) anyerror!void,
 
-    getPagesMatchingPattern: fn (
-        gpa: std.mem.Allocator,
-        site: *Site,
-        roc_pattern: *RocStr,
-    ) anyerror!RocList,
+    getPagesMatchingPattern: fn (roc_pattern: *RocStr) anyerror!RocList,
 };
 
 pub const platform: Platform = if (builtin.is_test)
@@ -49,14 +63,11 @@ else
         .getPagesMatchingPattern = getPagesMatchingPattern,
     };
 
-fn getPagesMatchingPattern(
-    gpa: std.mem.Allocator,
-    site: *Site,
-    roc_pattern: *RocStr,
-) !RocList {
+fn getPagesMatchingPattern(roc_pattern: *RocStr) !RocList {
+    const state = pipelineState orelse return error.PipelineStateNotSet;
     const pattern = roc_pattern.asSlice();
-    var results = std.ArrayList(Page).init(gpa);
-    var page_iterator = site.iterator();
+    var results = std.ArrayList(Page).init(state.arena);
+    var page_iterator = state.site.iterator();
     while (page_iterator.next()) |page| {
         if (glob.match(pattern, page.source_path.bytes())) {
             try results.append(Page{
@@ -141,6 +152,7 @@ fn getMetadataLength(bytes: []const u8) u64 {
 
 fn runPipeline(
     arena: std.mem.Allocator,
+    site: *Site,
     page: *Site.Page,
     tags: []const xml.Tag,
     source: []const u8,
@@ -165,7 +177,15 @@ fn runPipeline(
         .len = @as(u32, @intCast(source.len)),
     };
     var contents = RocList.empty();
+
+    pipelineState = .{
+        .site = site,
+        .arena = arena,
+    };
+    errdefer pipelineState = null;
     roc__runPipelineForHost_1_exposed_generic(&contents, &roc_page);
+    pipelineState = null;
+
     var roc_xml_iterator = RocListIterator(Slice).init(contents);
     while (roc_xml_iterator.next()) |roc_slice| {
         switch (roc_slice.tag) {
@@ -407,25 +427,21 @@ fn getMetadataLengthTest(bytes: []const u8) u64 {
 
 fn runPipelineTest(
     arena: std.mem.Allocator,
+    site: *Site,
     page: *Site.Page,
     tags: []const xml.Tag,
     source: []const u8,
     writer: anytype,
 ) anyerror!void {
     _ = arena;
+    _ = site;
     _ = page;
     _ = tags;
     _ = source;
     _ = writer;
 }
 
-fn getPagesMatchingPatternTest(
-    gpa: std.mem.Allocator,
-    site: *Site,
-    roc_pattern: *RocStr,
-) anyerror!RocList {
-    _ = gpa;
-    _ = site;
+fn getPagesMatchingPatternTest(roc_pattern: *RocStr) anyerror!RocList {
     _ = roc_pattern;
     return RocList.empty();
 }

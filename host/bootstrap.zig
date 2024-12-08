@@ -2,7 +2,6 @@
 // project, based on the markdown, html, and other source files present in
 // the project directory.
 
-const builtin = @import("builtin");
 const std = @import("std");
 const Site = @import("site.zig").Site;
 const fail = @import("fail.zig");
@@ -10,8 +9,6 @@ const scan = @import("scan.zig");
 const Watcher = @import("watch.zig").Watcher(Str, Str.bytes);
 const WorkQueue = @import("work.zig").WorkQueue;
 const Str = @import("str.zig").Str;
-const generate = @import("generate.zig").generate;
-const platform = @import("generate.zig").platform;
 
 pub fn bootstrap(
     gpa: std.mem.Allocator,

@@ -20,17 +20,8 @@ pub fn main() void {
     }
 }
 
-var global_site: Site = undefined;
 var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
 const gpa = gpa_state.allocator();
-
-export fn roc_fx_list(pattern: *RocStr) callconv(.C) RocList {
-    if (platform.getPagesMatchingPattern(gpa, &global_site, pattern)) |results| {
-        return results;
-    } else |err| {
-        fail.crudely(err, @errorReturnTrace());
-    }
-}
 
 fn run() !void {
     var args = std.process.args();
@@ -43,12 +34,11 @@ fn run() !void {
     // (1) Construct Site struct
     var strs = Str.Registry.init(gpa);
     defer strs.deinit();
-    global_site = try Site.init(gpa, std.fs.cwd(), argv0, "output", &strs);
-    defer global_site.deinit();
-    var site = &global_site;
+    var site = try Site.init(gpa, std.fs.cwd(), argv0, "output", &strs);
+    defer site.deinit();
 
     // (2) Call platform to get page rules.
-    const should_bootstrap = try platform.getRules(gpa, site);
+    const should_bootstrap = try platform.getRules(gpa, &site);
 
     // (3) Scan the project to find all the source files and generate site.
     var work = WorkQueue.init(gpa);
@@ -57,7 +47,7 @@ fn run() !void {
     defer watcher.deinit();
 
     if (site.rules.len == 0 and should_bootstrap) {
-        try bootstrap(gpa, &strs, site, &watcher, &work);
+        try bootstrap(gpa, &strs, &site, &watcher, &work);
     } else {
         // Queue a job to scan the root source directory. This will result in
         // the entire project getting scanned and output generated.
@@ -66,12 +56,12 @@ fn run() !void {
 
     var source_root = try site.openSourceRoot(.{ .iterate = true });
     defer source_root.close();
-    try clearOutputDir(source_root, site);
-    try doWork(gpa, &strs, site, &watcher, &work);
+    try clearOutputDir(source_root, &site);
+    try doWork(gpa, &strs, &site, &watcher, &work);
 
     // (4) Serve the output files.
     // TODO: handle thread failures.
-    const thread = try std.Thread.spawn(.{}, serve, .{ &strs, site });
+    const thread = try std.Thread.spawn(.{}, serve, .{ &strs, &site });
     thread.detach();
 
     // (5) Watch for changes.
@@ -82,7 +72,7 @@ fn run() !void {
         }
         // No new events in the last watch period, so filesystem changes
         // have settled.
-        try doWork(arena, &strs, site, &watcher, &work);
+        try doWork(arena, &strs, &site, &watcher, &work);
     }
 }
 
@@ -161,7 +151,7 @@ fn doWork(
             },
             .generate_file => {
                 const page = site.getPage(job.generate_file) orelse return error.CantGenerateMissingPage;
-                try generate(arena, source_root, output_dir, page);
+                try generate(arena, source_root, output_dir, site, page);
             },
             .scan_dir => {
                 try scan.scanDir(

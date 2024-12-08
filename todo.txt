@@ -29,6 +29,7 @@ x run local http server
 +watch regenerate files on directory change
 +watch regenerate dependent files on change
 +watch don't exit on error, instead keep list of current errors
++watch ensure page build arena's are cleared between builds
 
 +site for jay project with cookbooks
 +site example of gitbook-like site

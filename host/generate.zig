@@ -14,6 +14,7 @@ pub fn generate(
     arena: std.mem.Allocator,
     source_root: std.fs.Dir,
     output_dir: std.fs.Dir,
+    site: *Site,
     page: *Site.Page,
 ) !void {
     page.mutex.lock();
@@ -25,7 +26,7 @@ pub fn generate(
     defer output.close();
     var counting_writer = std.io.countingWriter(output.writer());
     var writer = counting_writer.writer();
-    try writeFile(arena, source_root, &writer, page);
+    try writeFile(arena, source_root, &writer, site, page);
     page.output_len = counting_writer.bytes_written;
 }
 
@@ -33,6 +34,7 @@ fn writeFile(
     arena: std.mem.Allocator,
     source_root: std.fs.Dir,
     writer: anytype,
+    site: *Site,
     page: *Site.Page,
 ) !void {
     switch (page.processing) {
@@ -57,6 +59,7 @@ fn writeFile(
             const tags = try xml.parse(arena, source, replace_tags);
             try platform.runPipeline(
                 arena,
+                site,
                 page,
                 tags,
                 source,
@@ -83,6 +86,7 @@ fn writeFile(
             const tags = try xml.parse(arena, source, replace_tags);
             try platform.runPipeline(
                 arena,
+                site,
                 page,
                 tags,
                 source,
