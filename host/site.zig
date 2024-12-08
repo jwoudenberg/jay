@@ -21,6 +21,9 @@ pub const Site = struct {
     ignore_patterns: []Str,
     // The page-construction rules defined in the .roc file we're running.
     rules: []Rule,
+    // pattern-caching for 'list'
+    list_patterns: std.SegmentedList(ListPattern, 0),
+    patterns_matched_by_page: std.SegmentedList(std.DynamicBitSetUnmanaged, 0),
     // Interned path slices
     strs: *Str.Registry,
     // Stored frontmatters
@@ -62,6 +65,8 @@ pub const Site = struct {
             .ignore_patterns = ignore_patterns,
             .rules = &.{},
             .strs = strs,
+            .list_patterns = std.SegmentedList(ListPattern, 0){},
+            .patterns_matched_by_page = std.SegmentedList(std.DynamicBitSetUnmanaged, 0){},
             .frontmatters = Frontmatters.init(gpa),
             .pages = std.SegmentedList(Page, 0){},
             .mutex = std.Thread.Mutex{},
@@ -262,6 +267,7 @@ pub const Site = struct {
         const page_index: u32 = @intCast(self.pages.count());
         try self.pages.append(self.allocator(), page);
         try self.setPageFields(page_index);
+        try self.backfillPatternsMatched(page.source_path);
     }
 
     fn update(self: *Site, page: *Page) !bool {
@@ -341,29 +347,31 @@ pub const Site = struct {
         page.frontmatter = try self.frontmatters.read(self.source_root, page.source_path);
     }
 
-    pub fn iterator(self: *Site) Iterator {
-        return Iterator{
-            .site = self,
-            .next_index = 0,
-        };
-    }
-
     pub const Rule = struct {
         patterns: []Str,
         replace_tags: []Str,
         processing: Processing,
     };
 
+    pub const ListPattern = struct {
+        pattern: Str,
+        page_uses: std.DynamicBitSetUnmanaged,
+    };
+
     pub const Page = struct {
         mutex: std.Thread.Mutex,
+        source_path: Str,
+
+        // Rule-derived attributes
         rule_index: usize,
         replace_tags: []Str,
         processing: Processing,
         mime_type: mime.Type,
-        output_len: ?u64,
-        source_path: Str,
         output_path: Str,
         web_path: Str,
+
+        // Filesystem-derived attributes
+        output_len: ?u64,
         frontmatter: []const u8,
         last_modified: i128,
         deleted: bool,
@@ -376,6 +384,13 @@ pub const Site = struct {
         xml = 4,
     };
 
+    pub fn iterator(self: *Site) Iterator {
+        return Iterator{
+            .site = self,
+            .next_index = 0,
+        };
+    }
+
     pub const Iterator = struct {
         site: *Site,
         next_index: usize,
@@ -387,6 +402,120 @@ pub const Site = struct {
             const page = self.site.pages.at(self.next_index);
             self.next_index += 1;
             return page;
+        }
+    };
+
+    pub fn pagesMatchingPattern(
+        self: *Site,
+        requester: Str,
+        pattern_bytes: []const u8,
+    ) !PatternIterator {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        // Ensure list pattern is stored.
+        const pattern = try self.strs.intern(pattern_bytes);
+        if (pattern.index() == Str.init_index) {
+            const pattern_index = self.list_patterns.count();
+            _ = pattern.replaceIndex(pattern_index);
+            var list_pattern = .{
+                .pattern = pattern,
+                .page_uses = try std.DynamicBitSetUnmanaged.initEmpty(
+                    self.allocator(),
+                    2 * self.pages.count(),
+                ),
+            };
+            try self.list_patterns.append(self.allocator(), list_pattern);
+            try self.backfillPagesMatched(&list_pattern);
+        }
+
+        // Ensure page is marked as a user of the pattern, for tracking
+        // dependencies. Note that we do not remove a dependency on a pattern
+        // after it is added, unless all patterns are invalidated as part of
+        // rules changing. That might result in the occasional unnecessary
+        // regenerated output file, but it should be pretty rare.
+        const list_pattern = self.list_patterns.at(pattern.index());
+        const page_index = requester.index();
+        if (page_index < list_pattern.page_uses.capacity()) {
+            try list_pattern.page_uses.resize(
+                self.allocator(),
+                2 * self.pages.count(),
+                false,
+            );
+        }
+        list_pattern.page_uses.set(page_index);
+
+        return PatternIterator{
+            .site = self,
+            .pattern = pattern,
+            .next_page_index = 0,
+        };
+    }
+
+    fn backfillPagesMatched(self: *Site, list_pattern: *ListPattern) !void {
+        std.debug.assert(list_pattern.page_uses.capacity() >= self.pages.count());
+        var pages = self.pages.constIterator(0);
+        const pattern_bytes = list_pattern.pattern.bytes();
+        while (pages.next()) |page| {
+            var patterns_matched = try self.ensurePatternsMatchedForPage(page.source_path);
+            if (glob.match(pattern_bytes, page.source_path.bytes())) {
+                patterns_matched.set(list_pattern.pattern.index());
+            }
+        }
+    }
+
+    fn backfillPatternsMatched(self: *Site, source_path: Str) !void {
+        var patterns_matched = try self.ensurePatternsMatchedForPage(source_path);
+
+        var list_patterns = self.list_patterns.constIterator(0);
+        while (list_patterns.next()) |list_pattern| {
+            const pattern = list_pattern.pattern;
+            if (glob.match(pattern.bytes(), source_path.bytes())) {
+                patterns_matched.set(pattern.index());
+            }
+        }
+    }
+
+    fn ensurePatternsMatchedForPage(self: *Site, source_path: Str) !*std.DynamicBitSetUnmanaged {
+        const page_index = source_path.index();
+        const pattern_count = self.list_patterns.count();
+        while (page_index >= self.patterns_matched_by_page.count()) {
+            const arena = self.allocator();
+            const patterns_matched = try std.DynamicBitSetUnmanaged.initEmpty(
+                arena,
+                2 * pattern_count,
+            );
+            try self.patterns_matched_by_page.append(arena, patterns_matched);
+        }
+
+        var patterns_matched = self.patterns_matched_by_page.at(page_index);
+        if (pattern_count > patterns_matched.capacity()) {
+            try patterns_matched.resize(
+                self.allocator(),
+                2 * pattern_count,
+                false,
+            );
+        }
+
+        return patterns_matched;
+    }
+
+    pub const PatternIterator = struct {
+        site: *Site,
+        pattern: Str,
+        next_page_index: usize,
+
+        pub fn next(self: *PatternIterator) ?*Page {
+            self.site.mutex.lock();
+            defer self.site.mutex.unlock();
+            const pattern_index = self.pattern.index();
+            while (self.next_page_index < self.site.pages.count()) {
+                const page_index = self.next_page_index;
+                self.next_page_index += 1;
+                const matches = self.site.patterns_matched_by_page.at(page_index);
+                if (matches.isSet(pattern_index)) return self.site.pages.at(page_index);
+            }
+            return null;
         }
     };
 

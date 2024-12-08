@@ -17,6 +17,7 @@ threadlocal var pipelineState: ?PipelineState = null;
 const PipelineState = struct {
     site: *Site,
     arena: std.mem.Allocator,
+    active_source_path: Str,
 };
 
 extern fn roc__mainForHost_1_exposed_generic(*RocList, *const void) callconv(.C) void;
@@ -67,17 +68,15 @@ fn getPagesMatchingPattern(roc_pattern: *RocStr) !RocList {
     const state = pipelineState orelse return error.PipelineStateNotSet;
     const pattern = roc_pattern.asSlice();
     var results = std.ArrayList(Page).init(state.arena);
-    var page_iterator = state.site.iterator();
-    while (page_iterator.next()) |page| {
-        if (glob.match(pattern, page.source_path.bytes())) {
-            try results.append(Page{
-                .meta = RocList.fromSlice(u8, page.frontmatter, false),
-                .path = RocStr.fromSlice(page.web_path.bytes()),
-                .tags = RocList.empty(),
-                .len = 0,
-                .ruleIndex = @as(u32, @intCast(page.rule_index)),
-            });
-        }
+    var pages = try state.site.pagesMatchingPattern(state.active_source_path, pattern);
+    while (pages.next()) |page| {
+        try results.append(Page{
+            .meta = RocList.fromSlice(u8, page.frontmatter, false),
+            .path = RocStr.fromSlice(page.web_path.bytes()),
+            .tags = RocList.empty(),
+            .len = 0,
+            .ruleIndex = @as(u32, @intCast(page.rule_index)),
+        });
     }
     return RocList.fromSlice(Page, try results.toOwnedSlice(), true);
 }
@@ -181,6 +180,7 @@ fn runPipeline(
     pipelineState = .{
         .site = site,
         .arena = arena,
+        .active_source_path = page.source_path,
     };
     errdefer pipelineState = null;
     roc__runPipelineForHost_1_exposed_generic(&contents, &roc_page);
