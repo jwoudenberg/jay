@@ -22,9 +22,7 @@ x run local http server
 +html empty attributes
 
 +watch add test for run() in main.zig
-+watch schedule regenerations for dependent pages
 +watch call touchPage for deleted file in scan
-+watch rescan dependent files if they changed at generate time
 +watch don't exit on error, instead keep list of current errors
 
 +site for jay project with cookbooks

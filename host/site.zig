@@ -301,7 +301,7 @@ pub const Site = struct {
         };
 
         if (page.deleted) {
-            try self.pages_to_generate.setValue(self.allocator(), page.source_path.index(), true);
+            try scheduleGenerateForPageAndDepdendents(self, page);
             page.deleted = false;
         } else if (page.last_modified == stat.mtime) {
             return;
@@ -312,7 +312,7 @@ pub const Site = struct {
         const arena = self.tmp_arena_state.allocator();
         page.frontmatter = try self.frontmatters.read(arena, self.source_root, page.source_path);
         if (old_frontmatter.ptr != page.frontmatter.ptr) {
-            try self.pages_to_generate.setValue(self.allocator(), page.source_path.index(), true);
+            try scheduleGenerateForPageAndDepdendents(self, page);
         }
     }
 
@@ -391,6 +391,20 @@ pub const Site = struct {
         try std.testing.expectEqual(null, md_page.output_len);
         try std.testing.expectEqualStrings("{}", md_page.frontmatter);
         try std.testing.expectEqualStrings("text/html", @tagName(md_page.mime_type));
+    }
+
+    fn scheduleGenerateForPageAndDepdendents(self: *Site, page: *Page) !void {
+        const arena = self.allocator();
+        const self_page_index = page.source_path.index();
+        try self.pages_to_generate.setValue(arena, self_page_index, true);
+
+        var pattern_indexes = self.patterns_matched_by_page.at(self_page_index).iterator();
+        while (pattern_indexes.next()) |pattern_index| {
+            var page_uses = self.list_patterns.at(pattern_index).page_uses.iterator();
+            while (page_uses.next()) |page_index| {
+                try self.pages_to_generate.setValue(arena, page_index, true);
+            }
+        }
     }
 
     pub const Rule = struct {

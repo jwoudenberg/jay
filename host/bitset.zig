@@ -28,13 +28,13 @@ pub const BitSet = struct {
         mask.* = (mask.* & ~bit) | value_bit;
     }
 
-    pub fn isSet(self: *BitSet, index: usize) bool {
+    pub fn isSet(self: *const BitSet, index: usize) bool {
         const mask_index = maskIndex(index);
         if (mask_index >= self.masks.count()) return false;
         return 0 != (self.masks.at(mask_index).* & maskBit(index));
     }
 
-    pub fn findFirstSet(self: *BitSet) ?usize {
+    pub fn findFirstSet(self: *const BitSet) ?usize {
         const mask_count = self.masks.count();
         var mask_index: usize = 0;
         while (mask_index < mask_count) {
@@ -53,6 +53,13 @@ pub const BitSet = struct {
         while (masks.next()) |mask| mask.* = 0;
     }
 
+    pub fn iterator(self: *BitSet) Iterator {
+        return .{
+            .bitset = self,
+            .index = 0,
+        };
+    }
+
     fn maskBit(index: usize) usize {
         return @as(usize, 1) << @as(ShiftInt, @truncate(index));
     }
@@ -60,6 +67,20 @@ pub const BitSet = struct {
     fn maskIndex(index: usize) usize {
         return index >> @bitSizeOf(ShiftInt);
     }
+
+    pub const Iterator = struct {
+        bitset: *const BitSet,
+        index: usize,
+
+        pub fn next(self: *Iterator) ?usize {
+            const bitset = self.bitset;
+            while (maskIndex(self.index) < bitset.masks.count()) {
+                const result = self.index;
+                self.index += 1;
+                if (bitset.isSet(result)) return result;
+            } else return null;
+        }
+    };
 };
 
 test BitSet {
@@ -85,6 +106,10 @@ test BitSet {
     try std.testing.expectEqual(50, bitset.findFirstSet());
     try std.testing.expectEqual(false, bitset.isSet(0));
     try std.testing.expectEqual(true, bitset.isSet(100));
+    var iterator = bitset.iterator();
+    try std.testing.expectEqual(50, iterator.next());
+    try std.testing.expectEqual(100, iterator.next());
+    try std.testing.expectEqual(null, iterator.next());
 
     try bitset.setValue(allocator, 100, false);
     try std.testing.expectEqual(50, bitset.findFirstSet());
