@@ -9,34 +9,23 @@ const glob = @import("glob.zig");
 const Str = @import("str.zig").Str;
 const BitSet = @import("bitset.zig").BitSet;
 const generate = @import("generate.zig").generate;
+const Error = @import("error.zig").Error;
 
 pub const Site = struct {
-    // The allocator that should be used for content of this struct.
     arena_state: std.heap.ArenaAllocator,
-    // An extra arena for short-lived jobs.
     tmp_arena_state: std.heap.ArenaAllocator,
-    // Absolute path of the directory containing the static site project.
     source_root: std.fs.Dir,
-    // basename of the .roc file we're currently running.
     roc_main: []const u8,
-    // Str to the directory that will contain the generated site.
     output_root: std.fs.Dir,
-    // Source patterns that should not be turned into pages.
     ignore_patterns: []Str,
-    // The page-construction rules defined in the .roc file we're running.
     rules: []Rule,
-    // The patterns we've seen passed to `list!` calls in the plastform.
     list_patterns: std.SegmentedList(ListPattern, 0),
-    // For each page, which `list!`-patterns it maches.
     patterns_matched_by_page: std.SegmentedList(BitSet, 0),
-    // A bitset containing the source pages we need to (re)scan outputs for.
     pages_to_scan: BitSet,
-    // A bitset containing the source pages we need to (re)generate outputs for.
     pages_to_generate: BitSet,
-    // Interned path slices
     strs: Str.Registry,
-    // Stored frontmatters
     frontmatters: Frontmatters,
+    errors: Error.Index,
 
     // The pages in a project. This is a SegmentedList because it's an
     // arena-friendly datastructure and we don't require slicing pages. The
@@ -81,6 +70,7 @@ pub const Site = struct {
             .pages_to_scan = BitSet{},
             .pages_to_generate = BitSet{},
             .frontmatters = Frontmatters.init(gpa),
+            .errors = Error.Index.init(gpa),
             .pages = .{},
         };
     }
@@ -93,6 +83,7 @@ pub const Site = struct {
 
     pub fn deinit(self: *Site) void {
         self.frontmatters.deinit();
+        self.errors.deinit();
         self.arena_state.deinit();
         self.tmp_arena_state.deinit();
     }
@@ -118,14 +109,20 @@ pub const Site = struct {
     // Init a Page record for a source path if none exists yet and schedule it
     // for scanning.
     pub fn touchPage(self: *Site, source_path: Str) !void {
-        if (source_path.index() != Str.init_index) return;
+        if (try self.statFile(source_path) == null) {
+            return self.errors.remove(source_path);
+        }
 
-        const page_index: usize = self.pages.count();
-        _ = source_path.replaceIndex(page_index);
-        try self.pages_to_scan.setValue(self.allocator(), page_index, true);
+        if (source_path.index() != Str.init_index) {
+            return self.pages_to_scan.setValue(
+                self.allocator(),
+                source_path.index(),
+                true,
+            );
+        }
 
         // Find matching rule.
-        const rule_index = try self.ruleForPath(source_path);
+        const rule_index = try self.ruleForPath(source_path) orelse return;
         const rule = self.rules[rule_index];
 
         // Calculate output path.
@@ -137,32 +134,23 @@ pub const Site = struct {
                 break :blk try self.strs.intern(output_path_bytes);
             },
         };
-        _ = output_path.replaceIndex(page_index);
 
         // Calculate web path.
+        const page_index: usize = self.pages.count();
         const extension = std.fs.path.extension(output_path.bytes());
         const mime_type = mime.extension_map.get(extension) orelse .@"application/octet-stream";
         const web_path = try self.strs.intern(webPathFromFilePath(output_path.bytes()));
-        const old_web_path_index = web_path.replaceIndex(page_index);
+        const old_web_path_index = web_path.index();
         if (old_web_path_index != Str.init_index and old_web_path_index != page_index) {
             const existing = self.pages.at(old_web_path_index);
             existing.mutex.lock();
             defer existing.mutex.unlock();
-            try fail.prettily(
-                \\I found multiple source files for a single page URL.
-                \\
-                \\These are the source files in question:
-                \\
-                \\  {s}
-                \\  {s}
-                \\
-                \\The URL path I would use for both of these is:
-                \\
-                \\  {s}
-                \\
-                \\Tip: Rename one of the files so both get a unique URL.
-                \\
-            , .{ existing.source_path.bytes(), source_path.bytes(), web_path.bytes() });
+            return self.errors.add(source_path, Error{
+                .conflicting_source_files = .{
+                    .web_path = web_path,
+                    .source_paths = .{ source_path, existing.source_path },
+                },
+            });
         }
 
         // Create page.
@@ -183,6 +171,10 @@ pub const Site = struct {
             .frontmatter = undefined,
         };
         try self.pages.append(self.allocator(), page);
+        _ = source_path.replaceIndex(page_index);
+        _ = output_path.replaceIndex(page_index);
+        _ = web_path.replaceIndex(page_index);
+        try self.pages_to_scan.setValue(self.allocator(), page_index, true);
 
         // Update pattern-match cache.
         var patterns_matched = try self.ensurePatternsMatchedForPage(source_path);
@@ -271,6 +263,7 @@ pub const Site = struct {
                 const page = self.pages.at(page_index);
                 page.mutex.lock();
                 defer page.mutex.unlock();
+                self.errors.remove(page.source_path);
                 try self.pages_to_scan.setValue(self.allocator(), page_index, false);
                 try self.scanPage(page);
                 continue;
@@ -287,17 +280,21 @@ pub const Site = struct {
         }
     }
 
+    fn statFile(self: *Site, source_path: Str) !?std.fs.File.Stat {
+        return self.source_root.statFile(source_path.bytes()) catch |err| {
+            if (err == error.FileNotFound) return null else return err;
+        };
+    }
+
     fn scanPage(self: *Site, page: *Page) !void {
         // Check file modification time and existence.
-        const stat = self.source_root.statFile(page.source_path.bytes()) catch |err| {
-            if (err == error.FileNotFound) {
-                page.deleted = true;
-                // Clear the page index on output and web strs, so that other pages
-                // might reuse these without reporting a conflict.
-                _ = page.output_path.replaceIndex(Str.init_index);
-                _ = page.web_path.replaceIndex(Str.init_index);
-                return;
-            } else return err;
+        const stat = try self.statFile(page.source_path) orelse {
+            page.deleted = true;
+            // Clear the page index on output and web strs, so that other pages
+            // might reuse these without reporting a conflict.
+            _ = page.output_path.replaceIndex(Str.init_index);
+            _ = page.web_path.replaceIndex(Str.init_index);
+            return;
         };
 
         if (page.deleted) {
@@ -516,11 +513,11 @@ pub const Site = struct {
         }
     };
 
-    fn ruleForPath(site: *Site, source_path: Str) !usize {
+    fn ruleForPath(self: *Site, source_path: Str) !?usize {
         var matches: [10]usize = undefined;
         var len: u8 = 0;
 
-        for (site.rules, 0..) |rule, rule_index| {
+        for (self.rules, 0..) |rule, rule_index| {
             if (!matchAny(rule.patterns, source_path.bytes())) continue;
 
             matches[len] = rule_index;
@@ -530,31 +527,21 @@ pub const Site = struct {
 
         return switch (len) {
             1 => matches[0],
-            0 => try fail.prettily(
-                \\I can't find a pattern matching the following source path:
-                \\
-                \\    {s}
-                \\
-                \\Make sure each path in your project directory is matched by
-                \\a rule, or an ignore pattern.
-                \\
-                \\Tip: Add an extra rule like this:
-                \\
-                \\    Pages.files ["{s}"]
-                \\
-                \\
-            , .{ source_path.bytes(), source_path.bytes() }),
-            else => try fail.prettily(
-                \\The following file is matched by multiple rules:
-                \\
-                \\    {s}
-                \\
-                \\These are the indices of the rules that match:
-                \\
-                \\    {any}
-                \\
-                \\
-            , .{ source_path.bytes(), matches }),
+            0 => blk: {
+                try self.errors.add(source_path, Error{
+                    .no_rule_for_page = source_path,
+                });
+                break :blk null;
+            },
+            else => blk: {
+                try self.errors.add(source_path, Error{
+                    .conflicting_rules = .{
+                        .source_path = source_path,
+                        .rule_indices = .{ matches[0], matches[1] },
+                    },
+                });
+                break :blk null;
+            },
         };
     }
 
@@ -585,11 +572,11 @@ pub const Site = struct {
             site.ruleForPath(try site.strs.intern("rule_two/file.txt")),
         );
         try std.testing.expectEqual(
-            error.PrettyError,
+            null,
             site.ruleForPath(try site.strs.intern("shared/file.txt")),
         );
         try std.testing.expectEqual(
-            error.PrettyError,
+            null,
             site.ruleForPath(try site.strs.intern("missing/file.txt")),
         );
     }

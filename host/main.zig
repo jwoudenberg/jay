@@ -50,7 +50,9 @@ fn run() !void {
     thread.detach();
 
     // (5) Watch for changes.
+    var stdout = std.io.getStdOut().writer();
     while (true) {
+        try site.errors.print(&stdout);
         while (try watcher.next_wait(50)) |change| {
             try handle_change(&site, &watcher, change);
         }

@@ -3,6 +3,7 @@
 comptime {
     _ = @import("bitset.zig");
     _ = @import("bootstrap.zig");
+    _ = @import("error.zig");
     _ = @import("fail.zig");
     _ = @import("frontmatter.zig");
     _ = @import("generate.zig");
