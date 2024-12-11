@@ -104,6 +104,15 @@ fn handle_change(
                 const path = try site.strs.intern(path_bytes);
                 try scanRecursively(gpa, site, watcher, path);
             }
+
+            // A directory change even might mean something got deleted, so
+            // touch all the directory's pages to check they still exist.
+            var pages = site.iterator();
+            while (pages.next()) |page| {
+                if (std.mem.startsWith(u8, page.source_path.bytes(), path_bytes)) {
+                    try site.touchPage(page.source_path);
+                }
+            }
         },
         .file_changed => |entry| {
             var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;

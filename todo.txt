@@ -21,9 +21,13 @@ x run local http server
 +html custom attributes
 +html empty attributes
 
-+watch add test for run() in main.zig
-+watch call touchPage for deleted file in scan
-+watch don't exit on error, instead keep list of current errors
++test new source file is picked up by watcher
++test removed source file is picked up by wachter
++test briefly existing temporary file not matched does not generate errors
++test removing directory recursively deletes pages it contains
++test adding directory with file results in new page
++test adding directory, then adding file results in new page
++test moving directory out of project then modifying source file does nothing
 
 +site for jay project with cookbooks
 +site example of gitbook-like site

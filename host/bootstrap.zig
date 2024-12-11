@@ -61,7 +61,7 @@ fn bootstrapRules(
     try scan_queue.append(try site.strs.intern(""));
 
     jobs_loop: while (scan_queue.popOrNull()) |dir| {
-        var iterator = try SourceDirIterator.init(site, source_root, dir);
+        var iterator = try SourceDirIterator.init(site, source_root, dir) orelse continue :jobs_loop;
         paths_loop: while (try iterator.next()) |entry| {
             const source_path = entry.path;
             if (entry.is_dir) {

@@ -20,7 +20,7 @@ pub fn scanRecursively(
     try scan_queue.append(init_dir);
     while (scan_queue.popOrNull()) |dir| {
         try watcher.watchDir(dir);
-        var iterator = try SourceDirIterator.init(site, site.source_root, dir);
+        var iterator = try SourceDirIterator.init(site, site.source_root, dir) orelse continue;
         while (try iterator.next()) |entry| {
             if (entry.is_dir) {
                 try scan_queue.append(entry.path);
@@ -73,9 +73,15 @@ pub const SourceDirIterator = struct {
         is_dir: bool,
     };
 
-    pub fn init(site: *Site, source_root: std.fs.Dir, dir_path: Str) !SourceDirIterator {
+    pub fn init(site: *Site, source_root: std.fs.Dir, dir_path: Str) !?SourceDirIterator {
         const path = if (dir_path.bytes().len == 0) "./" else dir_path.bytes();
-        const dir = try source_root.openDir(path, .{ .iterate = true });
+        const dir = source_root.openDir(path, .{ .iterate = true }) catch |err| {
+            if (err == error.FileNotFound) {
+                return null;
+            } else {
+                return err;
+            }
+        };
         const iterator = dir.iterate();
         return .{
             .iterator = iterator,

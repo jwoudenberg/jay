@@ -624,6 +624,10 @@ pub const Site = struct {
         }
     }
 
+    pub fn iterator(self: *Site) Pages.Iterator {
+        return self.pages.iterator(0);
+    }
+
     // SegmentedList wrapped together with a Mutex to allow threadsafe access.
     // There's plans to make this unnecessary:
     // https://github.com/ziglang/zig/issues/20491
