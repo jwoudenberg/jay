@@ -28,6 +28,7 @@ x run local http server
 +test adding directory with file results in new page
 +test adding directory, then adding file results in new page
 +test moving directory out of project then modifying source file does nothing
++test generating for source file that does not exist does not crash
 
 +site for jay project with cookbooks
 +site example of gitbook-like site

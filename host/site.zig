@@ -109,16 +109,16 @@ pub const Site = struct {
     // Init a Page record for a source path if none exists yet and schedule it
     // for scanning.
     pub fn touchPage(self: *Site, source_path: Str) !void {
-        if (try self.statFile(source_path) == null) {
-            return self.errors.remove(source_path);
-        }
-
         if (source_path.index() != Str.init_index) {
             return self.pages_to_scan.setValue(
                 self.allocator(),
                 source_path.index(),
                 true,
             );
+        }
+
+        if (try self.statFile(source_path) == null) {
+            return self.errors.remove(source_path);
         }
 
         // Find matching rule.
@@ -294,12 +294,18 @@ pub const Site = struct {
             // might reuse these without reporting a conflict.
             _ = page.output_path.replaceIndex(Str.init_index);
             _ = page.web_path.replaceIndex(Str.init_index);
+            try generateDependents(self, page);
             return;
         };
 
         if (page.deleted) {
-            try scheduleGenerateForPageAndDepdendents(self, page);
             page.deleted = false;
+            try self.pages_to_generate.setValue(
+                self.allocator(),
+                page.source_path.index(),
+                true,
+            );
+            try generateDependents(self, page);
         } else if (page.last_modified == stat.mtime) {
             return;
         }
@@ -309,7 +315,12 @@ pub const Site = struct {
         const arena = self.tmp_arena_state.allocator();
         page.frontmatter = try self.frontmatters.read(arena, self.source_root, page.source_path);
         if (old_frontmatter.ptr != page.frontmatter.ptr) {
-            try scheduleGenerateForPageAndDepdendents(self, page);
+            try self.pages_to_generate.setValue(
+                self.allocator(),
+                page.source_path.index(),
+                true,
+            );
+            try generateDependents(self, page);
         }
     }
 
@@ -390,16 +401,13 @@ pub const Site = struct {
         try std.testing.expectEqualStrings("text/html", @tagName(md_page.mime_type));
     }
 
-    fn scheduleGenerateForPageAndDepdendents(self: *Site, page: *Page) !void {
-        const arena = self.allocator();
+    fn generateDependents(self: *Site, page: *Page) !void {
         const self_page_index = page.source_path.index();
-        try self.pages_to_generate.setValue(arena, self_page_index, true);
-
         var pattern_indexes = self.patterns_matched_by_page.at(self_page_index).iterator();
         while (pattern_indexes.next()) |pattern_index| {
             var page_uses = self.list_patterns.at(pattern_index).page_uses.iterator();
             while (page_uses.next()) |page_index| {
-                try self.pages_to_generate.setValue(arena, page_index, true);
+                try self.pages_to_generate.setValue(self.allocator(), page_index, true);
             }
         }
     }
@@ -507,7 +515,12 @@ pub const Site = struct {
                 const page_index = self.next_page_index;
                 self.next_page_index += 1;
                 const matches = self.site.patterns_matched_by_page.at(page_index);
-                if (matches.isSet(pattern_index)) return self.site.pages.at(page_index);
+                if (matches.isSet(pattern_index)) {
+                    const page = self.site.pages.at(page_index);
+                    page.mutex.lock();
+                    defer page.mutex.unlock();
+                    return if (page.deleted) continue else page;
+                }
             }
             return null;
         }

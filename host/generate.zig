@@ -41,17 +41,19 @@ fn writeFile(
             var fifo = std.fifo.LinearFifo(u8, .Slice).init(buffer);
             defer fifo.deinit();
 
-            const source = try site.source_root.openFile(page.source_path.bytes(), .{});
+            const source = site.source_root.openFile(page.source_path.bytes(), .{}) catch |err| {
+                if (err == error.FileNotFound) return else return err;
+            };
             defer source.close();
             try fifo.pump(source.reader(), writer);
         },
         .xml => {
             // TODO: figure out what to do with files larger than this.
-            const source = try site.source_root.readFileAlloc(
+            const source = site.source_root.readFileAlloc(
                 arena,
                 page.source_path.bytes(),
                 1024 * 1024,
-            );
+            ) catch |err| if (err == error.FileNotFound) return else return err;
             var replace_tags = try arena.alloc([]const u8, page.replace_tags.len);
             for (page.replace_tags, 0..) |tag, index| replace_tags[index] = tag.bytes();
             const tags = try xml.parse(arena, source, replace_tags);
