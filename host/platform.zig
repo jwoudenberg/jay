@@ -20,192 +20,6 @@ const PipelineState = struct {
     active_source_path: Str,
 };
 
-extern fn roc__mainForHost_1_exposed_generic(*RocList, *const void) callconv(.C) void;
-extern fn roc__getMetadataLengthForHost_1_exposed_generic(*u64, *const RocList) callconv(.C) void;
-extern fn roc__runPipelineForHost_1_exposed_generic(*RocList, *const Page) callconv(.C) void;
-
-export fn roc_fx_list(pattern: *RocStr) callconv(.C) RocList {
-    if (platform.getPagesMatchingPattern(pattern)) |results| {
-        return results;
-    } else |err| {
-        fail.crudely(err, @errorReturnTrace());
-    }
-}
-
-pub const Platform = struct {
-    getRules: fn (gpa: std.mem.Allocator, site: *Site) anyerror!bool,
-
-    getMetadataLength: fn (bytes: []const u8) u64,
-
-    runPipeline: fn (
-        arena: std.mem.Allocator,
-        site: *Site,
-        page: *Site.Page,
-        tags: []const xml.Tag,
-        source: []const u8,
-        writer: anytype,
-    ) anyerror!void,
-
-    getPagesMatchingPattern: fn (roc_pattern: *RocStr) anyerror!RocList,
-};
-
-pub const platform: Platform = if (builtin.is_test)
-    .{
-        .getRules = getRulesTest,
-        .getMetadataLength = getMetadataLengthTest,
-        .runPipeline = runPipelineTest,
-        .getPagesMatchingPattern = getPagesMatchingPatternTest,
-    }
-else
-    .{
-        .getRules = getRules,
-        .getMetadataLength = getMetadataLength,
-        .runPipeline = runPipeline,
-        .getPagesMatchingPattern = getPagesMatchingPattern,
-    };
-
-fn getPagesMatchingPattern(roc_pattern: *RocStr) !RocList {
-    const state = pipelineState orelse return error.PipelineStateNotSet;
-    const pattern = roc_pattern.asSlice();
-    var results = std.ArrayList(Page).init(state.arena);
-    var pages = try state.site.pagesMatchingPattern(state.active_source_path, pattern);
-    while (pages.next()) |page| {
-        page.mutex.lock();
-        defer page.mutex.unlock();
-        try results.append(Page{
-            .meta = RocList.fromSlice(u8, page.frontmatter, false),
-            .path = RocStr.fromSlice(page.web_path.bytes()),
-            .tags = RocList.empty(),
-            .len = 0,
-            .ruleIndex = @as(u32, @intCast(page.rule_index)),
-        });
-    }
-    return RocList.fromSlice(Page, try results.toOwnedSlice(), true);
-}
-
-fn getRules(gpa: std.mem.Allocator, site: *Site) !bool {
-    var roc_rules = RocList.empty();
-    roc__mainForHost_1_exposed_generic(&roc_rules, &void{});
-    var should_bootstrap = false;
-    var rules = std.ArrayList(Site.Rule).init(gpa);
-    errdefer rules.deinit();
-    var ignore_patterns = std.ArrayList(Str).fromOwnedSlice(
-        gpa,
-        try gpa.dupe(Str, site.ignore_patterns),
-    );
-    errdefer ignore_patterns.deinit();
-    var roc_rule_iterator = RocListIterator(Rule).init(roc_rules);
-    const arena = site.allocator();
-    while (roc_rule_iterator.next()) |platform_rule| {
-        switch (platform_rule.processing) {
-            .none, .xml, .markdown => {
-                const rule = .{
-                    .patterns = try rocListMapToOwnedSlice(
-                        RocStr,
-                        Str,
-                        Str.Registry,
-                        fromRocStr,
-                        arena,
-                        site.strs,
-                        platform_rule.patterns,
-                    ),
-                    .replace_tags = try rocListMapToOwnedSlice(
-                        RocStr,
-                        Str,
-                        Str.Registry,
-                        fromRocStr,
-                        arena,
-                        site.strs,
-                        platform_rule.replace_tags,
-                    ),
-                    .processing = @as(Site.Processing, @enumFromInt(@intFromEnum(platform_rule.processing))),
-                };
-                try rules.append(rule);
-            },
-            .ignore => {
-                const patterns = try rocListMapToOwnedSlice(
-                    RocStr,
-                    Str,
-                    Str.Registry,
-                    fromRocStr,
-                    arena,
-                    site.strs,
-                    platform_rule.patterns,
-                );
-                try ignore_patterns.appendSlice(patterns);
-            },
-            .bootstrap => {
-                should_bootstrap = true;
-            },
-        }
-    }
-    site.rules = try arena.dupe(Site.Rule, try rules.toOwnedSlice());
-    site.ignore_patterns = try arena.dupe(Str, try ignore_patterns.toOwnedSlice());
-    return should_bootstrap;
-}
-
-fn getMetadataLength(bytes: []const u8) u64 {
-    var meta_len: u64 = undefined;
-    const roc_bytes = RocList.fromSlice(u8, bytes, false);
-    roc__getMetadataLengthForHost_1_exposed_generic(&meta_len, &roc_bytes);
-    return meta_len;
-}
-
-fn runPipeline(
-    arena: std.mem.Allocator,
-    site: *Site,
-    page: *Site.Page,
-    tags: []const xml.Tag,
-    source: []const u8,
-    writer: anytype,
-) !void {
-    var roc_tags = std.ArrayList(Tag).init(arena);
-    for (tags) |tag| {
-        try roc_tags.append(Tag{
-            .attributes = RocList.fromSlice(u8, tag.attributes, false),
-            .outerStart = @as(u32, @intCast(tag.outer_start)),
-            .outerEnd = @as(u32, @intCast(tag.outer_end)),
-            .innerStart = @as(u32, @intCast(tag.inner_start)),
-            .innerEnd = @as(u32, @intCast(tag.inner_end)),
-            .index = @as(u32, @intCast(tag.index)),
-        });
-    }
-    const roc_page = Page{
-        .meta = RocList.fromSlice(u8, page.frontmatter, false),
-        .path = RocStr.fromSlice(page.web_path.bytes()),
-        .ruleIndex = @as(u32, @intCast(page.rule_index)),
-        .tags = RocList.fromSlice(Tag, try roc_tags.toOwnedSlice(), true),
-        .len = @as(u32, @intCast(source.len)),
-    };
-    var contents = RocList.empty();
-
-    pipelineState = .{
-        .site = site,
-        .arena = arena,
-        .active_source_path = page.source_path,
-    };
-    errdefer pipelineState = null;
-    roc__runPipelineForHost_1_exposed_generic(&contents, &roc_page);
-    pipelineState = null;
-
-    var roc_xml_iterator = RocListIterator(Slice).init(contents);
-    while (roc_xml_iterator.next()) |roc_slice| {
-        switch (roc_slice.tag) {
-            .from_source => {
-                const slice = roc_slice.payload.from_source;
-                try writer.writeAll(source[slice.start..slice.end]);
-            },
-            .roc_generated => {
-                const roc_slice_list = roc_slice.payload.roc_generated;
-                const len = roc_slice_list.len();
-                if (len == 0) continue;
-                const slice = roc_slice_list.elements(u8) orelse return error.RocListUnexpectedEmpty;
-                try writer.writeAll(slice[0..len]);
-            },
-        }
-    }
-}
-
 const Rule = extern struct {
     patterns: RocList,
     replace_tags: RocList,
@@ -255,6 +69,196 @@ const SliceTag = enum(u8) {
 const SourceLoc = extern struct {
     end: u32,
     start: u32,
+};
+
+export fn roc_fx_list(pattern: *RocStr) callconv(.C) RocList {
+    if (getPagesMatchingPattern(pattern)) |results| {
+        return results;
+    } else |err| {
+        fail.crudely(err, @errorReturnTrace());
+    }
+}
+
+fn getPagesMatchingPattern(roc_pattern: *RocStr) !RocList {
+    const state = pipelineState orelse return error.PipelineStateNotSet;
+    const pattern = roc_pattern.asSlice();
+    var results = std.ArrayList(Page).init(state.arena);
+    var pages = try state.site.pagesMatchingPattern(state.active_source_path, pattern);
+    while (pages.next()) |page| {
+        page.mutex.lock();
+        defer page.mutex.unlock();
+        try results.append(Page{
+            .meta = RocList.fromSlice(u8, page.frontmatter, false),
+            .path = RocStr.fromSlice(page.web_path.bytes()),
+            .tags = RocList.empty(),
+            .len = 0,
+            .ruleIndex = @as(u32, @intCast(page.rule_index)),
+        });
+    }
+    return RocList.fromSlice(Page, try results.toOwnedSlice(), true);
+}
+
+extern fn roc__mainForHost_1_exposed_generic(*RocList, *const void) callconv(.C) void;
+extern fn roc__getMetadataLengthForHost_1_exposed_generic(*u64, *const RocList) callconv(.C) void;
+extern fn roc__runPipelineForHost_1_exposed_generic(*RocList, *const Page) callconv(.C) void;
+
+pub const platform = if (builtin.is_test) TestPlatform else Platform;
+
+const Platform = struct {
+    pub fn getRules(gpa: std.mem.Allocator, site: *Site) !bool {
+        var roc_rules = RocList.empty();
+        roc__mainForHost_1_exposed_generic(&roc_rules, &void{});
+        var should_bootstrap = false;
+        var rules = std.ArrayList(Site.Rule).init(gpa);
+        errdefer rules.deinit();
+        var ignore_patterns = std.ArrayList(Str).fromOwnedSlice(
+            gpa,
+            try gpa.dupe(Str, site.ignore_patterns),
+        );
+        errdefer ignore_patterns.deinit();
+        var roc_rule_iterator = RocListIterator(Rule).init(roc_rules);
+        const arena = site.allocator();
+        while (roc_rule_iterator.next()) |platform_rule| {
+            switch (platform_rule.processing) {
+                .none, .xml, .markdown => {
+                    const rule = .{
+                        .patterns = try rocListMapToOwnedSlice(
+                            RocStr,
+                            Str,
+                            Str.Registry,
+                            fromRocStr,
+                            arena,
+                            site.strs,
+                            platform_rule.patterns,
+                        ),
+                        .replace_tags = try rocListMapToOwnedSlice(
+                            RocStr,
+                            Str,
+                            Str.Registry,
+                            fromRocStr,
+                            arena,
+                            site.strs,
+                            platform_rule.replace_tags,
+                        ),
+                        .processing = @as(Site.Processing, @enumFromInt(@intFromEnum(platform_rule.processing))),
+                    };
+                    try rules.append(rule);
+                },
+                .ignore => {
+                    const patterns = try rocListMapToOwnedSlice(
+                        RocStr,
+                        Str,
+                        Str.Registry,
+                        fromRocStr,
+                        arena,
+                        site.strs,
+                        platform_rule.patterns,
+                    );
+                    try ignore_patterns.appendSlice(patterns);
+                },
+                .bootstrap => {
+                    should_bootstrap = true;
+                },
+            }
+        }
+        site.rules = try arena.dupe(Site.Rule, try rules.toOwnedSlice());
+        site.ignore_patterns = try arena.dupe(Str, try ignore_patterns.toOwnedSlice());
+        return should_bootstrap;
+    }
+
+    pub fn getMetadataLength(bytes: []const u8) u64 {
+        var meta_len: u64 = undefined;
+        const roc_bytes = RocList.fromSlice(u8, bytes, false);
+        roc__getMetadataLengthForHost_1_exposed_generic(&meta_len, &roc_bytes);
+        return meta_len;
+    }
+
+    pub fn runPipeline(
+        arena: std.mem.Allocator,
+        site: *Site,
+        page: *Site.Page,
+        tags: []const xml.Tag,
+        source: []const u8,
+        writer: anytype,
+    ) !void {
+        var roc_tags = std.ArrayList(Tag).init(arena);
+        for (tags) |tag| {
+            try roc_tags.append(Tag{
+                .attributes = RocList.fromSlice(u8, tag.attributes, false),
+                .outerStart = @as(u32, @intCast(tag.outer_start)),
+                .outerEnd = @as(u32, @intCast(tag.outer_end)),
+                .innerStart = @as(u32, @intCast(tag.inner_start)),
+                .innerEnd = @as(u32, @intCast(tag.inner_end)),
+                .index = @as(u32, @intCast(tag.index)),
+            });
+        }
+        const roc_page = Page{
+            .meta = RocList.fromSlice(u8, page.frontmatter, false),
+            .path = RocStr.fromSlice(page.web_path.bytes()),
+            .ruleIndex = @as(u32, @intCast(page.rule_index)),
+            .tags = RocList.fromSlice(Tag, try roc_tags.toOwnedSlice(), true),
+            .len = @as(u32, @intCast(source.len)),
+        };
+        var contents = RocList.empty();
+
+        pipelineState = .{
+            .site = site,
+            .arena = arena,
+            .active_source_path = page.source_path,
+        };
+        errdefer pipelineState = null;
+        roc__runPipelineForHost_1_exposed_generic(&contents, &roc_page);
+        pipelineState = null;
+
+        var roc_xml_iterator = RocListIterator(Slice).init(contents);
+        while (roc_xml_iterator.next()) |roc_slice| {
+            switch (roc_slice.tag) {
+                .from_source => {
+                    const slice = roc_slice.payload.from_source;
+                    try writer.writeAll(source[slice.start..slice.end]);
+                },
+                .roc_generated => {
+                    const roc_slice_list = roc_slice.payload.roc_generated;
+                    const len = roc_slice_list.len();
+                    if (len == 0) continue;
+                    const slice = roc_slice_list.elements(u8) orelse return error.RocListUnexpectedEmpty;
+                    try writer.writeAll(slice[0..len]);
+                },
+            }
+        }
+    }
+};
+
+const TestPlatform = struct {
+    pub fn getRules(gpa: std.mem.Allocator, site: *Site) anyerror!bool {
+        _ = gpa;
+        _ = site;
+        return false;
+    }
+
+    pub fn getMetadataLength(bytes: []const u8) u64 {
+        // Allow tests to encode the desired return value in the last byte.
+        return if (bytes.len == 0)
+            0
+        else
+            @intCast(bytes[bytes.len - 1]);
+    }
+
+    pub fn runPipeline(
+        arena: std.mem.Allocator,
+        site: *Site,
+        page: *Site.Page,
+        tags: []const xml.Tag,
+        source: []const u8,
+        writer: anytype,
+    ) anyerror!void {
+        _ = arena;
+        _ = site;
+        _ = page;
+        _ = tags;
+        _ = source;
+        _ = writer;
+    }
 };
 
 export fn roc_alloc(size: usize, alignment: u32) callconv(.C) *anyopaque {
@@ -411,36 +415,6 @@ fn rocListMapToOwnedSlice(
 
 fn fromRocStr(strs: Str.Registry, roc_pattern: RocStr) !Str {
     return strs.intern(roc_pattern.asSlice());
-}
-
-fn getRulesTest(gpa: std.mem.Allocator, site: *Site) anyerror!bool {
-    _ = gpa;
-    _ = site;
-    return false;
-}
-
-fn getMetadataLengthTest(bytes: []const u8) u64 {
-    // Allow tests to encode the desired return value in the last byte.
-    return if (bytes.len == 0)
-        0
-    else
-        @intCast(bytes[bytes.len - 1]);
-}
-
-fn runPipelineTest(
-    arena: std.mem.Allocator,
-    site: *Site,
-    page: *Site.Page,
-    tags: []const xml.Tag,
-    source: []const u8,
-    writer: anytype,
-) anyerror!void {
-    _ = arena;
-    _ = site;
-    _ = page;
-    _ = tags;
-    _ = source;
-    _ = writer;
 }
 
 fn getPagesMatchingPatternTest(roc_pattern: *RocStr) anyerror!RocList {
