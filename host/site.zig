@@ -188,22 +188,12 @@ pub const Site = struct {
     }
 
     test touchPage {
-        var test_site = try TestSite.init();
+        var test_site = try TestSite.init(.{
+            .markdown_patterns = &.{"*.md"},
+            .static_patterns = &.{"*.css"},
+        });
         defer test_site.deinit();
         var site = test_site.site;
-        var rules = [_]Site.Rule{
-            Site.Rule{
-                .processing = .markdown,
-                .patterns = try test_site.strsFromSlices(&.{"*.md"}),
-                .replace_tags = try test_site.strsFromSlices(&.{ "tag1", "tag2" }),
-            },
-            Site.Rule{
-                .processing = .none,
-                .patterns = try test_site.strsFromSlices(&.{"*.css"}),
-                .replace_tags = try test_site.strsFromSlices(&.{"tag3"}),
-            },
-        };
-        site.rules = &rules;
 
         try site.source_root.writeFile(.{ .sub_path = "file.md", .data = "{}\x02" });
         try site.source_root.writeFile(.{ .sub_path = "style.css", .data = "" });
@@ -325,22 +315,12 @@ pub const Site = struct {
     }
 
     test scanPage {
-        var test_site = try TestSite.init();
+        var test_site = try TestSite.init(.{
+            .markdown_patterns = &.{"*.md"},
+            .static_patterns = &.{"*.css"},
+        });
         defer test_site.deinit();
         var site = test_site.site;
-        var rules = [_]Site.Rule{
-            Site.Rule{
-                .processing = .markdown,
-                .patterns = try test_site.strsFromSlices(&.{"*.md"}),
-                .replace_tags = try test_site.strsFromSlices(&.{ "tag1", "tag2" }),
-            },
-            Site.Rule{
-                .processing = .none,
-                .patterns = try test_site.strsFromSlices(&.{"*.css"}),
-                .replace_tags = try test_site.strsFromSlices(&.{"tag3"}),
-            },
-        };
-        site.rules = &rules;
 
         // Insert markdown file.
         try site.source_root.writeFile(.{ .sub_path = "file.md", .data = "{}\x02" });
@@ -559,22 +539,12 @@ pub const Site = struct {
     }
 
     test ruleForPath {
-        var test_site = try TestSite.init();
+        var test_site = try TestSite.init(.{
+            .markdown_patterns = &.{ "rule_one/*", "conflicting/*" },
+            .static_patterns = &.{ "rule_two/*", "conflicting/*" },
+        });
         defer test_site.deinit();
         var site = test_site.site;
-        var rules = [_]Site.Rule{
-            Site.Rule{
-                .processing = .markdown,
-                .patterns = try test_site.strsFromSlices(&.{ "rule_one/*", "conflicting/*" }),
-                .replace_tags = &.{},
-            },
-            Site.Rule{
-                .processing = .none,
-                .patterns = try test_site.strsFromSlices(&.{ "rule_two/*", "conflicting/*" }),
-                .replace_tags = &.{},
-            },
-        };
-        site.rules = &rules;
 
         try std.testing.expectEqual(
             0,
@@ -694,17 +664,44 @@ pub const Site = struct {
 };
 
 pub const TestSite = struct {
+    allocator: std.mem.Allocator,
     site: *Site,
     strs: Str.Registry,
     root: std.testing.TmpDir,
 
-    pub fn init() !TestSite {
+    pub const Config = struct {
+        markdown_patterns: []const []const u8 = &.{},
+        static_patterns: []const []const u8 = &.{},
+    };
+
+    pub fn init(config: Config) !TestSite {
         if (!builtin.is_test) @panic("TestSite.init is intended for tests only");
+        const allocator = std.testing.allocator;
         const tmpdir = std.testing.tmpDir(.{});
-        const strs = try Str.Registry.init(std.testing.allocator);
-        const site = try std.testing.allocator.create(Site);
-        site.* = try Site.init(std.testing.allocator, tmpdir.dir, "build.roc", "output", strs);
+        const strs = try Str.Registry.init(allocator);
+        const site = try allocator.create(Site);
+        site.* = try Site.init(allocator, tmpdir.dir, "build.roc", "output", strs);
+
+        var rules = std.ArrayList(Site.Rule).init(site.allocator());
+        defer rules.deinit();
+        if (config.markdown_patterns.len > 0) {
+            try rules.append(Site.Rule{
+                .processing = .markdown,
+                .patterns = try strsFromSlices(site, config.markdown_patterns),
+                .replace_tags = try strsFromSlices(site, &.{ "tag1", "tag2" }),
+            });
+        }
+        if (config.static_patterns.len > 0) {
+            try rules.append(Site.Rule{
+                .processing = .none,
+                .patterns = try strsFromSlices(site, config.static_patterns),
+                .replace_tags = try strsFromSlices(site, &.{}),
+            });
+        }
+        site.rules = try rules.toOwnedSlice();
+
         return TestSite{
+            .allocator = allocator,
             .site = site,
             .strs = strs,
             .root = tmpdir,
@@ -715,16 +712,15 @@ pub const TestSite = struct {
         self.site.deinit();
         self.strs.deinit();
         self.root.cleanup();
-        std.testing.allocator.destroy(self.site);
+        self.allocator.destroy(self.site);
     }
 
-    pub fn strsFromSlices(self: *TestSite, slices: []const []const u8) ![]Str {
-        if (!builtin.is_test) @panic("strsFromSlices is intended for tests only");
-        var strs = try self.site.allocator().alloc(Str, slices.len);
+    fn strsFromSlices(site: *Site, slices: []const []const u8) ![]Str {
+        var strings = try site.allocator().alloc(Str, slices.len);
         for (slices, 0..) |slice, index| {
-            strs[index] = try self.strs.intern(slice);
+            strings[index] = try site.strs.intern(slice);
         }
-        return strs;
+        return strings;
     }
 };
 

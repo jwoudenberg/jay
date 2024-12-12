@@ -32,17 +32,11 @@ pub fn scanRecursively(
 }
 
 test scanRecursively {
-    var test_site = try TestSite.init();
+    var test_site = try TestSite.init(.{
+        .static_patterns = &.{ "*", "dir/*" },
+    });
     defer test_site.deinit();
     var site = test_site.site;
-    var rules = [_]Site.Rule{
-        Site.Rule{
-            .processing = .none,
-            .patterns = try test_site.strsFromSlices(&.{ "*", "dir/*" }),
-            .replace_tags = &.{},
-        },
-    };
-    site.rules = &rules;
     var watcher = try Watcher.init(std.testing.allocator, site.source_root);
     defer watcher.deinit();
 

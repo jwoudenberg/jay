@@ -99,7 +99,7 @@ fn bootstrapRules(
 }
 
 test bootstrapRules {
-    var test_site = try TestSite.init();
+    var test_site = try TestSite.init(.{});
     defer test_site.deinit();
     var site = test_site.site;
 
@@ -298,22 +298,12 @@ fn generateCodeForRules(site: *const Site, source_root: std.fs.Dir) !void {
 }
 
 test generateCodeForRules {
-    var test_site = try TestSite.init();
+    var test_site = try TestSite.init(.{
+        .markdown_patterns = &.{ "posts/*.md", "*.md" },
+        .static_patterns = &.{"static"},
+    });
     defer test_site.deinit();
     var site = test_site.site;
-    var rules = [_]Site.Rule{
-        Site.Rule{
-            .processing = .markdown,
-            .patterns = try test_site.strsFromSlices(&.{ "posts/*.md", "*.md" }),
-            .replace_tags = &.{},
-        },
-        Site.Rule{
-            .processing = .none,
-            .patterns = try test_site.strsFromSlices(&.{"static"}),
-            .replace_tags = &.{},
-        },
-    };
-    site.rules = &rules;
 
     try site.source_root.writeFile(.{
         .sub_path = "build.roc",
