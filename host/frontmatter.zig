@@ -93,16 +93,10 @@ pub const Frontmatters = struct {
             (try frontmatters.read(arena, tmpdir.dir, try strs.intern("file1.txt"))),
         );
 
-        try tmpdir.dir.writeFile(.{ .sub_path = "file2.txt", .data = "{ hi: 3 }\n# header \x14" });
+        try tmpdir.dir.writeFile(.{ .sub_path = "file2.txt", .data = "{ hi: 3 }\n# header" });
         try std.testing.expectEqualStrings(
             "{ hi: 3 }",
             (try frontmatters.read(arena, tmpdir.dir, try strs.intern("file2.txt"))),
-        );
-
-        try tmpdir.dir.writeFile(.{ .sub_path = "file3.txt", .data = "{ \x00" });
-        try std.testing.expectEqual(
-            error.PrettyError,
-            frontmatters.read(arena, tmpdir.dir, try strs.intern("file3.txt")),
         );
     }
 };

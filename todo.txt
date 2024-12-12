@@ -21,7 +21,6 @@ x run local http server
 +html custom attributes
 +html empty attributes
 
-+test new source file is picked up by watcher
 +test removed source file is picked up by wachter
 +test briefly existing temporary file not matched does not generate errors
 +test removing directory recursively deletes pages it contains

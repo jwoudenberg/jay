@@ -237,11 +237,10 @@ const TestPlatform = struct {
     }
 
     pub fn getMetadataLength(bytes: []const u8) u64 {
-        // Allow tests to encode the desired return value in the last byte.
-        return if (bytes.len == 0)
-            0
+        return if (std.mem.indexOfScalar(u8, bytes, '}')) |index|
+            index + 1
         else
-            @intCast(bytes[bytes.len - 1]);
+            0;
     }
 
     pub fn runPipeline(
@@ -254,10 +253,9 @@ const TestPlatform = struct {
     ) anyerror!void {
         _ = arena;
         _ = site;
-        _ = page;
         _ = tags;
-        _ = source;
-        _ = writer;
+        _ = page;
+        try writer.writeAll(source);
     }
 };
 
