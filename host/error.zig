@@ -71,12 +71,12 @@ pub const Error = union(enum) {
     }
 
     pub const Index = struct {
-        errors: std.AutoHashMap(Str, Error),
+        errors: std.AutoArrayHashMap(Str, Error),
         changes_since_print: bool,
 
         pub fn init(gpa: std.mem.Allocator) Index {
             return .{
-                .errors = std.AutoHashMap(Str, Error).init(gpa),
+                .errors = std.AutoArrayHashMap(Str, Error).init(gpa),
                 .changes_since_print = false,
             };
         }
@@ -92,7 +92,7 @@ pub const Error = union(enum) {
 
         pub fn remove(self: *Index, source_path: Str) void {
             self.changes_since_print = true;
-            _ = self.errors.remove(source_path);
+            _ = self.errors.orderedRemove(source_path);
         }
 
         pub fn print(self: *Index, writer: anytype) !void {
@@ -100,14 +100,14 @@ pub const Error = union(enum) {
             self.changes_since_print = false;
 
             try writer.writeAll("\x1b[2J");
-            var iterator = self.errors.valueIterator();
+            var iterator = self.errors.iterator();
 
             const first = iterator.next() orelse return;
-            try first.print(writer);
+            try first.value_ptr.print(writer);
 
-            while (iterator.next()) |err| {
+            while (iterator.next()) |entry| {
                 try writer.writeAll("\n----------------------------------------\n\n");
-                try err.print(writer);
+                try entry.value_ptr.print(writer);
             }
         }
     };

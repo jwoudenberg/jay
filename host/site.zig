@@ -110,11 +110,17 @@ pub const Site = struct {
     // for scanning.
     pub fn touchPage(self: *Site, source_path: Str) !void {
         if (source_path.index() != Str.init_index) {
-            return self.pages_to_scan.setValue(
-                self.allocator(),
-                source_path.index(),
-                true,
-            );
+            // It looks like this source path is already in use. If it's in use
+            // _as a source path_, then update the existing page. Otherwise
+            // this is a new page with an overlapping path and we'll show an
+            // error later.
+            if (self.pages.at(source_path.index()).source_path == source_path) {
+                return self.pages_to_scan.setValue(
+                    self.allocator(),
+                    source_path.index(),
+                    true,
+                );
+            }
         }
 
         if (try self.statFile(source_path) == null) {
@@ -263,7 +269,7 @@ pub const Site = struct {
                 page.mutex.lock();
                 defer page.mutex.unlock();
                 try self.pages_to_generate.setValue(self.allocator(), page_index, false);
-                try generate(self.tmp_arena_state.allocator(), self, page);
+                try generate(self, page);
                 continue;
             }
             return;
@@ -280,10 +286,17 @@ pub const Site = struct {
         // Check file modification time and existence.
         const stat = try self.statFile(page.source_path) orelse {
             page.deleted = true;
+            self.output_root.deleteFile(page.output_path.bytes()) catch |err| {
+                if (err != error.FileNotFound) return err;
+            };
+
             // Clear the page index on output and web strs, so that other pages
             // might reuse these without reporting a conflict.
             _ = page.output_path.replaceIndex(Str.init_index);
             _ = page.web_path.replaceIndex(Str.init_index);
+
+            // Update dependents that might include content from or a link to
+            // the deleted page.
             try generateDependents(self, page);
             return;
         };
@@ -672,6 +685,7 @@ pub const TestSite = struct {
     pub const Config = struct {
         markdown_patterns: []const []const u8 = &.{},
         static_patterns: []const []const u8 = &.{},
+        ignore_patterns: []const []const u8 = &.{},
     };
 
     pub fn init(config: Config) !TestSite {
@@ -688,7 +702,7 @@ pub const TestSite = struct {
             try rules.append(Site.Rule{
                 .processing = .markdown,
                 .patterns = try strsFromSlices(site, config.markdown_patterns),
-                .replace_tags = try strsFromSlices(site, &.{ "tag1", "tag2" }),
+                .replace_tags = try strsFromSlices(site, &.{"dep"}),
             });
         }
         if (config.static_patterns.len > 0) {
@@ -699,6 +713,19 @@ pub const TestSite = struct {
             });
         }
         site.rules = try rules.toOwnedSlice();
+        if (config.ignore_patterns.len > 0) {
+            const new_ignore_patterns = try site.allocator().alloc(
+                Str,
+                site.ignore_patterns.len + config.ignore_patterns.len,
+            );
+            for (site.ignore_patterns, 0..) |pattern, index| {
+                new_ignore_patterns[index] = pattern;
+            }
+            for (config.ignore_patterns, site.ignore_patterns.len..) |pattern, index| {
+                new_ignore_patterns[index] = try site.strs.intern(pattern);
+            }
+            site.ignore_patterns = new_ignore_patterns;
+        }
 
         return TestSite{
             .allocator = allocator,

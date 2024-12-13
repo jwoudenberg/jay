@@ -251,11 +251,23 @@ const TestPlatform = struct {
         source: []const u8,
         writer: anytype,
     ) anyerror!void {
+        // Any tags with a 'pattern' attribute, the contents will be replaced
+        // with joined metadata of the files matching the pattern.
         _ = arena;
-        _ = site;
-        _ = tags;
-        _ = page;
-        try writer.writeAll(source);
+        const attr_key = "pattern=\"";
+        var index: usize = 0;
+        for (tags) |tag| {
+            try writer.writeAll(source[index..tag.outer_start]);
+            index = tag.outer_end;
+            if (!std.mem.eql(u8, tag.name, "dep")) continue;
+            const offset = std.mem.indexOf(u8, tag.attributes, attr_key).?;
+            const start = offset + attr_key.len;
+            const end = std.mem.indexOfScalarPos(u8, tag.attributes, start, '"').?;
+            const pattern = tag.attributes[start..end];
+            var pages = try site.pagesMatchingPattern(page.source_path, pattern);
+            while (pages.next()) |dep| try writer.writeAll(dep.frontmatter);
+        }
+        try writer.writeAll(source[index..]);
     }
 };
 

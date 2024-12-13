@@ -21,12 +21,7 @@ x run local http server
 +html custom attributes
 +html empty attributes
 
-+test removed source file is picked up by wachter
-+test briefly existing temporary file not matched does not generate errors
-+test removing directory recursively deletes pages it contains
-+test adding directory with file results in new page
-+test adding directory, then adding file results in new page
-+test moving directory out of project then modifying source file does nothing
++test adding a markdown file with a non-markdown extension
 +test generating for source file that does not exist does not crash
 
 +site for jay project with cookbooks
@@ -41,6 +36,7 @@ x run local http server
 +errors warn if site contains broken links
 +errors assert/convert html input files to ensure utf8 encoding of output
 +errors error output in the browser
++errors collapse errors of the same type together
 
 +feature syntax highlighting in markdown snippets
 +feature github markdown extensions
@@ -60,6 +56,7 @@ x run local http server
 
 +dev integration tests
 +dev changelog
++dev use arena-allocator for roc runs
 
 +thinking supporting site hosted on subpath, do rss feeds require jay to know the domain?
 

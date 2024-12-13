@@ -10,27 +10,19 @@ const c = @cImport({
     @cInclude("cmark-gfm.h");
 });
 
-pub fn generate(
-    arena: std.mem.Allocator,
-    site: *Site,
-    page: *Site.Page,
-) !void {
+pub fn generate(site: *Site, page: *Site.Page) !void {
     const output_path_bytes = page.output_path.bytes();
     if (std.fs.path.dirname(output_path_bytes)) |dir| try site.output_root.makePath(dir);
     const output = try site.output_root.createFile(output_path_bytes, .{ .truncate = true });
     defer output.close();
     var counting_writer = std.io.countingWriter(output.writer());
     var writer = counting_writer.writer();
-    try writeFile(arena, &writer, site, page);
+    try writeFile(&writer, site, page);
     page.output_len = counting_writer.bytes_written;
 }
 
-fn writeFile(
-    arena: std.mem.Allocator,
-    writer: anytype,
-    site: *Site,
-    page: *Site.Page,
-) !void {
+fn writeFile(writer: anytype, site: *Site, page: *Site.Page) !void {
+    const arena = site.tmp_arena_state.allocator();
     switch (page.processing) {
         .none => {
             // I'd like to use the below, but get the following error when I do:
