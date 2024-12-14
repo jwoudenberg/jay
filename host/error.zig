@@ -11,6 +11,7 @@ pub const Error = union(enum) {
         web_path: Str,
         source_paths: [2]Str,
     },
+    markdown_rule_applied_to_non_markdown_file: Str,
 
     fn print(self: Error, writer: anytype) !void {
         switch (self) {
@@ -65,6 +66,24 @@ pub const Error = union(enum) {
                     err.source_paths[0].bytes(),
                     err.source_paths[1].bytes(),
                     err.web_path.bytes(),
+                });
+            },
+            .markdown_rule_applied_to_non_markdown_file => {
+                const path = self.markdown_rule_applied_to_non_markdown_file.bytes();
+                try writer.print(
+                    \\One of the pages for a markdown rule does not have a
+                    \\markdown extension:
+                    \\
+                    \\  {s}
+                    \\
+                    \\Maybe the file is in the wrong directory? If it really
+                    \\contains markdown, consider renaming the file to:
+                    \\
+                    \\  {s}.md
+                    \\
+                , .{
+                    path,
+                    path[0..(path.len - std.fs.path.extension(path).len)],
                 });
             },
         }

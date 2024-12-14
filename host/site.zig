@@ -136,7 +136,7 @@ pub const Site = struct {
             .xml, .none => source_path,
             .markdown => blk: {
                 var buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;
-                const output_path_bytes = try outputPathForMarkdownFile(&buffer, source_path.bytes());
+                const output_path_bytes = try self.outputPathForMarkdownFile(&buffer, source_path);
                 break :blk try self.strs.intern(output_path_bytes);
             },
         };
@@ -590,25 +590,17 @@ pub const Site = struct {
         try std.testing.expect(!isMarkdown("file.txt"));
     }
 
-    fn outputPathForMarkdownFile(buffer: []u8, path: []const u8) ![]const u8 {
-        if (!isMarkdown(path)) {
-            try fail.prettily("You're asking me to process a file as markdown, but it does not have a markdown file extension: {s}", .{path});
+    fn outputPathForMarkdownFile(self: *Site, buffer: []u8, path: Str) ![]const u8 {
+        const path_bytes = path.bytes();
+        if (!isMarkdown(path_bytes)) {
+            try self.errors.add(path, Error{
+                .markdown_rule_applied_to_non_markdown_file = path,
+            });
         }
         return std.fmt.bufPrint(
             buffer,
             "{s}.html",
-            .{path[0..(path.len - std.fs.path.extension(path).len)]},
-        );
-    }
-
-    test outputPathForMarkdownFile {
-        var buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;
-        const actual = try outputPathForMarkdownFile(&buffer, "file.md");
-        try std.testing.expectEqualStrings("file.html", actual);
-
-        try std.testing.expectError(
-            error.PrettyError,
-            outputPathForMarkdownFile(&buffer, "file.txt"),
+            .{path_bytes[0..(path_bytes.len - std.fs.path.extension(path_bytes).len)]},
         );
     }
 

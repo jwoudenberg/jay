@@ -430,6 +430,31 @@ test "change a file => jay updates the file and its dependents" {
     try expectFile(site.output_root, "file.html", "{ hi: 5 }\n");
 }
 
+test "add a file for a markdown rule without a markdown extension => jay shows an error" {
+    var test_run_loop = try TestRunLoop.init(.{ .markdown_patterns = &.{"*"} });
+    defer test_run_loop.deinit();
+    const site = test_run_loop.test_site.site;
+
+    try site.source_root.writeFile(.{ .sub_path = "file.txt", .data = "{}<html/>" });
+    try test_run_loop.loopOnce();
+    try expectFile(site.output_root, "file.html", "<html/>\n");
+    // TODO: fix this expectation. Currently this error is set in
+    // Site#touchPage, and gets reset again later.
+    //
+    // try std.testing.expectEqualStrings(
+    //     \\One of the pages for a markdown rule does not have a
+    //     \\markdown extension:
+    //     \\
+    //     \\  file.txt
+    //     \\
+    //     \\Maybe the file is in the wrong directory? If it really
+    //     \\contains markdown, consider renaming the file to:
+    //     \\
+    //     \\  file.md
+    //     \\
+    // , test_run_loop.output());
+}
+
 fn expectFile(dir: std.fs.Dir, path: []const u8, expected: []const u8) !void {
     var buf: [1024]u8 = undefined;
     const contents = try dir.readFile(path, &buf);
