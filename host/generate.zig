@@ -11,17 +11,6 @@ const c = @cImport({
 });
 
 pub fn generate(site: *Site, page: *Site.Page) !void {
-    const output_path_bytes = page.output_path.bytes();
-    if (std.fs.path.dirname(output_path_bytes)) |dir| try site.output_root.makePath(dir);
-    const output = try site.output_root.createFile(output_path_bytes, .{ .truncate = true });
-    defer output.close();
-    var counting_writer = std.io.countingWriter(output.writer());
-    var writer = counting_writer.writer();
-    try writeFile(&writer, site, page);
-    page.output_len = counting_writer.bytes_written;
-}
-
-fn writeFile(writer: anytype, site: *Site, page: *Site.Page) !void {
     const arena = site.tmp_arena_state.allocator();
     switch (page.processing) {
         .none => {
@@ -37,7 +26,11 @@ fn writeFile(writer: anytype, site: *Site, page: *Site.Page) !void {
                 if (err == error.FileNotFound) return else return err;
             };
             defer source.close();
-            try fifo.pump(source.reader(), writer);
+
+            var output_writer = try OutputWriter.init(site, page);
+            defer output_writer.deinit();
+
+            try fifo.pump(source.reader(), output_writer.writer());
         },
         .xml => {
             // TODO: figure out what to do with files larger than this.
@@ -49,22 +42,26 @@ fn writeFile(writer: anytype, site: *Site, page: *Site.Page) !void {
             var replace_tags = try arena.alloc([]const u8, page.replace_tags.len);
             for (page.replace_tags, 0..) |tag, index| replace_tags[index] = tag.bytes();
             const tags = try xml.parse(arena, source, replace_tags);
+
+            var output_writer = try OutputWriter.init(site, page);
+            defer output_writer.deinit();
+
             try platform.runPipeline(
                 arena,
                 site,
                 page,
                 tags,
                 source,
-                writer,
+                output_writer.writer(),
             );
         },
         .markdown => {
             // TODO: figure out what to do with files larger than this.
-            const raw_source = try site.source_root.readFileAlloc(
+            const raw_source = site.source_root.readFileAlloc(
                 arena,
                 page.source_path.bytes(),
                 1024 * 1024,
-            );
+            ) catch |err| if (err == error.FileNotFound) return else return err;
             const markdown = raw_source[page.frontmatter.len..];
             const html = c.cmark_markdown_to_html(
                 @ptrCast(markdown),
@@ -76,14 +73,46 @@ fn writeFile(writer: anytype, site: *Site, page: *Site.Page) !void {
             var replace_tags = try arena.alloc([]const u8, page.replace_tags.len);
             for (page.replace_tags, 0..) |tag, index| replace_tags[index] = tag.bytes();
             const tags = try xml.parse(arena, source, replace_tags);
+
+            var output_writer = try OutputWriter.init(site, page);
+            defer output_writer.deinit();
+
             try platform.runPipeline(
                 arena,
                 site,
                 page,
                 tags,
                 source,
-                writer,
+                output_writer.writer(),
             );
         },
     }
 }
+
+const OutputWriter = struct {
+    page: *Site.Page,
+    output: std.fs.File,
+    counting_writer: std.io.CountingWriter(std.fs.File.Writer),
+
+    fn init(site: *Site, page: *Site.Page) !OutputWriter {
+        const output_path_bytes = page.output_path.bytes();
+        if (std.fs.path.dirname(output_path_bytes)) |dir| try site.output_root.makePath(dir);
+        const output = try site.output_root.createFile(output_path_bytes, .{ .truncate = true });
+        errdefer output.close();
+        const counting_writer = std.io.countingWriter(output.writer());
+        return .{
+            .page = page,
+            .output = output,
+            .counting_writer = counting_writer,
+        };
+    }
+
+    fn deinit(self: *OutputWriter) void {
+        self.page.output_len = self.counting_writer.bytes_written;
+        defer self.output.close();
+    }
+
+    fn writer(self: *OutputWriter) std.io.CountingWriter(std.fs.File.Writer).Writer {
+        return self.counting_writer.writer();
+    }
+};

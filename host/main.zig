@@ -166,6 +166,35 @@ test "delete a source file => jay deletes its output file" {
     try expectNoFile(site.output_root, "file.html");
 }
 
+test "delete a source file before a page is generated => jay does not create an output file" {
+    var test_run_loop = try TestRunLoop.init(.{
+        .markdown_patterns = &.{"*.md"},
+        .static_patterns = &.{"static*"},
+    });
+    defer test_run_loop.deinit();
+    var site = test_run_loop.test_site.site;
+    var run_loop = test_run_loop.run_loop;
+
+    // Test for three file types that we know generate has separate logic for.
+    try site.source_root.writeFile(.{ .sub_path = "file.md", .data = "{}<html/>" });
+    try site.source_root.writeFile(.{ .sub_path = "static.css", .data = "" });
+    try site.source_root.writeFile(.{ .sub_path = "static.html", .data = "" });
+    while (try run_loop.watcher.next_wait(50)) |change| {
+        try handle_change(site, run_loop.watcher, change);
+    }
+    try expectNoFile(site.output_root, "file");
+    try expectNoFile(site.output_root, "static.css");
+    try expectNoFile(site.output_root, "static");
+
+    try site.source_root.deleteFile("file.md");
+    try site.source_root.deleteFile("static.css");
+    try site.source_root.deleteFile("static.html");
+    try test_run_loop.loopOnce();
+    try expectNoFile(site.output_root, "file");
+    try expectNoFile(site.output_root, "static.css");
+    try expectNoFile(site.output_root, "static");
+}
+
 test "create a short-lived file that does not match a pattern => jay will not show an error" {
     var test_run_loop = try TestRunLoop.init(.{});
     defer test_run_loop.deinit();

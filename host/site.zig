@@ -288,8 +288,12 @@ pub const Site = struct {
 
         // Clear the page index on output and web strs, so that other pages
         // might reuse these without reporting a conflict.
-        _ = page.output_path.replaceIndex(Str.init_index);
-        _ = page.web_path.replaceIndex(Str.init_index);
+        if (page.output_path != page.source_path) {
+            _ = page.output_path.replaceIndex(Str.init_index);
+        }
+        if (page.web_path != page.source_path) {
+            _ = page.web_path.replaceIndex(Str.init_index);
+        }
 
         // Update dependents that might include content from or a link to
         // the deleted page.

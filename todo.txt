@@ -21,9 +21,6 @@ x run local http server
 +html custom attributes
 +html empty attributes
 
-+test adding a markdown file with a non-markdown extension
-+test generating for source file that does not exist does not crash
-
 +site for jay project with cookbooks
 +site example of gitbook-like site
 +site example of blog
