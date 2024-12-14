@@ -173,7 +173,6 @@ pub const Site = struct {
             // Set when we first scan the page.
             .output_len = null,
             .deleted = undefined,
-            .last_modified = undefined,
             .frontmatter = undefined,
         };
         try self.pages.append(self.allocator(), page);
@@ -284,7 +283,7 @@ pub const Site = struct {
 
     fn scanPage(self: *Site, page: *Page) !void {
         // Check file modification time and existence.
-        const stat = try self.statFile(page.source_path) orelse {
+        _ = try self.statFile(page.source_path) orelse {
             page.deleted = true;
             self.output_root.deleteFile(page.output_path.bytes()) catch |err| {
                 if (err != error.FileNotFound) return err;
@@ -309,10 +308,7 @@ pub const Site = struct {
                 true,
             );
             try generateDependents(self, page);
-        } else if (page.last_modified == stat.mtime) {
-            return;
         }
-        page.last_modified = stat.mtime;
 
         const old_frontmatter = page.frontmatter;
         const arena = self.tmp_arena_state.allocator();
@@ -431,7 +427,6 @@ pub const Site = struct {
         // Filesystem-derived attributes
         output_len: ?u64,
         frontmatter: []const u8,
-        last_modified: i128,
         deleted: bool,
     };
 
