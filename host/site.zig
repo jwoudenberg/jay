@@ -21,7 +21,6 @@ pub const Site = struct {
     rules: []Rule,
     list_patterns: std.SegmentedList(ListPattern, 0),
     patterns_matched_by_page: std.SegmentedList(BitSet, 0),
-    pages_to_scan: BitSet,
     pages_to_generate: BitSet,
     strs: Str.Registry,
     frontmatters: Frontmatters,
@@ -67,7 +66,6 @@ pub const Site = struct {
             .strs = strs,
             .list_patterns = std.SegmentedList(ListPattern, 0){},
             .patterns_matched_by_page = std.SegmentedList(BitSet, 0){},
-            .pages_to_scan = BitSet{},
             .pages_to_generate = BitSet{},
             .frontmatters = Frontmatters.init(gpa),
             .errors = Error.Index.init(gpa),
@@ -106,89 +104,22 @@ pub const Site = struct {
         return if (page.deleted) null else page;
     }
 
-    // Init a Page record for a source path if none exists yet and schedule it
-    // for scanning.
+    // Let scan know that a certain source path exists and might recently have
+    // seen changes.
     pub fn touchPage(self: *Site, source_path: Str) !void {
-        if (source_path.index() != Str.init_index) {
-            // It looks like this source path is already in use. If it's in use
-            // _as a source path_, then update the existing page. Otherwise
-            // this is a new page with an overlapping path and we'll show an
-            // error later.
-            if (self.pages.at(source_path.index()).source_path == source_path) {
-                return self.pages_to_scan.setValue(
-                    self.allocator(),
-                    source_path.index(),
-                    true,
-                );
-            }
-        }
-
-        if (try self.statFile(source_path) == null) {
-            return self.errors.remove(source_path);
-        }
-
-        // Find matching rule.
-        const rule_index = try self.ruleForPath(source_path) orelse return;
-        const rule = self.rules[rule_index];
-
-        // Calculate output path.
-        const output_path = switch (rule.processing) {
-            .xml, .none => source_path,
-            .markdown => blk: {
-                var buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;
-                const output_path_bytes = try self.outputPathForMarkdownFile(&buffer, source_path);
-                break :blk try self.strs.intern(output_path_bytes);
-            },
-        };
-
-        // Calculate web path.
-        const page_index: usize = self.pages.count();
-        const extension = std.fs.path.extension(output_path.bytes());
-        const mime_type = mime.extension_map.get(extension) orelse .@"application/octet-stream";
-        const web_path = try self.strs.intern(webPathFromFilePath(output_path.bytes()));
-        const old_web_path_index = web_path.index();
-        if (old_web_path_index != Str.init_index and old_web_path_index != page_index) {
-            const existing = self.pages.at(old_web_path_index);
-            existing.mutex.lock();
-            defer existing.mutex.unlock();
-            return self.errors.add(source_path, Error{
-                .conflicting_source_files = .{
-                    .web_path = web_path,
-                    .source_paths = .{ source_path, existing.source_path },
-                },
-            });
-        }
-
-        // Create page.
-        const page = Site.Page{
-            .mutex = std.Thread.Mutex{},
-            .source_path = source_path,
-            .rule_index = rule_index,
-            .processing = rule.processing,
-            .replace_tags = rule.replace_tags,
-            .mime_type = mime_type,
-            .output_path = output_path,
-            .web_path = web_path,
-
-            // Set when we first scan the page.
-            .output_len = null,
-            .deleted = undefined,
-            .frontmatter = undefined,
-        };
-        try self.pages.append(self.allocator(), page);
-        _ = source_path.replaceIndex(page_index);
-        _ = output_path.replaceIndex(page_index);
-        _ = web_path.replaceIndex(page_index);
-        try self.pages_to_scan.setValue(self.allocator(), page_index, true);
-
-        // Update pattern-match cache.
-        var patterns_matched = try self.ensurePatternsMatchedForPage(source_path);
-        var list_patterns = self.list_patterns.constIterator(0);
-        while (list_patterns.next()) |list_pattern| {
-            const pattern = list_pattern.pattern;
-            if (glob.match(pattern.bytes(), source_path.bytes())) {
-                try patterns_matched.setValue(self.allocator(), pattern.index(), true);
-            }
+        _ = self.tmp_arena_state.reset(.{ .retain_with_limit = 1024 * 1024 });
+        const new = source_path.index() == Str.init_index or source_path != self.pages.at(source_path.index()).source_path;
+        const deleted = !try self.fileExists(source_path);
+        if (new and deleted) {
+            self.errors.remove(source_path);
+        } else if (new and !deleted) {
+            try self.initPage(source_path);
+        } else if (!new and deleted) {
+            try self.deletePage(source_path);
+        } else if (!new and !deleted) {
+            try self.scanPage(source_path);
+        } else {
+            unreachable;
         }
     }
 
@@ -217,6 +148,11 @@ pub const Site = struct {
         try std.testing.expectEqual(.markdown, md_page.processing);
         try std.testing.expectEqual(site.rules[0].replace_tags, md_page.replace_tags);
         try std.testing.expectEqual(null, md_page.output_len);
+        try std.testing.expect(site.pages_to_generate.isSet(md_page.source_path.index()));
+        try std.testing.expect(!md_page.deleted);
+        try std.testing.expectEqual(null, md_page.output_len);
+        try std.testing.expectEqualStrings("{}", md_page.frontmatter);
+        try std.testing.expectEqualStrings("text/html", @tagName(md_page.mime_type));
 
         // Insert static file.
         const style_css = try site.strs.intern("style.css");
@@ -232,12 +168,45 @@ pub const Site = struct {
         try std.testing.expectEqual(.none, css_page.processing);
         try std.testing.expectEqual(site.rules[1].replace_tags, css_page.replace_tags);
         try std.testing.expectEqual(null, css_page.output_len);
+        try std.testing.expect(site.pages_to_generate.isSet(css_page.source_path.index()));
+        try std.testing.expect(!css_page.deleted);
+        try std.testing.expectEqual(null, css_page.output_len);
+        try std.testing.expectEqualStrings("{}", css_page.frontmatter);
+        try std.testing.expectEqualStrings("text/css", @tagName(css_page.mime_type));
+
+        // Update markdown file making changes.
+        site.pages_to_generate.unsetAll(); // clear flags
+        try site.source_root.writeFile(.{ .sub_path = "file.md", .data = "{ hi: 4 }\x09" });
+        try site.touchPage(file_md);
+        try std.testing.expect(site.pages_to_generate.isSet(md_page.source_path.index()));
+        try std.testing.expect(!md_page.deleted);
+        try std.testing.expectEqualStrings("{ hi: 4 }", md_page.frontmatter);
+
+        // Delete markdown file
+        site.pages_to_generate.unsetAll(); // clear flags
+        try site.source_root.deleteFile("file.md");
+        try site.touchPage(file_md);
+        try std.testing.expect(!site.pages_to_generate.isSet(md_page.source_path.index()));
+        try std.testing.expect(md_page.deleted);
+        try std.testing.expectEqual(null, site.getPage(file_md));
+        try std.testing.expectEqual(Str.init_index, (try site.strs.intern("file.html")).index());
+        try std.testing.expectEqual(Str.init_index, (try site.strs.intern("file")).index());
+
+        // Recreate a markdown file
+        site.pages_to_generate.unsetAll(); // clear flags
+        try site.source_root.writeFile(.{ .sub_path = "file.md", .data = "{}\x02" });
+        try site.touchPage(file_md);
+        try std.testing.expect(site.pages_to_generate.isSet(md_page.source_path.index()));
+        try std.testing.expect(!md_page.deleted);
+        try std.testing.expectEqual(null, md_page.output_len);
+        try std.testing.expectEqualStrings("{}", md_page.frontmatter);
+        try std.testing.expectEqualStrings("text/html", @tagName(md_page.mime_type));
     }
 
-    // Perform page scans and generations in a loop, until none are left to-do.
-    // We first scan all pages in the queue, then generate output for all those
-    // pages. The reason is that page generation might use `list!` to get
-    // metadata on other pages that requires scanning them first.
+    // Perform page generations in a loop, until none are left to-do. We first
+    // scan all pages in the queue, then generate output for all those pages.
+    // The reason is that page generation might use `list!` to get metadata on
+    // other pages that requires scanning them first.
     //
     // The separate scan and generate phases have the downside that we read the
     // file twice, once during scanning to get the frontmatter, then again
@@ -251,54 +220,119 @@ pub const Site = struct {
     // temporary file, checking after if the source file modified timestamp
     // hasn't changed, and only then moving the generated output to the output
     // directory.
-    pub fn scanAndGeneratePages(self: *Site) !void {
-        while (true) {
+    pub fn generatePages(self: *Site) !void {
+        while (self.pages_to_generate.findFirstSet()) |page_index| {
             _ = self.tmp_arena_state.reset(.{ .retain_with_limit = 1024 * 1024 });
-            if (self.pages_to_scan.findFirstSet()) |page_index| {
-                const page = self.pages.at(page_index);
-                page.mutex.lock();
-                defer page.mutex.unlock();
-                self.errors.remove(page.source_path);
-                try self.pages_to_scan.setValue(self.allocator(), page_index, false);
-                try self.scanPage(page);
-                continue;
-            }
-            if (self.pages_to_generate.findFirstSet()) |page_index| {
-                const page = self.pages.at(page_index);
-                page.mutex.lock();
-                defer page.mutex.unlock();
-                try self.pages_to_generate.setValue(self.allocator(), page_index, false);
-                try generate(self, page);
-                continue;
-            }
-            return;
+            const page = self.pages.at(page_index);
+            page.mutex.lock();
+            defer page.mutex.unlock();
+            try self.pages_to_generate.setValue(self.allocator(), page_index, false);
+            try generate(self, page);
+            continue;
         }
     }
 
-    fn statFile(self: *Site, source_path: Str) !?std.fs.File.Stat {
-        return self.source_root.statFile(source_path.bytes()) catch |err| {
-            if (err == error.FileNotFound) return null else return err;
+    fn fileExists(self: *Site, source_path: Str) !bool {
+        _ = self.source_root.statFile(source_path.bytes()) catch |err| {
+            if (err == error.FileNotFound) return false else return err;
         };
+        return true;
     }
 
-    fn scanPage(self: *Site, page: *Page) !void {
-        // Check file modification time and existence.
-        _ = try self.statFile(page.source_path) orelse {
-            page.deleted = true;
-            self.output_root.deleteFile(page.output_path.bytes()) catch |err| {
-                if (err != error.FileNotFound) return err;
-            };
+    fn initPage(self: *Site, source_path: Str) !void {
+        // Find matching rule.
+        const rule_index = try self.ruleForPath(source_path) orelse return;
+        const rule = self.rules[rule_index];
 
-            // Clear the page index on output and web strs, so that other pages
-            // might reuse these without reporting a conflict.
-            _ = page.output_path.replaceIndex(Str.init_index);
-            _ = page.web_path.replaceIndex(Str.init_index);
+        // Create page.
+        const page = Site.Page{
+            .mutex = std.Thread.Mutex{},
+            .source_path = source_path,
+            .rule_index = rule_index,
+            .processing = rule.processing,
+            .replace_tags = rule.replace_tags,
 
-            // Update dependents that might include content from or a link to
-            // the deleted page.
-            try generateDependents(self, page);
-            return;
+            // Set when we first scan the page.
+            .output_len = null,
+            .mime_type = undefined,
+            .output_path = undefined,
+            .web_path = undefined,
+            .deleted = undefined,
+            .frontmatter = undefined,
         };
+
+        const page_index: usize = self.pages.count();
+        try self.pages.append(self.allocator(), page);
+        _ = source_path.replaceIndex(page_index);
+
+        // Update pattern-match cache.
+        var patterns_matched = try self.ensurePatternsMatchedForPage(source_path);
+        var list_patterns = self.list_patterns.constIterator(0);
+        while (list_patterns.next()) |list_pattern| {
+            const pattern = list_pattern.pattern;
+            if (glob.match(pattern.bytes(), source_path.bytes())) {
+                try patterns_matched.setValue(self.allocator(), pattern.index(), true);
+            }
+        }
+
+        try self.scanPage(source_path);
+    }
+
+    fn deletePage(self: *Site, source_path: Str) !void {
+        var page = self.pages.at(source_path.index());
+
+        page.deleted = true;
+        self.output_root.deleteFile(page.output_path.bytes()) catch |err| {
+            if (err != error.FileNotFound) return err;
+        };
+
+        // Clear the page index on output and web strs, so that other pages
+        // might reuse these without reporting a conflict.
+        _ = page.output_path.replaceIndex(Str.init_index);
+        _ = page.web_path.replaceIndex(Str.init_index);
+
+        // Update dependents that might include content from or a link to
+        // the deleted page.
+        try generateDependents(self, page);
+        return;
+    }
+
+    fn scanPage(self: *Site, source_path: Str) !void {
+        const page_index = source_path.index();
+        var page = self.pages.at(page_index);
+
+        // Calculate output path.
+        const output_path = switch (page.processing) {
+            .xml, .none => source_path,
+            .markdown => blk: {
+                var buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+                const output_path_bytes = try self.outputPathForMarkdownFile(&buffer, source_path);
+                break :blk try self.strs.intern(output_path_bytes);
+            },
+        };
+
+        // Calculate web path.
+        const extension = std.fs.path.extension(output_path.bytes());
+        const web_path = try self.strs.intern(webPathFromFilePath(output_path.bytes()));
+        const old_web_path_index = web_path.index();
+        if (old_web_path_index != Str.init_index and old_web_path_index != page_index) {
+            const existing = self.pages.at(old_web_path_index);
+            existing.mutex.lock();
+            defer existing.mutex.unlock();
+            return self.errors.add(source_path, Error{
+                .conflicting_source_files = .{
+                    .web_path = web_path,
+                    .source_paths = .{ source_path, existing.source_path },
+                },
+            });
+        }
+
+        page.output_path = output_path;
+        page.web_path = web_path;
+        _ = output_path.replaceIndex(page_index);
+        _ = web_path.replaceIndex(page_index);
+
+        page.mime_type = mime.extension_map.get(extension) orelse .@"application/octet-stream";
 
         if (page.deleted) {
             page.deleted = false;
@@ -321,73 +355,6 @@ pub const Site = struct {
             );
             try generateDependents(self, page);
         }
-    }
-
-    test scanPage {
-        var test_site = try TestSite.init(.{
-            .markdown_patterns = &.{"*.md"},
-            .static_patterns = &.{"*.css"},
-        });
-        defer test_site.deinit();
-        var site = test_site.site;
-
-        // Insert markdown file.
-        try site.source_root.writeFile(.{ .sub_path = "file.md", .data = "{}\x02" });
-        const file_md = try site.strs.intern("file.md");
-        try site.touchPage(file_md);
-        const md_page = site.getPage(file_md).?;
-        try site.scanPage(md_page);
-        try std.testing.expect(site.pages_to_generate.isSet(md_page.source_path.index()));
-        try std.testing.expect(!md_page.deleted);
-        try std.testing.expectEqual(null, md_page.output_len);
-        try std.testing.expectEqualStrings("{}", md_page.frontmatter);
-        try std.testing.expectEqualStrings("text/html", @tagName(md_page.mime_type));
-
-        // Insert static file.
-        try site.source_root.writeFile(.{ .sub_path = "style.css", .data = "" });
-        const style_css = try site.strs.intern("style.css");
-        try site.touchPage(style_css);
-        const css_page = site.getPage(style_css).?;
-        try site.scanPage(css_page);
-        try std.testing.expect(site.pages_to_generate.isSet(css_page.source_path.index()));
-        try std.testing.expect(!css_page.deleted);
-        try std.testing.expectEqual(null, css_page.output_len);
-        try std.testing.expectEqualStrings("{}", css_page.frontmatter);
-        try std.testing.expectEqualStrings("text/css", @tagName(css_page.mime_type));
-
-        // Update markdown file without making changes.
-        site.pages_to_generate.unsetAll(); // clear flags
-        try site.scanPage(md_page);
-        try std.testing.expect(!site.pages_to_generate.isSet(md_page.source_path.index()));
-        try std.testing.expect(!md_page.deleted);
-
-        // Update markdown file making changes.
-        site.pages_to_generate.unsetAll(); // clear flags
-        try site.source_root.writeFile(.{ .sub_path = "file.md", .data = "{ hi: 4 }\x09" });
-        try site.scanPage(md_page);
-        try std.testing.expect(site.pages_to_generate.isSet(md_page.source_path.index()));
-        try std.testing.expect(!md_page.deleted);
-        try std.testing.expectEqualStrings("{ hi: 4 }", md_page.frontmatter);
-
-        // Delete markdown file
-        site.pages_to_generate.unsetAll(); // clear flags
-        try site.source_root.deleteFile("file.md");
-        try site.scanPage(md_page);
-        try std.testing.expect(!site.pages_to_generate.isSet(md_page.source_path.index()));
-        try std.testing.expect(md_page.deleted);
-        try std.testing.expectEqual(null, site.getPage(file_md));
-        try std.testing.expectEqual(Str.init_index, (try site.strs.intern("file.html")).index());
-        try std.testing.expectEqual(Str.init_index, (try site.strs.intern("file")).index());
-
-        // Recreate a markdown file
-        site.pages_to_generate.unsetAll(); // clear flags
-        try site.source_root.writeFile(.{ .sub_path = "file.md", .data = "{}\x02" });
-        try site.scanPage(md_page);
-        try std.testing.expect(site.pages_to_generate.isSet(md_page.source_path.index()));
-        try std.testing.expect(!md_page.deleted);
-        try std.testing.expectEqual(null, md_page.output_len);
-        try std.testing.expectEqualStrings("{}", md_page.frontmatter);
-        try std.testing.expectEqualStrings("text/html", @tagName(md_page.mime_type));
     }
 
     fn generateDependents(self: *Site, page: *Page) !void {
@@ -416,15 +383,18 @@ pub const Site = struct {
         mutex: std.Thread.Mutex,
         source_path: Str,
 
-        // Rule-derived attributes
+        // --- Rule-derived attributes ---
         rule_index: usize,
         replace_tags: []Str,
         processing: Processing,
-        mime_type: mime.Type,
+
+        // --- Filesystem-derived attributes ---
+        // output and web path are in this category for a future in which we
+        // might want to perform content-addressable output names for some
+        // paths.
         output_path: Str,
         web_path: Str,
-
-        // Filesystem-derived attributes
+        mime_type: mime.Type,
         output_len: ?u64,
         frontmatter: []const u8,
         deleted: bool,

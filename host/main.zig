@@ -52,7 +52,7 @@ const RunLoop = struct {
         }
 
         try scanRecursively(gpa, site, watcher, try site.strs.intern(""));
-        try site.scanAndGeneratePages();
+        try site.generatePages();
 
         return .{
             .site = site,
@@ -66,7 +66,7 @@ const RunLoop = struct {
         }
         // No new events in the last watch period, so filesystem changes
         // have settled.
-        try self.site.scanAndGeneratePages();
+        try self.site.generatePages();
         try self.site.errors.print(writer);
     }
 };
