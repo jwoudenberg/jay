@@ -438,21 +438,23 @@ test "add a file for a markdown rule without a markdown extension => jay shows a
     try site.source_root.writeFile(.{ .sub_path = "file.txt", .data = "{}<html/>" });
     try test_run_loop.loopOnce();
     try expectFile(site.output_root, "file.html", "<html/>\n");
-    // TODO: fix this expectation. Currently this error is set in
-    // Site#touchPage, and gets reset again later.
-    //
-    // try std.testing.expectEqualStrings(
-    //     \\One of the pages for a markdown rule does not have a
-    //     \\markdown extension:
-    //     \\
-    //     \\  file.txt
-    //     \\
-    //     \\Maybe the file is in the wrong directory? If it really
-    //     \\contains markdown, consider renaming the file to:
-    //     \\
-    //     \\  file.md
-    //     \\
-    // , test_run_loop.output());
+    try std.testing.expectEqualStrings(
+        \\One of the pages for a markdown rule does not have a
+        \\markdown extension:
+        \\
+        \\  file.txt
+        \\
+        \\Maybe the file is in the wrong directory? If it really
+        \\contains markdown, consider renaming the file to:
+        \\
+        \\  file.md
+        \\
+    , test_run_loop.output());
+
+    // Rename the file to have a .md extension => jay marks the problem fixed.
+    try site.source_root.rename("file.txt", "file.md");
+    try test_run_loop.loopOnce();
+    try std.testing.expectEqualStrings("", test_run_loop.output());
 }
 
 fn expectFile(dir: std.fs.Dir, path: []const u8, expected: []const u8) !void {
