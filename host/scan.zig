@@ -12,7 +12,7 @@ const Watcher = @import("watch.zig").Watcher(Str, Str.bytes);
 pub fn scanRecursively(
     gpa: std.mem.Allocator,
     site: *Site,
-    watcher: *Watcher,
+    watcher: anytype,
     init_dir: Str,
 ) !void {
     var scan_queue = std.ArrayList(Str).init(gpa);

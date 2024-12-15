@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const Args = @import("argparse.zig").Args;
 const RocStr = @import("roc/str.zig").RocStr;
 const RocList = @import("roc/list.zig").RocList;
 const Str = @import("str.zig").Str;
@@ -24,8 +25,122 @@ fn run() !void {
     defer strs.deinit();
     var envMap = try EnvMap.init(gpa);
     defer envMap.deinit();
-    var site = try createSite(gpa, envMap, strs);
+    var args = std.process.args();
+    const parsed = try Args.parse(&args);
+
+    switch (parsed) {
+        .run_dev_mode => try run_dev(
+            gpa,
+            parsed.run_dev_mode.argv0,
+        ),
+        .run_prod_mode => try run_prod(
+            gpa,
+            parsed.run_prod_mode.argv0,
+            parsed.run_prod_mode.output,
+        ),
+        .show_help => {
+            var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+            const cwd = try std.posix.getcwd(&buf);
+            const argv0 = try std.fs.path.relative(gpa, cwd, parsed.show_help.argv0);
+            defer gpa.free(argv0);
+            var stdout = std.io.getStdOut().writer();
+            try stdout.print(
+                \\Jay - a static site generator for Roc.
+                \\
+                \\./{s}
+                \\    When called without arguments Jay starts in development
+                \\    mode, and will start a file watcher and web server.
+                \\
+                \\./{s} prod [path]
+                \\    Run Jay in production mode and generate the site files
+                \\    at the specified path.
+                \\
+                \\./{s} help
+                \\    Show this help text.
+                \\
+            , .{ argv0, argv0, argv0 });
+        },
+        .mistake_no_output_path_passed => {
+            var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+            const cwd = try std.posix.getcwd(&buf);
+            const argv0 = try std.fs.path.relative(
+                gpa,
+                cwd,
+                parsed.mistake_no_output_path_passed.argv0,
+            );
+            defer gpa.free(argv0);
+            var stderr = std.io.getStdErr().writer();
+            try stderr.print(
+                \\Oops, you didn't tell me where I should generate the site.
+                \\
+                \\To generate the site in production mode, pass me a path
+                \\and I'll generate the site there:
+                \\
+                \\    ./{s} prod [path]
+                \\
+            , .{argv0});
+            std.process.exit(1);
+        },
+        .mistake_unknown_argument => {
+            var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+            const cwd = try std.posix.getcwd(&buf);
+            const arg = parsed.mistake_unknown_argument.arg;
+            const argv0 = try std.fs.path.relative(
+                gpa,
+                cwd,
+                parsed.mistake_unknown_argument.argv0,
+            );
+            defer gpa.free(argv0);
+            var stderr = std.io.getStdErr().writer();
+            try stderr.print(
+                \\Oops, I don't know the command '{s}'.
+                \\
+                \\For a list of commands I support you can run:
+                \\
+                \\    ./{s} help
+                \\
+            , .{ arg, argv0 });
+            std.process.exit(1);
+        },
+    }
+}
+
+fn run_prod(gpa: std.mem.Allocator, argv0: []const u8, output: []const u8) !void {
+    var strs = try Str.Registry.init(gpa);
+    defer strs.deinit();
+    var site = try createSite(gpa, argv0, output, strs);
     defer site.deinit();
+    const should_bootstrap = try platform.getRules(gpa, &site);
+    if (should_bootstrap) try bootstrap(gpa, &site);
+    var watcher = NoOpWatcher{};
+    try scanRecursively(gpa, &site, &watcher, try site.strs.intern(""));
+    try site.generatePages();
+    var stdout = std.io.getStdOut().writer();
+    try site.errors.print(&stdout);
+}
+
+const NoOpWatcher = struct {
+    pub fn watchDir(self: *NoOpWatcher, path: Str) !void {
+        _ = self;
+        _ = path;
+    }
+};
+
+fn run_dev(gpa: std.mem.Allocator, argv0: []const u8) !void {
+    var strs = try Str.Registry.init(gpa);
+    defer strs.deinit();
+    var envMap = try EnvMap.init(gpa);
+    defer envMap.deinit();
+
+    var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+    const cwd = try std.posix.getcwd(&buf);
+    const roc_main_abs = try std.fs.path.resolve(gpa, &.{ cwd, argv0 });
+    defer gpa.free(roc_main_abs);
+
+    const cache_dir_path = try cacheDir(roc_main_abs, envMap, &buf);
+    var site = try createSite(gpa, argv0, cache_dir_path, strs);
+    defer site.deinit();
+
     const should_bootstrap = try platform.getRules(gpa, &site);
 
     var watcher = try Watcher.init(gpa, try site.openSourceRoot(.{}));
@@ -78,9 +193,12 @@ const RunLoop = struct {
     }
 };
 
-fn createSite(gpa: std.mem.Allocator, envMap: EnvMap, strs: Str.Registry) !Site {
-    var args = std.process.args();
-    const argv0 = args.next() orelse return error.EmptyArgv;
+fn createSite(
+    gpa: std.mem.Allocator,
+    argv0: []const u8,
+    output_dir_path: []const u8,
+    strs: Str.Registry,
+) !Site {
     const source_root_path = std.fs.path.dirname(argv0) orelse "./";
     const roc_main = std.fs.path.basename(argv0);
     const source_root = std.fs.cwd().openDir(source_root_path, .{}) catch |err| {
@@ -89,15 +207,8 @@ fn createSite(gpa: std.mem.Allocator, envMap: EnvMap, strs: Str.Registry) !Site 
             .{ source_root_path, err },
         );
     };
-
-    var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
-    const cwd = try std.posix.getcwd(&buf);
-    const roc_main_abs = try std.fs.path.resolve(gpa, &.{ cwd, argv0 });
-    defer gpa.free(roc_main_abs);
-
-    const cache_dir_path = try cacheDir(roc_main_abs, envMap, &buf);
-    const cache_dir = try openOutputDir(cache_dir_path);
-    return Site.init(gpa, source_root, roc_main, cache_dir, strs);
+    const output_dir = try openOutputDir(output_dir_path);
+    return Site.init(gpa, source_root, roc_main, output_dir, strs);
 }
 
 fn cacheDir(roc_main_abs: []const u8, envMap: EnvMap, buf: []u8) ![]u8 {
