@@ -50,6 +50,8 @@ x run local http server
 +feature --output flag for production builds
 +feature automatically reload browser when files change
 +feature automatically close browser tab when process exits
++feature keep the file server running during a build.roc rebuild
++feature don't exit process if new build.roc contains compilation errors
 
 +dev integration tests
 +dev changelog

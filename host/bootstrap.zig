@@ -126,8 +126,8 @@ test bootstrapRules {
     );
 
     try std.testing.expectEqual(4, site.ignore_patterns.len);
-    try std.testing.expectEqualStrings("output", site.ignore_patterns[0].bytes());
-    try std.testing.expectEqualStrings("build.roc", site.ignore_patterns[1].bytes());
+    try std.testing.expectEqualStrings("build.roc", site.ignore_patterns[0].bytes());
+    try std.testing.expectEqualStrings("output", site.ignore_patterns[1].bytes());
     try std.testing.expectEqualStrings("build", site.ignore_patterns[2].bytes());
     try std.testing.expectEqualStrings(".gitignore", site.ignore_patterns[3].bytes());
 
@@ -173,7 +173,7 @@ fn patternForPath(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
 }
 
 fn generateCodeForRules(site: *const Site, source_root: std.fs.Dir) !void {
-    const file = try source_root.openFile(site.roc_main, .{ .mode = .read_write });
+    const file = try source_root.openFile(site.roc_main.bytes(), .{ .mode = .read_write });
     defer file.close();
 
     // The size of my minimal bootstrap examples is 119 bytes at time of
@@ -198,7 +198,7 @@ fn generateCodeForRules(site: *const Site, source_root: std.fs.Dir) !void {
             \\
             \\    main = Pages.bootstrap
             \\
-        , .{ site.roc_main, site.roc_main, site.roc_main });
+        , .{ site.roc_main.bytes(), site.roc_main.bytes(), site.roc_main.bytes() });
     }
 
     // Find the end of the app header. We could truncate the entire file and

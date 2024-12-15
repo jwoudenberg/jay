@@ -15,7 +15,7 @@ pub const Site = struct {
     arena_state: std.heap.ArenaAllocator,
     tmp_arena_state: std.heap.ArenaAllocator,
     source_root: std.fs.Dir,
-    roc_main: []const u8,
+    roc_main: Str,
     output_root: std.fs.Dir,
     ignore_patterns: []Str,
     rules: []Rule,
@@ -41,9 +41,10 @@ pub const Site = struct {
     ) !Site {
         var arena_state = std.heap.ArenaAllocator.init(gpa);
         const arena = arena_state.allocator();
+        const roc_main_str = try strs.intern(roc_main);
         const ignore_patterns = try arena.dupe(Str, &[implicit_ignore_pattern_count]Str{
+            roc_main_str,
             try strs.intern(output_path),
-            try strs.intern(roc_main),
             try strs.intern(std.fs.path.stem(roc_main)),
         });
 
@@ -59,7 +60,7 @@ pub const Site = struct {
             .arena_state = arena_state,
             .tmp_arena_state = std.heap.ArenaAllocator.init(gpa),
             .source_root = source_root,
-            .roc_main = roc_main,
+            .roc_main = roc_main_str,
             .output_root = output_root,
             .ignore_patterns = ignore_patterns,
             .rules = &.{},

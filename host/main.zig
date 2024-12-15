@@ -13,9 +13,7 @@ const bootstrap = @import("bootstrap.zig").bootstrap;
 const scanRecursively = @import("scan.zig").scanRecursively;
 
 pub fn main() void {
-    if (run()) {} else |err| {
-        fail.crudely(err, @errorReturnTrace());
-    }
+    run() catch |err| fail.crudely(err, @errorReturnTrace());
 }
 
 var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
@@ -133,12 +131,28 @@ fn handle_change(
                     "{s}/{s}",
                     .{ entry.dir.bytes(), entry.file_name },
                 );
-            if (!Site.matchAny(site.ignore_patterns, path_bytes)) {
-                const path = try site.strs.intern(path_bytes);
+            const path = try site.strs.intern(path_bytes);
+            if (path == site.roc_main) {
+                rebuildRocMain() catch |err| {
+                    // In case of a file busy error the write to roc main might
+                    // still be ongoing. There will be another event when it
+                    // finishes, we can try to execv again then.
+                    if (err != error.FileBusy) return err;
+                };
+            } else if (!Site.matchAny(site.ignore_patterns, path_bytes)) {
                 try site.touchPage(path);
             }
         },
     }
+}
+
+// Restart the process based on a new site specification. It'd be
+// nice to do this in a nicer way, so we can for instance carry
+// over our web server thread.
+fn rebuildRocMain() !void {
+    var args = std.process.args();
+    const argv0 = args.next() orelse return error.EmptyArgv;
+    return std.process.execv(gpa, &.{ argv0, "--linker=legacy" });
 }
 
 test "add a source file => jay generates an output file for it" {
