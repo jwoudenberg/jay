@@ -341,25 +341,18 @@ pub const Site = struct {
 
         if (page.deleted) {
             page.deleted = false;
-            try self.pages_to_generate.setValue(
-                self.allocator(),
-                page.source_path.index(),
-                true,
-            );
             try generateDependents(self, page);
         }
 
-        const old_frontmatter = page.frontmatter;
         const arena = self.tmp_arena_state.allocator();
         page.frontmatter = try self.frontmatters.read(arena, self.source_root, page.source_path);
-        if (old_frontmatter.ptr != page.frontmatter.ptr) {
-            try self.pages_to_generate.setValue(
-                self.allocator(),
-                page.source_path.index(),
-                true,
-            );
-            try generateDependents(self, page);
-        }
+
+        try generateDependents(self, page);
+        try self.pages_to_generate.setValue(
+            self.allocator(),
+            page.source_path.index(),
+            true,
+        );
     }
 
     fn generateDependents(self: *Site, page: *Page) !void {

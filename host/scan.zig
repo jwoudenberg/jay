@@ -10,12 +10,12 @@ const Str = @import("str.zig").Str;
 const Watcher = @import("watch.zig").Watcher(Str, Str.bytes);
 
 pub fn scanRecursively(
-    allocator: std.mem.Allocator,
+    gpa: std.mem.Allocator,
     site: *Site,
     watcher: *Watcher,
     init_dir: Str,
 ) !void {
-    var scan_queue = std.ArrayList(Str).init(allocator);
+    var scan_queue = std.ArrayList(Str).init(gpa);
     defer scan_queue.deinit();
     try scan_queue.append(init_dir);
     while (scan_queue.popOrNull()) |dir| {

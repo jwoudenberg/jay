@@ -16,19 +16,19 @@ pub fn main() void {
     run() catch |err| fail.crudely(err, @errorReturnTrace());
 }
 
-var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
-const gpa = gpa_state.allocator();
-
 fn run() !void {
+    var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
+    const gpa = gpa_state.allocator();
+
     var strs = try Str.Registry.init(gpa);
     defer strs.deinit();
-    var site = try createSite(strs);
+    var site = try createSite(gpa, strs);
     defer site.deinit();
     const should_bootstrap = try platform.getRules(gpa, &site);
 
     var watcher = try Watcher.init(gpa, try site.openSourceRoot(.{}));
     defer watcher.deinit();
-    var runLoop = try RunLoop.init(&site, &watcher, should_bootstrap);
+    var runLoop = try RunLoop.init(gpa, &site, &watcher, should_bootstrap);
 
     // TODO: handle thread failures.
     const thread = try std.Thread.spawn(.{}, serve, .{&site});
@@ -41,10 +41,16 @@ fn run() !void {
 // The core watch/generate loop of the app extracted in a format that I can
 // relatively easily write tests for.
 const RunLoop = struct {
+    gpa: std.mem.Allocator,
     site: *Site,
     watcher: *Watcher,
 
-    fn init(site: *Site, watcher: *Watcher, should_bootstrap: bool) !RunLoop {
+    fn init(
+        gpa: std.mem.Allocator,
+        site: *Site,
+        watcher: *Watcher,
+        should_bootstrap: bool,
+    ) !RunLoop {
         if (site.rules.len == 0 and should_bootstrap) {
             try bootstrap(gpa, site);
         }
@@ -53,6 +59,7 @@ const RunLoop = struct {
         try site.generatePages();
 
         return .{
+            .gpa = gpa,
             .site = site,
             .watcher = watcher,
         };
@@ -60,7 +67,7 @@ const RunLoop = struct {
 
     fn loopOnce(self: *RunLoop, writer: anytype) !void {
         while (try self.watcher.next_wait(50)) |change| {
-            try handle_change(self.site, self.watcher, change);
+            try handle_change(self.gpa, self.site, self.watcher, change);
         }
         // No new events in the last watch period, so filesystem changes
         // have settled.
@@ -69,7 +76,7 @@ const RunLoop = struct {
     }
 };
 
-fn createSite(strs: Str.Registry) !Site {
+fn createSite(gpa: std.mem.Allocator, strs: Str.Registry) !Site {
     var args = std.process.args();
     const argv0 = args.next() orelse return error.EmptyArgv;
     const source_root_path = std.fs.path.dirname(argv0) orelse "./";
@@ -84,6 +91,7 @@ fn createSite(strs: Str.Registry) !Site {
 }
 
 fn handle_change(
+    gpa: std.mem.Allocator,
     site: *Site,
     watcher: *Watcher,
     change: Watcher.Change,
@@ -133,7 +141,7 @@ fn handle_change(
                 );
             const path = try site.strs.intern(path_bytes);
             if (path == site.roc_main) {
-                rebuildRocMain() catch |err| {
+                rebuildRocMain(gpa) catch |err| {
                     // In case of a file busy error the write to roc main might
                     // still be ongoing. There will be another event when it
                     // finishes, we can try to execv again then.
@@ -149,7 +157,7 @@ fn handle_change(
 // Restart the process based on a new site specification. It'd be
 // nice to do this in a nicer way, so we can for instance carry
 // over our web server thread.
-fn rebuildRocMain() !void {
+fn rebuildRocMain(gpa: std.mem.Allocator) !void {
     var args = std.process.args();
     const argv0 = args.next() orelse return error.EmptyArgv;
     return std.process.execv(gpa, &.{ argv0, "--linker=legacy" });
@@ -194,7 +202,7 @@ test "delete a source file before a page is generated => jay does not create an 
     try site.source_root.writeFile(.{ .sub_path = "static.css", .data = "" });
     try site.source_root.writeFile(.{ .sub_path = "static.html", .data = "" });
     while (try run_loop.watcher.next_wait(50)) |change| {
-        try handle_change(site, run_loop.watcher, change);
+        try handle_change(std.testing.allocator, site, run_loop.watcher, change);
     }
     try expectNoFile(site.output_root, "file");
     try expectNoFile(site.output_root, "static.css");
@@ -473,6 +481,20 @@ test "change a file => jay updates the file and its dependents" {
     try expectFile(site.output_root, "file.html", "{ hi: 5 }\n");
 }
 
+test "change a file but not its metadata => jay updates the file" {
+    var test_run_loop = try TestRunLoop.init(.{ .markdown_patterns = &.{"*.md"} });
+    defer test_run_loop.deinit();
+    const site = test_run_loop.test_site.site;
+
+    try site.source_root.writeFile(.{ .sub_path = "file.md", .data = "{ hi: 4 }<html/>" });
+    try test_run_loop.loopOnce();
+    try expectFile(site.output_root, "file.html", "<html/>\n");
+
+    try site.source_root.writeFile(.{ .sub_path = "file.md", .data = "{ hi: 4 }<xml/>" });
+    try test_run_loop.loopOnce();
+    try expectFile(site.output_root, "file.html", "<xml/>\n");
+}
+
 test "add a file for a markdown rule without a markdown extension => jay shows an error" {
     var test_run_loop = try TestRunLoop.init(.{ .markdown_patterns = &.{"*"} });
     defer test_run_loop.deinit();
@@ -527,9 +549,9 @@ const TestRunLoop = struct {
         const test_site = try allocator.create(TestSite);
         test_site.* = try TestSite.init(config);
         const watcher = try allocator.create(Watcher);
-        watcher.* = try Watcher.init(gpa, try test_site.site.openSourceRoot(.{}));
+        watcher.* = try Watcher.init(allocator, try test_site.site.openSourceRoot(.{}));
         const run_loop = try allocator.create(RunLoop);
-        run_loop.* = try RunLoop.init(test_site.site, watcher, false);
+        run_loop.* = try RunLoop.init(allocator, test_site.site, watcher, false);
         return .{
             .allocator = allocator,
             .test_site = test_site,
