@@ -13,7 +13,7 @@ module [
 import Pages.Internal exposing [wrap, unwrap, Xml]
 import Html exposing [Html]
 import Xml.Internal
-import Effect
+import Host
 import Xml.Attributes
 import Rvn
 
@@ -95,7 +95,7 @@ wrapHtml = \pages, userWrapper! ->
 
 list! : Str => List { path : Str, meta : {}a }
 list! = \pattern ->
-    Effect.list! pattern
+    Host.list! pattern
     |> List.map \result ->
         meta =
             when Decode.fromBytes result.meta Rvn.compact is

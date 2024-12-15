@@ -1,4 +1,4 @@
-hosted Effect
+hosted Host
     exposes [list!]
     imports [Pages.Internal]
 
