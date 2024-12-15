@@ -36,25 +36,17 @@ pub const Site = struct {
         gpa: std.mem.Allocator,
         source_root: std.fs.Dir,
         roc_main: []const u8,
-        output_path: []const u8,
+        output_root: std.fs.Dir,
         strs: Str.Registry,
     ) !Site {
         var arena_state = std.heap.ArenaAllocator.init(gpa);
         const arena = arena_state.allocator();
         const roc_main_str = try strs.intern(roc_main);
+
         const ignore_patterns = try arena.dupe(Str, &[implicit_ignore_pattern_count]Str{
             roc_main_str,
-            try strs.intern(output_path),
             try strs.intern(std.fs.path.stem(roc_main)),
         });
-
-        source_root.deleteTree(output_path) catch |err| {
-            if (err != error.NotDir) {
-                return err;
-            }
-        };
-        try source_root.makePath(output_path);
-        const output_root = try source_root.openDir(output_path, .{});
 
         return Site{
             .arena_state = arena_state,
@@ -74,7 +66,7 @@ pub const Site = struct {
         };
     }
 
-    const implicit_ignore_pattern_count = 3;
+    const implicit_ignore_pattern_count = 2;
 
     pub fn user_ignore_patterns(self: *const Site) []Str {
         return self.ignore_patterns[implicit_ignore_pattern_count..];
@@ -635,7 +627,8 @@ pub const TestSite = struct {
     allocator: std.mem.Allocator,
     site: *Site,
     strs: Str.Registry,
-    root: std.testing.TmpDir,
+    source_root: std.testing.TmpDir,
+    output_root: std.testing.TmpDir,
 
     pub const Config = struct {
         markdown_patterns: []const []const u8 = &.{},
@@ -646,10 +639,17 @@ pub const TestSite = struct {
     pub fn init(config: Config) !TestSite {
         if (!builtin.is_test) @panic("TestSite.init is intended for tests only");
         const allocator = std.testing.allocator;
-        const tmpdir = std.testing.tmpDir(.{});
+        const source_tmpdir = std.testing.tmpDir(.{});
+        const output_tmpdir = std.testing.tmpDir(.{});
         const strs = try Str.Registry.init(allocator);
         const site = try allocator.create(Site);
-        site.* = try Site.init(allocator, tmpdir.dir, "build.roc", "output", strs);
+        site.* = try Site.init(
+            allocator,
+            source_tmpdir.dir,
+            "build.roc",
+            output_tmpdir.dir,
+            strs,
+        );
 
         var rules = std.ArrayList(Site.Rule).init(site.allocator());
         defer rules.deinit();
@@ -686,14 +686,16 @@ pub const TestSite = struct {
             .allocator = allocator,
             .site = site,
             .strs = strs,
-            .root = tmpdir,
+            .source_root = source_tmpdir,
+            .output_root = output_tmpdir,
         };
     }
 
     pub fn deinit(self: *TestSite) void {
         self.site.deinit();
         self.strs.deinit();
-        self.root.cleanup();
+        self.source_root.cleanup();
+        self.output_root.cleanup();
         self.allocator.destroy(self.site);
     }
 

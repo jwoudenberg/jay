@@ -125,11 +125,10 @@ test bootstrapRules {
         source_root,
     );
 
-    try std.testing.expectEqual(4, site.ignore_patterns.len);
+    try std.testing.expectEqual(3, site.ignore_patterns.len);
     try std.testing.expectEqualStrings("build.roc", site.ignore_patterns[0].bytes());
-    try std.testing.expectEqualStrings("output", site.ignore_patterns[1].bytes());
-    try std.testing.expectEqualStrings("build", site.ignore_patterns[2].bytes());
-    try std.testing.expectEqualStrings(".gitignore", site.ignore_patterns[3].bytes());
+    try std.testing.expectEqualStrings("build", site.ignore_patterns[1].bytes());
+    try std.testing.expectEqualStrings(".gitignore", site.ignore_patterns[2].bytes());
 
     try std.testing.expectEqual(2, site.rules.len);
 
@@ -318,7 +317,6 @@ test generateCodeForRules {
     var ignore_patterns = [_]Str{
         try site.strs.intern("build.roc"),
         try site.strs.intern("build"),
-        try site.strs.intern("output"),
         try site.strs.intern(".git"),
         try site.strs.intern(".gitignore"),
     };

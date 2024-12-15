@@ -58,5 +58,3 @@ x run local http server
 +dev use arena-allocator for roc runs
 
 +thinking supporting site hosted on subpath, do rss feeds require jay to know the domain?
-
-generate site in remote cache location

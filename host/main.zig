@@ -22,7 +22,9 @@ fn run() !void {
 
     var strs = try Str.Registry.init(gpa);
     defer strs.deinit();
-    var site = try createSite(gpa, strs);
+    var envMap = try EnvMap.init(gpa);
+    defer envMap.deinit();
+    var site = try createSite(gpa, envMap, strs);
     defer site.deinit();
     const should_bootstrap = try platform.getRules(gpa, &site);
 
@@ -76,7 +78,7 @@ const RunLoop = struct {
     }
 };
 
-fn createSite(gpa: std.mem.Allocator, strs: Str.Registry) !Site {
+fn createSite(gpa: std.mem.Allocator, envMap: EnvMap, strs: Str.Registry) !Site {
     var args = std.process.args();
     const argv0 = args.next() orelse return error.EmptyArgv;
     const source_root_path = std.fs.path.dirname(argv0) orelse "./";
@@ -87,7 +89,107 @@ fn createSite(gpa: std.mem.Allocator, strs: Str.Registry) !Site {
             .{ source_root_path, err },
         );
     };
-    return Site.init(gpa, source_root, roc_main, "output", strs);
+
+    var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+    const cwd = try std.posix.getcwd(&buf);
+    const roc_main_abs = try std.fs.path.resolve(gpa, &.{ cwd, argv0 });
+    defer gpa.free(roc_main_abs);
+
+    const cache_dir_path = try cacheDir(roc_main_abs, envMap, &buf);
+    const cache_dir = try openOutputDir(cache_dir_path);
+    return Site.init(gpa, source_root, roc_main, cache_dir, strs);
+}
+
+fn cacheDir(roc_main_abs: []const u8, envMap: EnvMap, buf: []u8) ![]u8 {
+    // In the hypothetical situation someone runs multiple instances of jay
+    // in parallel, I'd like those not to clobber each other's output
+    // directories. We create a subdirectory for each.
+    const output_dir = std.hash.murmur.Murmur3_32.hash(roc_main_abs);
+
+    if (envMap.xdg_cache_home) |xdg_cache_home| {
+        return std.fmt.bufPrint(buf, "{s}/jay/{}", .{ xdg_cache_home, output_dir });
+    }
+
+    if (envMap.home) |home_dir| {
+        return std.fmt.bufPrint(buf, "{s}/.cache/jay/{}", .{ home_dir, output_dir });
+    }
+
+    try fail.prettily(
+        \\I don't know where to generate temporary files.
+        \\
+        \\Normally I use $XDG_CACHE_HOME or $HOME to find a place where I can
+        \\create a cache directory, but both are unset.
+        \\
+    , .{});
+}
+
+test cacheDir {
+    var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+
+    try std.testing.expectEqualStrings(
+        "/cache/jay/1289569777",
+        try cacheDir(
+            "/project/build.roc",
+            .{ .xdg_cache_home = "/cache", .home = "/home" },
+            &buf,
+        ),
+    );
+
+    try std.testing.expectEqualStrings(
+        "/home/.cache/jay/1289569777",
+        try cacheDir(
+            "/project/build.roc",
+            .{ .xdg_cache_home = null, .home = "/home" },
+            &buf,
+        ),
+    );
+
+    try std.testing.expectError(
+        error.PrettyError,
+        cacheDir(
+            "/project/build.roc",
+            .{ .xdg_cache_home = null, .home = null },
+            &buf,
+        ),
+    );
+}
+
+// Env variables relevant for this app.
+const EnvMap = struct {
+    arena_state: std.heap.ArenaAllocator = undefined,
+    xdg_cache_home: ?[]const u8 = null,
+    home: ?[]const u8 = null,
+
+    fn init(gpa: std.mem.Allocator) !EnvMap {
+        var arena_state = std.heap.ArenaAllocator.init(gpa);
+        const arena = arena_state.allocator();
+        return .{
+            .arena_state = arena_state,
+            .xdg_cache_home = try getOptEnvVar(arena, "XDG_CACHE_HOME"),
+            .home = try getOptEnvVar(arena, "HOME"),
+        };
+    }
+
+    fn deinit(self: *EnvMap) void {
+        self.arena_state.deinit();
+    }
+};
+
+fn openOutputDir(path: []const u8) !std.fs.Dir {
+    const cwd = std.fs.cwd();
+    cwd.deleteTree(path) catch |err| if (err != error.NotDir) return err;
+    try cwd.makePath(path);
+    return cwd.openDir(path, .{});
+}
+
+fn getOptEnvVar(gpa: std.mem.Allocator, key: []const u8) !?[]const u8 {
+    return std.process.getEnvVarOwned(gpa, key) catch |err| {
+        if (err == error.EnvironmentVariableNotFound) {
+            return null;
+        } else {
+            return err;
+        }
+    };
 }
 
 fn handle_change(
