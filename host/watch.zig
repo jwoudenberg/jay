@@ -73,6 +73,7 @@ pub fn Watcher(
         pub fn deinit(self: *Self) void {
             for (self.dirs.keys()) |key| key.destroy(self.gpa);
             self.dirs.deinit(self.gpa);
+            std.posix.close(self.poll_fds[0].fd);
         }
 
         pub fn watchDir(self: *Self, dir: Dir) !void {
