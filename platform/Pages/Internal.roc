@@ -5,7 +5,7 @@ Pages a := List Page
 Page : {
     patterns : List Str,
     processing : [None, Ignore, Bootstrap, Markdown, Xml],
-    replaceTags : List Str,
+    replace_tags : List Str,
     pipeline! : Xml, HostPage => Xml,
 }
 
@@ -16,7 +16,7 @@ unwrap = \@Pages internal -> internal
 PageRule : {
     patterns : List Str,
     processing : [None, Ignore, Bootstrap, Markdown, Xml],
-    replaceTags : List Str,
+    replace_tags : List Str,
 }
 
 HostPage : {
@@ -42,10 +42,10 @@ HostTag : {
 }
 
 Xml : List
-    [
-        FromSource SourceLoc,
-        RocGenerated (List U8),
-    ]
+        [
+            FromSource SourceLoc,
+            RocGenerated (List U8),
+        ]
 
 SourceLoc : {
     start : U32,

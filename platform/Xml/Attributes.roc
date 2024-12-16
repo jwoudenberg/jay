@@ -20,75 +20,75 @@ formatter = @Attributes { words: [] }
 Attributes := { words : List Str }
     implements [
         EncoderFormatting {
-            u8: encodeU8,
-            u16: encodeU16,
-            u32: encodeU32,
-            u64: encodeU64,
-            u128: encodeU128,
-            i8: encodeI8,
-            i16: encodeI16,
-            i32: encodeI32,
-            i64: encodeI64,
-            i128: encodeI128,
-            f32: encodeF32,
-            f64: encodeF64,
-            dec: encodeDec,
-            bool: encodeBool,
-            string: encodeString,
-            list: encodeList,
-            record: encodeRecord,
-            tuple: encodeTuple,
-            tag: encodeTag,
+            u8: encode_u8,
+            u16: encode_u16,
+            u32: encode_u32,
+            u64: encode_u64,
+            u128: encode_u128,
+            i8: encode_i8,
+            i16: encode_i16,
+            i32: encode_i32,
+            i64: encode_i64,
+            i128: encode_i128,
+            f32: encode_f32,
+            f64: encode_f64,
+            dec: encode_dec,
+            bool: encode_bool,
+            string: encode_string,
+            list: encode_list,
+            record: encode_record,
+            tuple: encode_tuple,
+            tag: encode_tag,
         },
         DecoderFormatting {
-            u8: decodeU8,
-            u16: decodeU16,
-            u32: decodeU32,
-            u64: decodeU64,
-            u128: decodeU128,
-            i8: decodeI8,
-            i16: decodeI16,
-            i32: decodeI32,
-            i64: decodeI64,
-            i128: decodeI128,
-            f32: decodeF32,
-            f64: decodeF64,
-            dec: decodeDec,
-            bool: decodeBool,
-            string: decodeString,
-            list: decodeList,
-            record: decodeRecord,
-            tuple: decodeTuple,
+            u8: decode_u8,
+            u16: decode_u16,
+            u32: decode_u32,
+            u64: decode_u64,
+            u128: decode_u128,
+            i8: decode_i8,
+            i16: decode_i16,
+            i32: decode_i32,
+            i64: decode_i64,
+            i128: decode_i128,
+            f32: decode_f32,
+            f64: decode_f64,
+            dec: decode_dec,
+            bool: decode_bool,
+            string: decode_string,
+            list: decode_list,
+            record: decode_record,
+            tuple: decode_tuple,
         },
     ]
 
-escapeRules = [
+escape_rules = [
     { needle: ['<'], replacement: ['&', 'l', 't', ';'] },
     { needle: ['&'], replacement: ['&', 'a', 'm', 'p', ';'] },
     { needle: ['"'], replacement: ['&', 'q', 'u', 'o', 't', ';'] },
 ]
 
-unescapeRules = List.map escapeRules \{ needle, replacement } ->
+unescape_rules = List.map escape_rules \{ needle, replacement } ->
     { needle: replacement, replacement: needle }
 
 escape : List U8, List { needle : List U8, replacement : List U8 } -> List U8
 escape = \unescaped, replacements ->
-    findMatch = \bytes ->
+    find_match = \bytes ->
         List.findFirst replacements \{ needle } ->
             List.startsWith bytes needle
 
-    escapeOrKeep = \state, index ->
-        when findMatch (List.dropFirst unescaped index) is
+    escape_or_keep = \state, index ->
+        when find_match (List.dropFirst unescaped index) is
             Ok { needle, replacement } ->
-                afterCopy = copySlice state
-                { afterCopy &
-                    start: afterCopy.start + List.len needle,
-                    escaped: List.concat afterCopy.escaped replacement,
+                after_copy = copy_slice state
+                { after_copy &
+                    start: after_copy.start + List.len needle,
+                    escaped: List.concat after_copy.escaped replacement,
                 }
 
             Err NotFound -> { state & len: state.len + 1 }
 
-    copySlice = \{ start, len, escaped } -> {
+    copy_slice = \{ start, len, escaped } -> {
         start: start + len,
         len: 0,
         escaped: List.concat escaped (List.sublist unescaped { start, len }),
@@ -103,8 +103,8 @@ escape = \unescaped, replacements ->
     List.walk
         (List.range { start: At 0, end: Before (List.len unescaped) })
         init
-        escapeOrKeep
-    |> copySlice
+        escape_or_keep
+    |> copy_slice
     |> .escaped
 
 expect
@@ -119,50 +119,50 @@ expect
         [{ needle: ['X', 'Y'], replacement: ['*', '*'] }]
     Str.fromUtf8 actual == Ok "abXcd**ef"
 
-encodeU8 : U8 -> Encoder Attributes
-encodeU8 = \_ -> crash "can't encode U8"
+encode_u8 : U8 -> Encoder Attributes
+encode_u8 = \_ -> crash "can't encode U8"
 
-encodeU16 : U16 -> Encoder Attributes
-encodeU16 = \_ -> crash "can't encode U16"
+encode_u16 : U16 -> Encoder Attributes
+encode_u16 = \_ -> crash "can't encode U16"
 
-encodeU32 : U32 -> Encoder Attributes
-encodeU32 = \_ -> crash "can't encode U32"
+encode_u32 : U32 -> Encoder Attributes
+encode_u32 = \_ -> crash "can't encode U32"
 
-encodeU64 : U64 -> Encoder Attributes
-encodeU64 = \_ -> crash "can't encode U64"
+encode_u64 : U64 -> Encoder Attributes
+encode_u64 = \_ -> crash "can't encode U64"
 
-encodeU128 : U128 -> Encoder Attributes
-encodeU128 = \_ -> crash "can't encode U128"
+encode_u128 : U128 -> Encoder Attributes
+encode_u128 = \_ -> crash "can't encode U128"
 
-encodeI8 : I8 -> Encoder Attributes
-encodeI8 = \_ -> crash "can't encode I8"
+encode_i8 : I8 -> Encoder Attributes
+encode_i8 = \_ -> crash "can't encode I8"
 
-encodeI16 : I16 -> Encoder Attributes
-encodeI16 = \_ -> crash "can't encode I16"
+encode_i16 : I16 -> Encoder Attributes
+encode_i16 = \_ -> crash "can't encode I16"
 
-encodeI32 : I32 -> Encoder Attributes
-encodeI32 = \_ -> crash "can't encode I32"
+encode_i32 : I32 -> Encoder Attributes
+encode_i32 = \_ -> crash "can't encode I32"
 
-encodeI64 : I64 -> Encoder Attributes
-encodeI64 = \_ -> crash "can't encode I64"
+encode_i64 : I64 -> Encoder Attributes
+encode_i64 = \_ -> crash "can't encode I64"
 
-encodeI128 : I128 -> Encoder Attributes
-encodeI128 = \_ -> crash "can't encode I128"
+encode_i128 : I128 -> Encoder Attributes
+encode_i128 = \_ -> crash "can't encode I128"
 
-encodeF32 : F32 -> Encoder Attributes
-encodeF32 = \_ -> crash "can't encode F32"
+encode_f32 : F32 -> Encoder Attributes
+encode_f32 = \_ -> crash "can't encode F32"
 
-encodeF64 : F64 -> Encoder Attributes
-encodeF64 = \_ -> crash "can't encode F64"
+encode_f64 : F64 -> Encoder Attributes
+encode_f64 = \_ -> crash "can't encode F64"
 
-encodeDec : Dec -> Encoder Attributes
-encodeDec = \_ -> crash "can't encode Dec"
+encode_dec : Dec -> Encoder Attributes
+encode_dec = \_ -> crash "can't encode Dec"
 
-encodeBool : Bool -> Encoder Attributes
-encodeBool = \_ -> crash "can't encode Bool"
+encode_bool : Bool -> Encoder Attributes
+encode_bool = \_ -> crash "can't encode Bool"
 
-encodeString : Str -> Encoder Attributes
-encodeString = \str ->
+encode_string : Str -> Encoder Attributes
+encode_string = \str ->
     Encode.custom \bytes, @Attributes { words } ->
         if Str.isEmpty str then
             bytes
@@ -182,99 +182,99 @@ encodeString = \str ->
             |> List.concat escaped
             |> List.concat ['"']
 
-encodeList : List elem, (elem -> Encoder Attributes) -> Encoder Attributes
-encodeList = \_, _ -> crash "can't encode List"
+encode_list : List elem, (elem -> Encoder Attributes) -> Encoder Attributes
+encode_list = \_, _ -> crash "can't encode List"
 
-encodeRecord : List { key : Str, value : Encoder Attributes } -> Encoder Attributes
-encodeRecord = \fields ->
+encode_record : List { key : Str, value : Encoder Attributes } -> Encoder Attributes
+encode_record = \fields ->
     Encode.custom \bytes, @Attributes fmt ->
         List.walk fields bytes \acc, { key, value } ->
-            newFmt = @Attributes { fmt & words: List.append fmt.words key }
-            Encode.appendWith acc value newFmt
+            new_fmt = @Attributes { fmt & words: List.append fmt.words key }
+            Encode.appendWith acc value new_fmt
 
-encodeTuple : List (Encoder Attributes) -> Encoder Attributes
-encodeTuple = \_ -> crash "can't encode Tuple"
+encode_tuple : List (Encoder Attributes) -> Encoder Attributes
+encode_tuple = \_ -> crash "can't encode Tuple"
 
-encodeTag : Str, List (Encoder Attributes) -> Encoder Attributes
-encodeTag = \_, _ -> crash "can't encode Tag"
+encode_tag : Str, List (Encoder Attributes) -> Encoder Attributes
+encode_tag = \_, _ -> crash "can't encode Tag"
 
-decodeU8 : Decoder U8 Attributes
-decodeU8 = Decode.custom \_bytes, @Attributes _ -> crash "can't decode U8"
+decode_u8 : Decoder U8 Attributes
+decode_u8 = Decode.custom \_bytes, @Attributes _ -> crash "can't decode U8"
 
-decodeU16 : Decoder U16 Attributes
-decodeU16 = Decode.custom \_bytes, @Attributes _ -> crash "can't decode U16"
+decode_u16 : Decoder U16 Attributes
+decode_u16 = Decode.custom \_bytes, @Attributes _ -> crash "can't decode U16"
 
-decodeU32 : Decoder U32 Attributes
-decodeU32 = Decode.custom \_bytes, @Attributes _ -> crash "can't decode U32"
+decode_u32 : Decoder U32 Attributes
+decode_u32 = Decode.custom \_bytes, @Attributes _ -> crash "can't decode U32"
 
-decodeU64 : Decoder U64 Attributes
-decodeU64 = Decode.custom \_bytes, @Attributes _ -> crash "can't decode U64"
+decode_u64 : Decoder U64 Attributes
+decode_u64 = Decode.custom \_bytes, @Attributes _ -> crash "can't decode U64"
 
-decodeU128 : Decoder U128 Attributes
-decodeU128 = Decode.custom \_bytes, @Attributes _ -> crash "can't decode U128"
+decode_u128 : Decoder U128 Attributes
+decode_u128 = Decode.custom \_bytes, @Attributes _ -> crash "can't decode U128"
 
-decodeI8 : Decoder I8 Attributes
-decodeI8 = Decode.custom \_bytes, @Attributes _ -> crash "can't decode I8"
+decode_i8 : Decoder I8 Attributes
+decode_i8 = Decode.custom \_bytes, @Attributes _ -> crash "can't decode I8"
 
-decodeI16 : Decoder I16 Attributes
-decodeI16 = Decode.custom \_bytes, @Attributes _ -> crash "can't decode I16"
+decode_i16 : Decoder I16 Attributes
+decode_i16 = Decode.custom \_bytes, @Attributes _ -> crash "can't decode I16"
 
-decodeI32 : Decoder I32 Attributes
-decodeI32 = Decode.custom \_bytes, @Attributes _ -> crash "can't decode I32"
+decode_i32 : Decoder I32 Attributes
+decode_i32 = Decode.custom \_bytes, @Attributes _ -> crash "can't decode I32"
 
-decodeI64 : Decoder I64 Attributes
-decodeI64 = Decode.custom \_bytes, @Attributes _ -> crash "can't decode I64"
+decode_i64 : Decoder I64 Attributes
+decode_i64 = Decode.custom \_bytes, @Attributes _ -> crash "can't decode I64"
 
-decodeI128 : Decoder I128 Attributes
-decodeI128 = Decode.custom \_bytes, @Attributes _ -> crash "can't decode I128"
+decode_i128 : Decoder I128 Attributes
+decode_i128 = Decode.custom \_bytes, @Attributes _ -> crash "can't decode I128"
 
-decodeF32 : Decoder F32 Attributes
-decodeF32 = Decode.custom \_bytes, @Attributes _ -> crash "can't decode F32"
+decode_f32 : Decoder F32 Attributes
+decode_f32 = Decode.custom \_bytes, @Attributes _ -> crash "can't decode F32"
 
-decodeF64 : Decoder F64 Attributes
-decodeF64 = Decode.custom \_bytes, @Attributes _ -> crash "can't decode F64"
+decode_f64 : Decoder F64 Attributes
+decode_f64 = Decode.custom \_bytes, @Attributes _ -> crash "can't decode F64"
 
-decodeDec : Decoder Dec Attributes
-decodeDec = Decode.custom \_bytes, @Attributes _ -> crash "can't decode Dec"
+decode_dec : Decoder Dec Attributes
+decode_dec = Decode.custom \_bytes, @Attributes _ -> crash "can't decode Dec"
 
-decodeBool : Decoder Bool Attributes
-decodeBool = Decode.custom \_bytes, @Attributes _ -> crash "can't decode Bool"
+decode_bool : Decoder Bool Attributes
+decode_bool = Decode.custom \_bytes, @Attributes _ -> crash "can't decode Bool"
 
-decodeString : Decoder Str Attributes
-decodeString = Decode.custom \bytes, @Attributes _ ->
-    matchRemainderOfString = \quoteChar, rest ->
-        when List.splitFirst rest quoteChar is
+decode_string : Decoder Str Attributes
+decode_string = Decode.custom \bytes, @Attributes _ ->
+    match_remainder_of_string = \quote_char, rest ->
+        when List.splitFirst rest quote_char is
             Err NotFound -> { rest, result: Err TooShort }
             Ok { before, after } ->
-                when Str.fromUtf8 (escape before unescapeRules) is
+                when Str.fromUtf8 (escape before unescape_rules) is
                     Err _ -> { rest, result: Err TooShort }
                     Ok str -> { rest: after, result: Ok str }
 
     when bytes is
-        ['"', .. as rest] -> matchRemainderOfString '"' rest
-        ['\'', .. as rest] -> matchRemainderOfString '\'' rest
+        ['"', .. as rest] -> match_remainder_of_string '"' rest
+        ['\'', .. as rest] -> match_remainder_of_string '\'' rest
         _ -> { rest: bytes, result: Err TooShort }
 
-decodeList : Decoder elem Attributes -> Decoder (List elem) Attributes
-decodeList = \_elemDecoder ->
+decode_list : Decoder elem Attributes -> Decoder (List elem) Attributes
+decode_list = \_elemDecoder ->
     Decode.custom \_bytes, @Attributes _ -> crash "can't decode List"
 
 RecordState state : { rest : List U8, state : state }
 
-decodeRecord :
+decode_record :
     state,
     (state, Str -> [Keep (Decoder state Attributes), Skip]),
     (state, Attributes -> Result val DecodeError)
     -> Decoder val Attributes
-decodeRecord =
-    \initialState, stepField, finalizer ->
+decode_record =
+    \initial_state, step_field, finalizer ->
         Decode.custom \bytes, fmt ->
 
-            parseValue : Str, RecordState state -> DecodeResult state
-            parseValue = \key, { rest, state } ->
-                when stepField state key is
+            parse_value : Str, RecordState state -> DecodeResult state
+            parse_value = \key, { rest, state } ->
+                when step_field state key is
                     Skip ->
-                        result = Decode.decodeWith rest decodeString fmt
+                        result = Decode.decodeWith rest decode_string fmt
                         when result.result is
                             Ok _ -> { result: Ok state, rest: result.rest }
                             Err err -> { result: Err err, rest: result.rest }
@@ -282,33 +282,33 @@ decodeRecord =
                     Keep decoder ->
                         result = Decode.decodeWith rest decoder fmt
                         when result.result is
-                            Ok newState ->
-                                { result: Ok newState, rest: result.rest }
+                            Ok new_state ->
+                                { result: Ok new_state, rest: result.rest }
 
                             Err _ -> result
 
-            parseAttribute : RecordState state -> DecodeResult state
-            parseAttribute = \{ rest, state } ->
+            parse_attribute : RecordState state -> DecodeResult state
+            parse_attribute = \{ rest, state } ->
                 when List.splitFirst rest '=' is
                     Err NotFound -> { rest, result: Err TooShort }
                     Ok { before, after } ->
                         when Str.fromUtf8 before is
                             Err _ -> { rest: after, result: Err TooShort }
-                            Ok key -> parseValue key { rest: after, state }
+                            Ok key -> parse_value key { rest: after, state }
 
             loop : RecordState state -> DecodeResult state
             loop = \{ rest, state } ->
-                when skipWhitespace rest is
+                when skip_whitespace rest is
                     [] -> { rest, result: Ok state }
                     after ->
-                        result = parseAttribute { rest: after, state }
+                        result = parse_attribute { rest: after, state }
                         when result.result is
-                            Ok newState ->
-                                loop { rest: result.rest, state: newState }
+                            Ok new_state ->
+                                loop { rest: result.rest, state: new_state }
 
                             Err _ -> result
 
-            when loop { rest: bytes, state: initialState } is
+            when loop { rest: bytes, state: initial_state } is
                 { rest, result: Err err } ->
                     { rest, result: Err err }
 
@@ -318,13 +318,13 @@ decodeRecord =
                         rest,
                     }
 
-decodeTuple :
+decode_tuple :
     state,
     (state, U64 -> [Next (Decoder state Attributes), TooLong]),
     (state -> Result val DecodeError)
     -> Decoder val Attributes
-decodeTuple =
-    \_initialState, _stepField, _finalizer ->
+decode_tuple =
+    \_initial_state, _step_field, _finalizer ->
         Decode.custom \_bytes, @Attributes _ -> crash "can't decode Tuple"
 
 expect
@@ -345,21 +345,21 @@ expect
             formatter
     result == Ok { elm: "leafy", pine: "needly" }
 
-xmlWhitespace : Set U8
-xmlWhitespace = Set.fromList [' ', '\t', '\n', '\r']
+xml_whitespace : Set U8
+xml_whitespace = Set.fromList [' ', '\t', '\n', '\r']
 
-skipWhitespace : List U8 -> List U8
-skipWhitespace = \bytes ->
-    List.dropIf bytes \byte -> Set.contains xmlWhitespace byte
+skip_whitespace : List U8 -> List U8
+skip_whitespace = \bytes ->
+    List.dropIf bytes \byte -> Set.contains xml_whitespace byte
 
 expect
-    result = skipWhitespace []
+    result = skip_whitespace []
     result == []
 
 expect
-    result = skipWhitespace [' ', '\t', '\n']
+    result = skip_whitespace [' ', '\t', '\n']
     result == []
 
 expect
-    result = skipWhitespace [' ', '\t', '\n', 'a', 'b', 'c']
+    result = skip_whitespace [' ', '\t', '\n', 'a', 'b', 'c']
     result == ['a', 'b', 'c']

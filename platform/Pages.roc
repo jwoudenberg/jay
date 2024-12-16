@@ -4,9 +4,9 @@ module [
     rules,
     files,
     ignore,
-    fromMarkdown,
-    wrapHtml,
-    replaceHtml,
+    from_markdown,
+    wrap_html,
+    replace_html,
     list!,
 ]
 
@@ -29,14 +29,14 @@ bootstrap = wrap [
     {
         patterns: [],
         processing: Bootstrap,
-        replaceTags: [],
+        replace_tags: [],
         pipeline!: \content, _ -> content,
     },
 ]
 
 rules : Pages a, Pages b, (a, b -> c) -> Pages c
-rules = \pagesA, pagesB, _ ->
-    List.concat (unwrap pagesA) (unwrap pagesB)
+rules = \pages_a, pages_b, _ ->
+    List.concat (unwrap pages_a) (unwrap pages_b)
     |> wrap
 
 files : List Str -> Pages type
@@ -45,7 +45,7 @@ files = \patterns ->
         {
             patterns,
             processing: None,
-            replaceTags: [],
+            replace_tags: [],
             pipeline!: \content, _ -> content,
         },
     ]
@@ -56,19 +56,19 @@ ignore = \patterns ->
         {
             patterns,
             processing: Ignore,
-            replaceTags: [],
+            replace_tags: [],
             pipeline!: \content, _ -> content,
         },
     ]
 
-fromMarkdown : Pages Markdown -> Pages Html
-fromMarkdown = \pages ->
+from_markdown : Pages Markdown -> Pages Html
+from_markdown = \pages ->
     unwrap pages
     |> List.map \page -> { page & processing: Markdown }
     |> wrap
 
-wrapHtml : Pages Html, ({ content : Html, path : Str, meta : {}a } => Html) -> Pages Html where a implements Decoding
-wrapHtml = \pages, userWrapper! ->
+wrap_html : Pages Html, ({ content : Html, path : Str, meta : {}a } => Html) -> Pages Html where a implements Decoding
+wrap_html = \pages, user_wrapper! ->
     wrapper! : Xml, Pages.Internal.HostPage => Xml
     wrapper! = \content, page ->
         meta =
@@ -79,17 +79,17 @@ wrapHtml = \pages, userWrapper! ->
                         Ok str -> crash "@$%^&.jayerror*0*$(str)"
                         Err _ -> crash "frontmatter bytes not UTF8-encoded"
 
-        userWrapper! { content: Xml.Internal.wrap content, path: page.path, meta }
+        user_wrapper! { content: Xml.Internal.wrap content, path: page.path, meta }
         |> Xml.Internal.unwrap
 
     unwrap pages
     |> List.map \page -> {
         patterns: page.patterns,
         processing: if page.processing == None then Xml else page.processing,
-        replaceTags: page.replaceTags,
-        pipeline!: \content, hostPage ->
-            page.pipeline! content hostPage
-            |> wrapper! hostPage,
+        replace_tags: page.replace_tags,
+        pipeline!: \content, host_page ->
+            page.pipeline! content host_page
+            |> wrapper! host_page,
     }
     |> wrap
 
@@ -107,24 +107,24 @@ list! = \pattern ->
         { path: result.path, meta }
 
 # Replace an HTML element in the passed in pages.
-replaceHtml :
+replace_html :
     Pages Html,
     Str,
     ({ content : Html, attrs : {}attrs, path : Str, meta : {}a } => Html)
     -> Pages Html
-replaceHtml = \pages, name, userReplacer! ->
+replace_html = \pages, name, user_replacer! ->
     replacer! : Xml, Pages.Internal.Page, Pages.Internal.HostPage => Xml
-    replacer! = \original, page, hostPage ->
+    replacer! = \original, page, host_page ->
         meta =
-            when Decode.fromBytes hostPage.meta Rvn.compact is
+            when Decode.fromBytes host_page.meta Rvn.compact is
                 Ok x -> x
                 Err _ ->
-                    when Str.fromUtf8 hostPage.meta is
+                    when Str.fromUtf8 host_page.meta is
                         Ok str -> crash "@$%^&.jayerror*0*$(str)"
                         Err _ -> crash "frontmatter bytes not UTF8-encoded"
 
-        walk! hostPage.tags original \content, tag ->
-            if Num.intCast tag.index == List.len page.replaceTags then
+        walk! host_page.tags original \content, tag ->
+            if Num.intCast tag.index == List.len page.replace_tags then
                 attrs =
                     when Decode.fromBytes tag.attributes Xml.Attributes.formatter is
                         Ok x -> x
@@ -133,10 +133,10 @@ replaceHtml = \pages, name, userReplacer! ->
                                 Ok str -> crash "@$%^&.jayerror*1*$(str)"
                                 Err _ -> crash "attribute bytes not UTF8-encoded"
 
-                replaceTag! content tag \nested ->
-                    userReplacer! {
+                replace_tag! content tag \nested ->
+                    user_replacer! {
                         content: Xml.Internal.wrap nested,
-                        path: hostPage.path,
+                        path: host_page.path,
                         attrs,
                         meta,
                     }
@@ -148,22 +148,22 @@ replaceHtml = \pages, name, userReplacer! ->
     |> List.map \page -> {
         patterns: page.patterns,
         processing: if page.processing == None then Xml else page.processing,
-        replaceTags: List.append page.replaceTags name,
-        pipeline!: \content, hostPage ->
-            page.pipeline! content hostPage
-            |> replacer! page hostPage,
+        replace_tags: List.append page.replace_tags name,
+        pipeline!: \content, host_page ->
+            page.pipeline! content host_page
+            |> replacer! page host_page,
     }
     |> wrap
 
-replaceTag! : Xml, Pages.Internal.HostTag, (Xml => Xml) => Xml
-replaceTag! = \content, tag, replace! ->
-    { before, nested, after } = replaceTagHelper content tag
+replace_tag! : Xml, Pages.Internal.HostTag, (Xml => Xml) => Xml
+replace_tag! = \content, tag, replace! ->
+    { before, nested, after } = replace_tag_helper content tag
     before
     |> List.concat (replace! nested)
     |> List.concat after
 
-replaceTagHelper : Xml, Pages.Internal.HostTag -> { before : Xml, nested : Xml, after : Xml }
-replaceTagHelper = \content, tag ->
+replace_tag_helper : Xml, Pages.Internal.HostTag -> { before : Xml, nested : Xml, after : Xml }
+replace_tag_helper = \content, tag ->
     List.walk content { before: [], nested: [], after: [] } \acc, slice ->
         when slice is
             RocGenerated _ ->
@@ -237,16 +237,16 @@ replaceTagHelper = \content, tag ->
                             (FromSource { start: tag.outerEnd, end }),
                     }
 
-# A pure version of replaceTag! that shares almost all the logic, for testing.
-replaceTag : Xml, Pages.Internal.HostTag, (Xml -> Xml) -> Xml
-replaceTag = \content, tag, replace ->
-    { before, nested, after } = replaceTagHelper content tag
+# A pure version of replace_tag! that shares almost all the logic, for testing.
+replace_tag : Xml, Pages.Internal.HostTag, (Xml -> Xml) -> Xml
+replace_tag = \content, tag, replace ->
+    { before, nested, after } = replace_tag_helper content tag
     before
     |> List.concat (replace nested)
     |> List.concat after
 
-parseTagForTest : List U8 -> Pages.Internal.HostTag
-parseTagForTest = \bytes ->
+parse_tag_for_test : List U8 -> Pages.Internal.HostTag
+parse_tag_for_test = \bytes ->
     ok : Result (Int a) err -> Int b
     ok = \result ->
         when result is
@@ -263,8 +263,8 @@ parseTagForTest = \bytes ->
     }
 
 # Mark some XML to make it recognizable in test output
-markForTest : Xml -> Xml
-markForTest = \xml ->
+mark_for_test : Xml -> Xml
+mark_for_test = \xml ->
     List.map xml \slice ->
         when slice is
             FromSource { start, end } -> FromSource { start: 1000 + start, end: 1000 + end }
@@ -274,10 +274,10 @@ expect
     content = Str.toUtf8 "    <tag>hi</tag>   "
     #              index:  123456789 123456789
     #              slice:  []
-    tag = parseTagForTest content
+    tag = parse_tag_for_test content
     actual =
         [FromSource { start: 0, end: 2 }]
-        |> replaceTag tag markForTest
+        |> replace_tag tag mark_for_test
     [FromSource { start: 0, end: 2 }]
     == actual
 
@@ -285,10 +285,10 @@ expect
     content = Str.toUtf8 "    <tag>hi</tag>   "
     #              index:  123456789 123456789
     #              slice: [    ]
-    tag = parseTagForTest content
+    tag = parse_tag_for_test content
     actual =
         [FromSource { start: 0, end: 6 }]
-        |> replaceTag tag markForTest
+        |> replace_tag tag mark_for_test
     [
         FromSource { start: 0, end: 4 },
         FromSource { start: 1009, end: 1009 },
@@ -299,10 +299,10 @@ expect
     content = Str.toUtf8 "    <tag>hi</tag>   "
     #              index:  123456789 123456789
     #              slice: [        ]
-    tag = parseTagForTest content
+    tag = parse_tag_for_test content
     actual =
         [FromSource { start: 0, end: 10 }]
-        |> replaceTag tag markForTest
+        |> replace_tag tag mark_for_test
     [
         FromSource { start: 0, end: 4 },
         FromSource { start: 1009, end: 1010 },
@@ -313,10 +313,10 @@ expect
     content = Str.toUtf8 "    <tag>hi</tag>   "
     #              index:  123456789 123456789
     #              slice: [            ]
-    tag = parseTagForTest content
+    tag = parse_tag_for_test content
     actual =
         [FromSource { start: 0, end: 14 }]
-        |> replaceTag tag markForTest
+        |> replace_tag tag mark_for_test
     [
         FromSource { start: 0, end: 4 },
         FromSource { start: 1009, end: 1011 },
@@ -327,10 +327,10 @@ expect
     content = Str.toUtf8 "    <tag>hi</tag>   "
     #              index:  123456789 123456789
     #              slice: [                  ]
-    tag = parseTagForTest content
+    tag = parse_tag_for_test content
     actual =
         [FromSource { start: 0, end: 20 }]
-        |> replaceTag tag markForTest
+        |> replace_tag tag mark_for_test
     [
         FromSource { start: 0, end: 4 },
         FromSource { start: 1009, end: 1011 },
@@ -342,10 +342,10 @@ expect
     content = Str.toUtf8 "    <tag>hi</tag>   "
     #              index:  123456789 123456789
     #              slice:       [            ]
-    tag = parseTagForTest content
+    tag = parse_tag_for_test content
     actual =
         [FromSource { start: 6, end: 20 }]
-        |> replaceTag tag markForTest
+        |> replace_tag tag mark_for_test
     [
         FromSource { start: 1009, end: 1011 },
         FromSource { start: 17, end: 20 },
@@ -356,10 +356,10 @@ expect
     content = Str.toUtf8 "    <tag>hi</tag>   "
     #              index:  123456789 123456789
     #              slice:           [        ]
-    tag = parseTagForTest content
+    tag = parse_tag_for_test content
     actual =
         [FromSource { start: 10, end: 20 }]
-        |> replaceTag tag markForTest
+        |> replace_tag tag mark_for_test
     [
         FromSource { start: 1010, end: 1011 },
         FromSource { start: 17, end: 20 },
@@ -370,10 +370,10 @@ expect
     content = Str.toUtf8 "    <tag>hi</tag>   "
     #              index:  123456789 123456789
     #              slice:               [    ]
-    tag = parseTagForTest content
+    tag = parse_tag_for_test content
     actual =
         [FromSource { start: 14, end: 20 }]
-        |> replaceTag tag markForTest
+        |> replace_tag tag mark_for_test
     [
         FromSource { start: 1011, end: 1011 },
         FromSource { start: 17, end: 20 },
@@ -384,10 +384,10 @@ expect
     content = Str.toUtf8 "    <tag>hi</tag>   "
     #              index:  123456789 123456789
     #              slice:                   []
-    tag = parseTagForTest content
+    tag = parse_tag_for_test content
     actual =
         [FromSource { start: 18, end: 20 }]
-        |> replaceTag tag markForTest
+        |> replace_tag tag mark_for_test
     [
         FromSource { start: 18, end: 20 },
     ]
@@ -398,10 +398,10 @@ expect
     content = Str.toUtf8 "    <tag>hi</tag>   "
     #              index:  123456789 123456789
     #              slice: [ ]X
-    tag = parseTagForTest content
+    tag = parse_tag_for_test content
     actual =
         [FromSource { start: 0, end: 3 }, RocGenerated ['X']]
-        |> replaceTag tag markForTest
+        |> replace_tag tag mark_for_test
     [
         FromSource { start: 0, end: 3 },
         RocGenerated ['X'],
@@ -413,10 +413,10 @@ expect
     content = Str.toUtf8 "    <tag>hi</tag>   "
     #              index:  123456789 123456789
     #              slice: [        ]X
-    tag = parseTagForTest content
+    tag = parse_tag_for_test content
     actual =
         [FromSource { start: 0, end: 10 }, RocGenerated ['X']]
-        |> replaceTag tag markForTest
+        |> replace_tag tag mark_for_test
     [
         FromSource { start: 0, end: 4 },
         FromSource { start: 1009, end: 1010 },
@@ -429,10 +429,10 @@ expect
     content = Str.toUtf8 "    <tag>hi</tag>   "
     #              index:  123456789 123456789
     #              slice: [               ]X
-    tag = parseTagForTest content
+    tag = parse_tag_for_test content
     actual =
         [FromSource { start: 0, end: 17 }, RocGenerated ['X']]
-        |> replaceTag tag markForTest
+        |> replace_tag tag mark_for_test
     [
         FromSource { start: 0, end: 4 },
         FromSource { start: 1009, end: 1011 },

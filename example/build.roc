@@ -13,9 +13,9 @@ main =
 
 markdown =
     Pages.files ["*.md", "posts/*.md"]
-    |> Pages.fromMarkdown
-    |> Pages.wrapHtml layout
-    |> Pages.replaceHtml "page-list" pageList!
+    |> Pages.from_markdown
+    |> Pages.wrap_html layout
+    |> Pages.replace_html "page-list" page_list!
 
 layout = \{ content, meta } ->
     Html.html {} [
@@ -26,7 +26,7 @@ layout = \{ content, meta } ->
         ],
     ]
 
-pageList! = \{ attrs } ->
+page_list! = \{ attrs } ->
     posts = Pages.list! attrs.pattern
     Html.ul
         {}

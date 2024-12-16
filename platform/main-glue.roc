@@ -3,7 +3,7 @@ platform "glue-types"
     exposes []
     packages {}
     imports []
-    provides [mainForHost]
+    provides [main_for_host]
 
 import Pages.Internal
 
@@ -15,5 +15,5 @@ GlueTypes : {
     e : Pages.Internal.SourceLoc,
 }
 
-mainForHost : GlueTypes
-mainForHost = main
+main_for_host : GlueTypes
+main_for_host = main

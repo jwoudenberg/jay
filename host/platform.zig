@@ -98,16 +98,16 @@ fn getPagesMatchingPattern(roc_pattern: *RocStr) !RocList {
     return RocList.fromSlice(Page, try results.toOwnedSlice(), true);
 }
 
-extern fn roc__mainForHost_1_exposed_generic(*RocList, *const void) callconv(.C) void;
-extern fn roc__getMetadataLengthForHost_1_exposed_generic(*u64, *const RocList) callconv(.C) void;
-extern fn roc__runPipelineForHost_1_exposed_generic(*RocList, *const Page) callconv(.C) void;
+extern fn roc__main_for_host_1_exposed_generic(*RocList, *const void) callconv(.C) void;
+extern fn roc__get_metadata_length_for_host_1_exposed_generic(*u64, *const RocList) callconv(.C) void;
+extern fn roc__run_pipeline_for_host_1_exposed_generic(*RocList, *const Page) callconv(.C) void;
 
 pub const platform = if (builtin.is_test) TestPlatform else Platform;
 
 const Platform = struct {
     pub fn getRules(gpa: std.mem.Allocator, site: *Site) !bool {
         var roc_rules = RocList.empty();
-        roc__mainForHost_1_exposed_generic(&roc_rules, &void{});
+        roc__main_for_host_1_exposed_generic(&roc_rules, &void{});
         var should_bootstrap = false;
         var rules = std.ArrayList(Site.Rule).init(gpa);
         errdefer rules.deinit();
@@ -169,7 +169,7 @@ const Platform = struct {
     pub fn getMetadataLength(bytes: []const u8) u64 {
         var meta_len: u64 = undefined;
         const roc_bytes = RocList.fromSlice(u8, bytes, false);
-        roc__getMetadataLengthForHost_1_exposed_generic(&meta_len, &roc_bytes);
+        roc__get_metadata_length_for_host_1_exposed_generic(&meta_len, &roc_bytes);
         return meta_len;
     }
 
@@ -207,7 +207,7 @@ const Platform = struct {
             .active_source_path = page.source_path,
         };
         errdefer pipelineState = null;
-        roc__runPipelineForHost_1_exposed_generic(&contents, &roc_page);
+        roc__run_pipeline_for_host_1_exposed_generic(&contents, &roc_page);
         pipelineState = null;
 
         var roc_xml_iterator = RocListIterator(Slice).init(contents);
