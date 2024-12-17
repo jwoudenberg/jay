@@ -62,6 +62,7 @@ fn bootstrapRules(
 
     jobs_loop: while (scan_queue.popOrNull()) |dir| {
         var iterator = try SourceDirIterator.init(site, source_root, dir) orelse continue :jobs_loop;
+        defer iterator.deinit();
         paths_loop: while (try iterator.next()) |entry| {
             const source_path = entry.path;
             if (entry.is_dir) {
@@ -74,7 +75,7 @@ fn bootstrapRules(
                 const path = site.strs.get(source_path_bytes) orelse continue :pattern_loop;
                 if (path != bootstrap_ignore_pattern) continue :pattern_loop;
                 try ignore_patterns.append(path);
-                continue :jobs_loop;
+                continue :paths_loop;
             }
 
             const pattern_bytes = try patternForPath(tmp_arena, source_path_bytes);
@@ -126,9 +127,12 @@ test bootstrapRules {
     );
 
     try std.testing.expectEqual(3, site.ignore_patterns.len);
-    try std.testing.expectEqualStrings("build.roc", site.ignore_patterns[0].bytes());
-    try std.testing.expectEqualStrings("build", site.ignore_patterns[1].bytes());
-    try std.testing.expectEqualStrings(".gitignore", site.ignore_patterns[2].bytes());
+    const ignore_patterns = try std.testing.allocator.dupe(Str, site.ignore_patterns);
+    defer std.testing.allocator.free(ignore_patterns);
+    std.sort.insertion(Str, ignore_patterns, {}, compareStrings);
+    try std.testing.expectEqualStrings(".gitignore", ignore_patterns[0].bytes());
+    try std.testing.expectEqualStrings("build", ignore_patterns[1].bytes());
+    try std.testing.expectEqualStrings("build.roc", ignore_patterns[2].bytes());
 
     try std.testing.expectEqual(2, site.rules.len);
 

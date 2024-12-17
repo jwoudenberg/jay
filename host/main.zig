@@ -109,6 +109,8 @@ fn run_prod(gpa: std.mem.Allocator, argv0: []const u8, output: []const u8) !void
     var strs = try Str.Registry.init(gpa);
     defer strs.deinit();
     var site = try createSite(gpa, argv0, output, strs);
+    defer site.source_root.close();
+    defer site.output_root.close();
     defer site.deinit();
     const should_bootstrap = try platform.getRules(gpa, &site);
     if (should_bootstrap) try bootstrap(gpa, &site);
@@ -139,11 +141,15 @@ fn run_dev(gpa: std.mem.Allocator, argv0: []const u8) !void {
 
     const cache_dir_path = try cacheDir(roc_main_abs, envMap, &buf);
     var site = try createSite(gpa, argv0, cache_dir_path, strs);
+    defer site.source_root.close();
+    defer site.output_root.close();
     defer site.deinit();
 
     const should_bootstrap = try platform.getRules(gpa, &site);
 
-    var watcher = try Watcher.init(gpa, try site.openSourceRoot(.{}));
+    var source_root = try site.openSourceRoot(.{});
+    defer source_root.close();
+    var watcher = try Watcher.init(gpa, source_root);
     defer watcher.deinit();
     var runLoop = try RunLoop.init(gpa, &site, &watcher, should_bootstrap);
 
@@ -467,6 +473,7 @@ test "move a directory out of project dir => jay recursively deletes related out
 
     // Changing a file after it's been moved out of the project has no effect
     try extern_dir.dir.writeFile(.{ .sub_path = "cellar/subway/file2.md", .data = "{}<span/>" });
+    try test_run_loop.loopOnce();
     try expectNoFile(site.output_root, "cellar/subway/file2.html");
     try std.testing.expectEqualStrings("", test_run_loop.output());
 }
@@ -516,7 +523,7 @@ test "add a file matching an ignore pattern => jay does not generate an output f
     try std.testing.expectEqualStrings("", test_run_loop.output());
 }
 
-test "add a file that does not match a patter => jay will show an error" {
+test "add a file that does not match a pattern => jay will show an error" {
     var test_run_loop = try TestRunLoop.init(.{ .markdown_patterns = &.{} });
     defer test_run_loop.deinit();
     const site = test_run_loop.test_site.site;
@@ -752,6 +759,7 @@ const TestRunLoop = struct {
     const TestSite = @import("site.zig").TestSite;
 
     allocator: std.mem.Allocator,
+    source_root: std.fs.Dir,
     test_site: *TestSite,
     watcher: *Watcher,
     run_loop: *RunLoop,
@@ -762,11 +770,13 @@ const TestRunLoop = struct {
         const test_site = try allocator.create(TestSite);
         test_site.* = try TestSite.init(config);
         const watcher = try allocator.create(Watcher);
-        watcher.* = try Watcher.init(allocator, try test_site.site.openSourceRoot(.{}));
+        const source_root = try test_site.site.openSourceRoot(.{});
+        watcher.* = try Watcher.init(allocator, source_root);
         const run_loop = try allocator.create(RunLoop);
         run_loop.* = try RunLoop.init(allocator, test_site.site, watcher, false);
         return .{
             .allocator = allocator,
+            .source_root = source_root,
             .test_site = test_site,
             .watcher = watcher,
             .run_loop = run_loop,
@@ -777,6 +787,7 @@ const TestRunLoop = struct {
     fn deinit(self: *TestRunLoop) void {
         self.watcher.deinit();
         self.test_site.deinit();
+        self.source_root.close();
         self.allocator.destroy(self.watcher);
         self.allocator.destroy(self.run_loop);
         self.allocator.destroy(self.test_site);

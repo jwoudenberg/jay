@@ -141,7 +141,9 @@ pub fn Watcher(
             // followed by a null-terminated byte representing the filename
             // in that directory modified.
             const file_handle: *align(1) fanotify.file_handle = @ptrCast(&fid.handle);
-            const dir = self.dirs.get(.{ .handle = file_handle }) orelse return error.ReceivedEventForUnwatchedDir;
+            const dir = self.dirs.get(.{ .handle = file_handle }) orelse {
+                return error.ReceivedEventForUnwatchedDir;
+            };
             const file_name_z: [*:0]u8 = @ptrCast((&file_handle.f_handle).ptr + file_handle.handle_bytes);
             const file_name = std.mem.span(file_name_z);
 
@@ -245,9 +247,11 @@ test "file watching produces expected events" {
     try root.makeDir("mid");
     try expectChange(&watcher, .{ .dir_changed = .{ .dir = "", .file_name = "mid" } });
 
-    const mid = try root.openDir("mid", .{});
+    var mid = try root.openDir("mid", .{});
+    defer mid.close();
     try mid.makeDir("low");
-    const low = try mid.openDir("low", .{});
+    var low = try mid.openDir("low", .{});
+    defer low.close();
     try watcher.watchDir("mid");
     try watcher.watchDir("mid/low");
 
