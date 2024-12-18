@@ -3,9 +3,24 @@ const std = @import("std");
 pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
     const target = b.standardTargetOptions(.{});
-    try buildDynhost(b, optimize, target);
+
+    // Collect all .roc files, to make them dependencies for other commands.
+    var platform_dir = try std.fs.cwd().openDir("platform", .{ .iterate = true });
+    defer platform_dir.close();
+    var platform_walker = try platform_dir.walk(b.allocator);
+    defer platform_walker.deinit();
+    var roc_paths = std.ArrayList(std.Build.LazyPath).init(b.allocator);
+    defer roc_paths.deinit();
+    while (try platform_walker.next()) |entry| {
+        if (entry.kind != .file) continue;
+        const roc_path = b.path("platform").path(b, entry.path);
+        try roc_paths.append(roc_path);
+    }
+
+    buildDynhost(b, optimize, target, roc_paths.items);
     buildLegacy(b, optimize, target);
     buildGlue(b);
+    buildDocs(b, roc_paths.items);
     runTests(b, optimize, target);
 
     b.getInstallStep().dependOn(&b.addInstallDirectory(.{
@@ -20,7 +35,8 @@ fn buildDynhost(
     b: *std.Build,
     optimize: std.builtin.OptimizeMode,
     target: std.Build.ResolvedTarget,
-) !void {
+    roc_paths: []std.Build.LazyPath,
+) void {
 
     // Build a fake application for this platform as a library, so we have an
     // object exposing the right functions to compile the host against. The
@@ -69,13 +85,7 @@ fn buildDynhost(
 
     // Mark all .roc files as dependencies of the two roc commands above. That
     // way zig will know to rerun the roc commands when .roc files change.
-    var platform_dir = try std.fs.cwd().openDir("platform", .{ .iterate = true });
-    defer platform_dir.close();
-    var platform_walker = try platform_dir.walk(b.allocator);
-    defer platform_walker.deinit();
-    while (try platform_walker.next()) |entry| {
-        if (entry.kind != .file) continue;
-        const roc_path = b.path("platform").path(b, entry.path);
+    for (roc_paths) |roc_path| {
         libapp.addFileInput(roc_path);
         host.addFileInput(roc_path);
     }
@@ -138,6 +148,27 @@ fn buildGlue(b: *std.Build) void {
         .source_dir = glue_dir,
         .install_dir = .{ .prefix = {} },
         .install_subdir = "glue",
+    }).step);
+}
+
+fn buildDocs(
+    b: *std.Build,
+    roc_paths: []std.Build.LazyPath,
+) void {
+    const docs = b.addSystemCommand(&.{"roc"});
+    docs.addArgs(&.{"docs"});
+    docs.addFileArg(b.path("platform/main.roc"));
+    docs.addArgs(&.{"--output"});
+    const docs_dir = docs.addOutputDirectoryArg(b.makeTempPath());
+
+    // Mark all .roc files as dependencies of the two roc commands above. That
+    // way zig will know to rerun the roc commands when .roc files change.
+    for (roc_paths) |roc_path| docs.addFileInput(roc_path);
+
+    b.getInstallStep().dependOn(&b.addInstallDirectory(.{
+        .source_dir = docs_dir,
+        .install_dir = .{ .prefix = {} },
+        .install_subdir = "docs",
     }).step);
 }
 
