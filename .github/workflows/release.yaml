@@ -1,0 +1,35 @@
+name: Create Release
+
+on:
+  # Run when a release is published
+  release:
+    types:
+      - published
+
+
+jobs:
+  bundle-and-release:
+    name: Bundle and release platform
+    runs-on: [ubuntu-24.04]
+    permissions:
+      contents: write # Used to upload the bundled library
+    steps:
+      - uses: actions/checkout@v3
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: prepare nix environment
+        run: nix develop --command echo done!
+
+      - name: build host
+        run: nix develop --command zig build
+
+      - name: create host bundle
+        run: nix develop --command roc build --bundle .tar.br zig-out/platform/main.roc
+
+      - name: Upload binaries to release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          file: 'zig-out/platform/*.tar.br'
+          tag: ${{ github.ref }}
+          file_glob: true
