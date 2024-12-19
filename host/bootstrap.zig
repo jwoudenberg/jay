@@ -52,9 +52,10 @@ fn bootstrapRules(
     // When running the bootstrap script we have to guess which files the user
     // might want to be ignored. This is our list of such guesses.
     const bootstrap_ignore_patterns = [_]Str{
-        try site.strs.intern(".git"),
-        try site.strs.intern(".gitignore"),
+        try site.strs.intern(".*"),
+        try site.strs.intern("flake.*"),
         try site.strs.intern("README*"),
+        try site.strs.intern("LICENSE*"),
     };
 
     var scan_queue = std.ArrayList(Str).init(tmp_arena);

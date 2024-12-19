@@ -1,4 +1,5 @@
 +mvp write API documentation
++mvp don't crash on encountering an unsupported filetype
 
 +test adding a file causes update of dependent
 +test deleting a file causes update of dependent
