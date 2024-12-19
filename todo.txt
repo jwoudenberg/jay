@@ -1,5 +1,8 @@
 +mvp write API documentation
 
++test adding a file causes update of dependent
++test deleting a file causes update of dependent
+
 +html support data attributes
 +html fix shadowed attributes
 +html add doctype

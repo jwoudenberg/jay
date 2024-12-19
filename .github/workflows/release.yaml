@@ -33,3 +33,23 @@ jobs:
           file: 'zig-out/platform/*.tar.br'
           tag: ${{ github.ref }}
           file_glob: true
+
+      - name: Upload site documentation
+        id: deployment
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: zig-out/docs
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-24.04
+    needs: bundle-and-release
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
