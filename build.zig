@@ -3,7 +3,7 @@ const std = @import("std");
 pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
     const target = b.standardTargetOptions(.{});
-    const deps = Deps.init(b, optimize, target);
+    const deps = try Deps.init(b, optimize, target);
 
     // Collect all .roc files, to make them dependencies for other commands.
     var platform_dir = try std.fs.cwd().openDir("platform", .{ .iterate = true });
@@ -111,6 +111,8 @@ fn buildLegacy(
     const combined_archive = combine_archive.addOutputFileArg(makeTempFilePath(b, "combined.a"));
     combine_archive.addFileArg(deps.libcmark_gfm.artifact("cmark-gfm").getEmittedBin());
     combine_archive.addFileArg(deps.libcmark_gfm.artifact("cmark-gfm-extensions").getEmittedBin());
+    combine_archive.addFileArg(deps.tree_sitter.artifact("tree-sitter").getEmittedBin());
+    combine_archive.addFileArg(deps.highlight.path(b, "release/libtree_sitter_highlight.a"));
     combine_archive.addFileArg(libhost.getEmittedBin());
 
     b.getInstallStep().dependOn(&b.addInstallFile(combined_archive, "platform/linux-x64.a").step);
@@ -184,12 +186,19 @@ fn makeTempFilePath(b: *std.Build, filename: []const u8) []const u8 {
 const Deps = struct {
     libcmark_gfm: *std.Build.Dependency,
     mime: *std.Build.Dependency,
+    tree_sitter: *std.Build.Dependency,
+    highlight: std.Build.LazyPath,
 
     fn init(
         b: *std.Build,
         optimize: std.builtin.OptimizeMode,
         target: std.Build.ResolvedTarget,
-    ) Deps {
+    ) !Deps {
+        const tree_sitter = b.dependency("tree-sitter", .{
+            .target = target,
+            .optimize = optimize,
+        });
+
         return .{
             .libcmark_gfm = b.dependency("libcmark-gfm", .{
                 .target = target,
@@ -199,12 +208,39 @@ const Deps = struct {
                 .target = target,
                 .optimize = optimize,
             }),
+            .tree_sitter = tree_sitter,
+            .highlight = try build_highlight(b, target, tree_sitter),
         };
     }
 
     fn install(self: Deps, step: *std.Build.Step.Compile) void {
         step.linkLibrary(self.libcmark_gfm.artifact("cmark-gfm"));
         step.linkLibrary(self.libcmark_gfm.artifact("cmark-gfm-extensions"));
+        step.addIncludePath(self.tree_sitter.path("highlight/include/tree_sitter"));
+        step.addIncludePath(self.tree_sitter.path("lib/include/tree_sitter"));
         step.root_module.addImport("mime", self.mime.module("mime"));
     }
 };
+
+fn build_highlight(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    tree_sitter: *std.Build.Dependency,
+) !std.Build.LazyPath {
+    // tree-sitter-highlight is a tool written in rust that produces
+    // a static library that can be linked into projects in other
+    // languages. We build it here using cargo. Rust's target triples are
+    // slightly different from Zig's, so we have to map them.
+    const cargo = b.addSystemCommand(&.{"cargo"});
+    const target_triple = try target.result.linuxTriple(b.allocator);
+    const rust_triple =
+        if (std.mem.eql(u8, target_triple, "x86_64-linux-gnu"))
+        "x86_64-unknown-linux-gnu"
+    else {
+        std.debug.print("No mapping to rust target triple yet for: {s}\n", .{target_triple});
+        return error.NoMappingForTarget;
+    };
+    cargo.setCwd(tree_sitter.path("highlight"));
+    cargo.addArgs(&.{ "build", "--release", "--target", rust_triple, "--target-dir" });
+    return cargo.addOutputDirectoryArg(b.makeTempPath()).path(b, rust_triple);
+}

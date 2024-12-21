@@ -20,7 +20,8 @@
         pkgs.mkShell {
           packages = [
             roc.packages."x86_64-linux".cli
-            pkgs.entr
+            pkgs.cargo # for building tree-sitter-highlight
+            pkgs.entr # for watch.sh
             pkgs.zig
             pkgs.zls
           ];
