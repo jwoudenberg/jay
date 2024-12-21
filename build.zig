@@ -3,6 +3,7 @@ const std = @import("std");
 pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
     const target = b.standardTargetOptions(.{});
+    const deps = Deps.init(b, optimize, target);
 
     // Collect all .roc files, to make them dependencies for other commands.
     var platform_dir = try std.fs.cwd().openDir("platform", .{ .iterate = true });
@@ -17,11 +18,11 @@ pub fn build(b: *std.Build) !void {
         try roc_paths.append(roc_path);
     }
 
-    buildDynhost(b, optimize, target, roc_paths.items);
-    buildLegacy(b, optimize, target);
+    buildDynhost(b, deps, optimize, target, roc_paths.items);
+    buildLegacy(b, deps, optimize, target);
     buildGlue(b);
     buildDocs(b, roc_paths.items);
-    runTests(b, optimize, target);
+    runTests(b, deps, optimize, target);
 
     b.getInstallStep().dependOn(&b.addInstallDirectory(.{
         .source_dir = b.path("platform"),
@@ -33,11 +34,11 @@ pub fn build(b: *std.Build) !void {
 
 fn buildDynhost(
     b: *std.Build,
+    deps: Deps,
     optimize: std.builtin.OptimizeMode,
     target: std.Build.ResolvedTarget,
     roc_paths: []std.Build.LazyPath,
 ) void {
-
     // Build a fake application for this platform as a library, so we have an
     // object exposing the right functions to compile the host against. The
     // implementation of the fake app will later be replaced with whatever real
@@ -47,11 +48,6 @@ fn buildDynhost(
     libapp.addFileArg(b.path("platform/libapp.roc"));
     libapp.addArg("--output");
     const libapp_so = libapp.addOutputFileArg(makeTempFilePath(b, "libapp.so"));
-
-    const libcmark_gfm = b.dependency("libcmark-gfm", .{
-        .target = target,
-        .optimize = optimize,
-    });
 
     // Build the host. We're claiming to build an executable here, but I don't
     // think that's exactly right as the artifact produced here is not intended
@@ -68,12 +64,7 @@ fn buildDynhost(
     dynhost.root_module.stack_check = false;
     dynhost.linkLibC();
     dynhost.addObjectFile(libapp_so);
-    dynhost.linkLibrary(libcmark_gfm.artifact("cmark-gfm"));
-    dynhost.linkLibrary(libcmark_gfm.artifact("cmark-gfm-extensions"));
-    dynhost.root_module.addImport("mime", b.dependency("mime", .{
-        .target = target,
-        .optimize = optimize,
-    }).module("mime"));
+    deps.install(dynhost);
 
     // Run the Roc surgical linker to tie together our Roc platform and host
     // into something that can be packed up and used as a platform by others.
@@ -96,14 +87,10 @@ fn buildDynhost(
 
 fn buildLegacy(
     b: *std.Build,
+    deps: Deps,
     optimize: std.builtin.OptimizeMode,
     target: std.Build.ResolvedTarget,
 ) void {
-    const libcmark_gfm = b.dependency("libcmark-gfm", .{
-        .target = target,
-        .optimize = optimize,
-    });
-
     // Build the host again, this time as a library for static linking.
     const libhost = b.addStaticLibrary(.{
         .name = "jay",
@@ -115,20 +102,15 @@ fn buildLegacy(
     libhost.rdynamic = true;
     libhost.bundle_compiler_rt = true;
     libhost.linkLibC(); // provides malloc/free/.. used in main.zig
-    libhost.linkLibrary(libcmark_gfm.artifact("cmark-gfm"));
-    libhost.linkLibrary(libcmark_gfm.artifact("cmark-gfm-extensions"));
-    libhost.root_module.addImport("mime", b.dependency("mime", .{
-        .target = target,
-        .optimize = optimize,
-    }).module("mime"));
+    deps.install(libhost);
 
     // We need the host's object files along with any C dependencies to be
     // bundled in a single archive for the legacy linker. The below build
     // step combines archives using a small bash script included in this repo.
     const combine_archive = b.addSystemCommand(&.{"build/combine-archives.sh"});
     const combined_archive = combine_archive.addOutputFileArg(makeTempFilePath(b, "combined.a"));
-    combine_archive.addFileArg(libcmark_gfm.artifact("cmark-gfm").getEmittedBin());
-    combine_archive.addFileArg(libcmark_gfm.artifact("cmark-gfm-extensions").getEmittedBin());
+    combine_archive.addFileArg(deps.libcmark_gfm.artifact("cmark-gfm").getEmittedBin());
+    combine_archive.addFileArg(deps.libcmark_gfm.artifact("cmark-gfm-extensions").getEmittedBin());
     combine_archive.addFileArg(libhost.getEmittedBin());
 
     b.getInstallStep().dependOn(&b.addInstallFile(combined_archive, "platform/linux-x64.a").step);
@@ -174,26 +156,17 @@ fn buildDocs(
 
 fn runTests(
     b: *std.Build,
+    deps: Deps,
     optimize: std.builtin.OptimizeMode,
     target: std.Build.ResolvedTarget,
 ) void {
-    const libcmark_gfm = b.dependency("libcmark-gfm", .{
-        .target = target,
-        .optimize = optimize,
-    });
-
     const exe_unit_tests = b.addTest(.{
         .root_source_file = b.path("host/tests.zig"),
         .target = target,
         .optimize = optimize,
     });
     exe_unit_tests.linkLibC(); // provides malloc/free/.. used in main.zig
-    exe_unit_tests.root_module.addImport("mime", b.dependency("mime", .{
-        .target = target,
-        .optimize = optimize,
-    }).module("mime"));
-    exe_unit_tests.linkLibrary(libcmark_gfm.artifact("cmark-gfm"));
-    exe_unit_tests.linkLibrary(libcmark_gfm.artifact("cmark-gfm-extensions"));
+    deps.install(exe_unit_tests);
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
 
@@ -207,3 +180,31 @@ fn runTests(
 fn makeTempFilePath(b: *std.Build, filename: []const u8) []const u8 {
     return b.pathJoin(&[_][]const u8{ b.makeTempPath(), filename });
 }
+
+const Deps = struct {
+    libcmark_gfm: *std.Build.Dependency,
+    mime: *std.Build.Dependency,
+
+    fn init(
+        b: *std.Build,
+        optimize: std.builtin.OptimizeMode,
+        target: std.Build.ResolvedTarget,
+    ) Deps {
+        return .{
+            .libcmark_gfm = b.dependency("libcmark-gfm", .{
+                .target = target,
+                .optimize = optimize,
+            }),
+            .mime = b.dependency("mime", .{
+                .target = target,
+                .optimize = optimize,
+            }),
+        };
+    }
+
+    fn install(self: Deps, step: *std.Build.Step.Compile) void {
+        step.linkLibrary(self.libcmark_gfm.artifact("cmark-gfm"));
+        step.linkLibrary(self.libcmark_gfm.artifact("cmark-gfm-extensions"));
+        step.root_module.addImport("mime", self.mime.module("mime"));
+    }
+};
