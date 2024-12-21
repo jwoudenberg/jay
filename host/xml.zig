@@ -199,3 +199,84 @@ fn index_of(haystack: []const []const u8, needle: []const u8) ?usize {
     }
     return null;
 }
+
+pub fn writeEscaped(writer: anytype, text: []const u8) !void {
+    var offset: usize = 0;
+    while (std.mem.indexOfAnyPos(u8, text, offset, "<&")) |index| {
+        try writer.writeAll(text[offset..index]);
+        switch (text[index]) {
+            '<' => try writer.writeAll("&lt;"),
+            '&' => try writer.writeAll("&amp;"),
+            else => return error.XmlUnexpectedEscapeChar,
+        }
+        offset = index + 1;
+    }
+    try writer.writeAll(text[offset..]);
+}
+
+test writeEscaped {
+    var buf = try std.BoundedArray(u8, 128).init(0);
+
+    try writeEscaped(testWriter(&buf), "text");
+    try std.testing.expectEqualStrings("text", buf.slice());
+
+    try writeEscaped(testWriter(&buf), "<text");
+    try std.testing.expectEqualStrings("&lt;text", buf.slice());
+
+    try writeEscaped(testWriter(&buf), "&text");
+    try std.testing.expectEqualStrings("&amp;text", buf.slice());
+
+    try writeEscaped(testWriter(&buf), "text<");
+    try std.testing.expectEqualStrings("text&lt;", buf.slice());
+
+    try writeEscaped(testWriter(&buf), "hi<&ho");
+    try std.testing.expectEqualStrings("hi&lt;&amp;ho", buf.slice());
+}
+
+// This function will write an html foo="bar" attribute.
+// The caller is expected to unsure no invalid characters are passed for the
+// key. The value argument is escaped.
+pub fn writeAttribute(writer: anytype, key: []const u8, value: []const u8) !void {
+    try writer.writeAll(key);
+    try writer.writeAll("=\"");
+    var offset: usize = 0;
+    while (std.mem.indexOfAnyPos(u8, value, offset, "<&\"")) |index| {
+        try writer.writeAll(value[offset..index]);
+        switch (value[index]) {
+            '<' => try writer.writeAll("&lt;"),
+            '&' => try writer.writeAll("&amp;"),
+            '"' => try writer.writeAll("&quot;"),
+            else => return error.XmlUnexpectedAttributeEscapeChar,
+        }
+        offset = index + 1;
+    }
+    try writer.writeAll(value[offset..]);
+    try writer.writeAll("\"");
+}
+
+test writeAttribute {
+    var buf = try std.BoundedArray(u8, 128).init(0);
+
+    try writeAttribute(testWriter(&buf), "greet", "hi");
+    try std.testing.expectEqualStrings("greet=\"hi\"", buf.slice());
+
+    try writeAttribute(testWriter(&buf), "greet", "<hi");
+    try std.testing.expectEqualStrings("greet=\"&lt;hi\"", buf.slice());
+
+    try writeAttribute(testWriter(&buf), "greet", "&hi");
+    try std.testing.expectEqualStrings("greet=\"&amp;hi\"", buf.slice());
+
+    try writeAttribute(testWriter(&buf), "greet", "\"hi");
+    try std.testing.expectEqualStrings("greet=\"&quot;hi\"", buf.slice());
+
+    try writeAttribute(testWriter(&buf), "greet", "hi<");
+    try std.testing.expectEqualStrings("greet=\"hi&lt;\"", buf.slice());
+
+    try writeAttribute(testWriter(&buf), "greet", "hi<&ho");
+    try std.testing.expectEqualStrings("greet=\"hi&lt;&amp;ho\"", buf.slice());
+}
+
+fn testWriter(buf: *std.BoundedArray(u8, 128)) std.BoundedArray(u8, 128).Writer {
+    buf.len = 0;
+    return buf.writer();
+}
