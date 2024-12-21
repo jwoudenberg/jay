@@ -10,6 +10,7 @@ comptime {
     _ = @import("generate.zig");
     _ = @import("glob.zig");
     _ = @import("main.zig");
+    _ = @import("markdown.zig");
     _ = @import("str.zig");
     _ = @import("platform.zig");
     _ = @import("scan.zig");

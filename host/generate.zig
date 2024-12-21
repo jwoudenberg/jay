@@ -5,10 +5,8 @@ const Site = @import("site.zig").Site;
 const RocList = @import("roc/list.zig").RocList;
 const RocStr = @import("roc/str.zig").RocStr;
 const platform = @import("platform.zig").platform;
+const markdown = @import("markdown.zig");
 const xml = @import("xml.zig");
-const c = @cImport({
-    @cInclude("cmark-gfm.h");
-});
 
 pub fn generate(site: *Site, page: *Site.Page) !void {
     const arena = site.tmp_arena_state.allocator();
@@ -62,16 +60,13 @@ pub fn generate(site: *Site, page: *Site.Page) !void {
                 page.source_path.bytes(),
                 1024 * 1024,
             ) catch |err| if (err == error.FileNotFound) return else return err;
-            const markdown = raw_source[page.frontmatter.len..];
-            const html = c.cmark_markdown_to_html(
-                @ptrCast(markdown),
-                markdown.len,
-                c.CMARK_OPT_DEFAULT | c.CMARK_OPT_UNSAFE,
-            ) orelse return error.OutOfMemory;
-            defer std.c.free(html);
-            const source = std.mem.span(html);
+            const markdown_bytes = raw_source[page.frontmatter.len..];
+            var html = try std.ArrayList(u8).initCapacity(arena, 1024 * 1024);
+            try markdown.toHtml(html.writer(), markdown_bytes);
+            const source = html.items;
             var replace_tags = try arena.alloc([]const u8, page.replace_tags.len);
             for (page.replace_tags, 0..) |tag, index| replace_tags[index] = tag.bytes();
+            // TODO: calculate tags while generating HTML from markdown.
             const tags = try xml.parse(arena, source, replace_tags);
 
             var output_writer = try OutputWriter.init(site, page);
