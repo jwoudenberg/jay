@@ -9,6 +9,7 @@ const fail = @import("fail.zig");
 const SourceDirIterator = @import("scan.zig").SourceDirIterator;
 const Watcher = @import("watch.zig").Watcher(Str, Str.bytes);
 const Str = @import("str.zig").Str;
+const glob = @import("glob.zig");
 
 pub fn bootstrap(
     gpa: std.mem.Allocator,
@@ -74,9 +75,10 @@ fn bootstrapRules(
             const source_path_bytes = source_path.bytes();
             pattern_loop: for (bootstrap_ignore_patterns) |bootstrap_ignore_pattern| {
                 const path = site.strs.get(source_path_bytes) orelse continue :pattern_loop;
-                if (path != bootstrap_ignore_pattern) continue :pattern_loop;
-                try ignore_patterns.append(path);
-                continue :paths_loop;
+                if (glob.match(bootstrap_ignore_pattern.bytes(), path.bytes())) {
+                    try ignore_patterns.append(path);
+                    continue :paths_loop;
+                }
             }
 
             const pattern_bytes = try patternForPath(tmp_arena, source_path_bytes);

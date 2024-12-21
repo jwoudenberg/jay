@@ -7,7 +7,6 @@ const Str = @import("str.zig").Str;
 const fail = @import("fail.zig");
 const Site = @import("site.zig").Site;
 const Watcher = @import("watch.zig").Watcher(Str, Str.bytes);
-const glob = @import("glob.zig");
 const serve = @import("serve.zig").serve;
 const platform = @import("platform.zig").platform;
 const bootstrap = @import("bootstrap.zig").bootstrap;
