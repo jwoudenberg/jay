@@ -11,10 +11,6 @@
             .url = "https://github.com/andrewrk/mime/archive/refs/tags/2.0.1.tar.gz",
             .hash = "12209083b0c43d0f68a26a48a7b26ad9f93b22c9cff710c78ddfebb47b89cfb9c7a4",
         },
-        .@"tree-sitter" = .{
-            .url = "https://github.com/jwoudenberg/tree-sitter/archive/refs/tags/0.24.5.tar.gz",
-            .hash = "122019b0a51bd86b5dcc58c519fbc8340d6a476e362eb820e460c8e5a21e2f74e89c",
-        },
     },
     .paths = .{
         "build.zig",
