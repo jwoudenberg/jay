@@ -9,6 +9,7 @@ comptime {
     _ = @import("frontmatter.zig");
     _ = @import("generate.zig");
     _ = @import("glob.zig");
+    _ = @import("highlight.zig");
     _ = @import("main.zig");
     _ = @import("markdown.zig");
     _ = @import("str.zig");

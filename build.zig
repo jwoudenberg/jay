@@ -63,6 +63,7 @@ fn buildDynhost(
     dynhost.bundle_compiler_rt = true;
     dynhost.root_module.stack_check = false;
     dynhost.linkLibC();
+    dynhost.linkLibCpp(); // used by tree-sitter-highlight
     dynhost.addObjectFile(libapp_so);
     deps.install(dynhost);
 
@@ -102,6 +103,7 @@ fn buildLegacy(
     libhost.rdynamic = true;
     libhost.bundle_compiler_rt = true;
     libhost.linkLibC(); // provides malloc/free/.. used in main.zig
+    libhost.linkLibCpp(); // used by tree-sitter-highlight
     deps.install(libhost);
 
     // We need the host's object files along with any C dependencies to be
@@ -168,6 +170,7 @@ fn runTests(
         .optimize = optimize,
     });
     exe_unit_tests.linkLibC(); // provides malloc/free/.. used in main.zig
+    exe_unit_tests.linkLibCpp(); // used by tree-sitter-highlight
     deps.install(exe_unit_tests);
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
@@ -189,16 +192,35 @@ const Deps = struct {
     tree_sitter: std.Build.LazyPath,
     mime: *std.Build.Dependency,
     libcmark_gfm: *std.Build.Dependency,
+    tree_sitter_grammars: [1]*std.Build.Step.Compile,
 
     fn init(
         b: *std.Build,
         optimize: std.builtin.OptimizeMode,
         target: std.Build.ResolvedTarget,
     ) !Deps {
+        const tree_sitter = try pathFromEnvVar(b, "TREE_SITTER_PATH");
+
+        const roc_grammar_path = try pathFromEnvVar(b, "TREE_SITTER_GRAMMAR_PATHS");
+        const roc_grammar = b.addStaticLibrary(.{
+            .name = "tree-sitter-roc",
+            .target = target,
+            .optimize = optimize,
+        });
+        roc_grammar.root_module.addCSourceFiles(.{
+            .root = roc_grammar_path,
+            .files = &.{ "src/parser.c", "src/scanner.c" },
+        });
+        roc_grammar.linkLibC();
+        roc_grammar.root_module.addIncludePath(tree_sitter.path(b, "include"));
+        roc_grammar.root_module.addIncludePath(roc_grammar_path.path(b, "src"));
+        roc_grammar.installHeader(roc_grammar_path.path(b, "include/tree-sitter-roc.h"), "tree-sitter-roc.h");
+
         return .{
             .b = b,
             .highlight = try pathFromEnvVar(b, "HIGHLIGHT_PATH"),
-            .tree_sitter = try pathFromEnvVar(b, "TREE_SITTER_PATH"),
+            .tree_sitter = tree_sitter,
+            .tree_sitter_grammars = .{roc_grammar},
             .mime = b.dependency("mime", .{
                 .target = target,
                 .optimize = optimize,
@@ -213,9 +235,17 @@ const Deps = struct {
     fn install(self: Deps, step: *std.Build.Step.Compile) void {
         step.linkLibrary(self.libcmark_gfm.artifact("cmark-gfm"));
         step.linkLibrary(self.libcmark_gfm.artifact("cmark-gfm-extensions"));
-        step.addIncludePath(self.highlight.path(self.b, "include"));
-        step.addIncludePath(self.tree_sitter.path(self.b, "include"));
         step.root_module.addImport("mime", self.mime.module("mime"));
+
+        step.addIncludePath(self.highlight.path(self.b, "include"));
+        step.addObjectFile(self.highlight.path(self.b, "lib/libtree_sitter_highlight.a"));
+
+        step.addIncludePath(self.tree_sitter.path(self.b, "include"));
+        step.addObjectFile(self.tree_sitter.path(self.b, "lib/libtree-sitter.a"));
+
+        for (self.tree_sitter_grammars) |grammar| {
+            step.linkLibrary(grammar);
+        }
     }
 };
 

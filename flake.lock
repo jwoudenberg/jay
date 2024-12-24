@@ -149,7 +149,8 @@
         "naersk": "naersk",
         "nixpkgs": "nixpkgs_2",
         "roc": "roc",
-        "tree-sitter": "tree-sitter"
+        "tree-sitter": "tree-sitter",
+        "tree-sitter-roc": "tree-sitter-roc"
       }
     },
     "rust-overlay": {
@@ -202,6 +203,22 @@
         "owner": "tree-sitter",
         "ref": "v0.24.5",
         "repo": "tree-sitter",
+        "type": "github"
+      }
+    },
+    "tree-sitter-roc": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1733882905,
+        "narHash": "sha256-v+yZ7ZIX83QWBqCVTjNmXv3bhtOjB3PY3SXLnt6l+Cw=",
+        "owner": "faldor20",
+        "repo": "tree-sitter-roc",
+        "rev": "7d29fc24b36119494b4dc3f3d967075e261706c1",
+        "type": "github"
+      },
+      "original": {
+        "owner": "faldor20",
+        "repo": "tree-sitter-roc",
         "type": "github"
       }
     }

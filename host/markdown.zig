@@ -2,8 +2,6 @@ const std = @import("std");
 const xml = @import("xml.zig");
 const c = @cImport({
     @cInclude("cmark-gfm.h");
-    @cInclude("tree_sitter/api.h");
-    @cInclude("tree_sitter/highlight.h");
 });
 
 pub fn toHtml(writer: anytype, markdown: []const u8) !void {

@@ -3,9 +3,6 @@
 +fix crash on encountering an unsupported filetype
 +fix web server not working with firefox
 
-+syntax update markdown parsing for access to raw source code
-+syntax link tree-sitter-highlighting
-+syntax build tree-sitter-highlighting and include in bundle
 +syntax vendor grammars
 +syntax generate highlighting tags in output html
 
