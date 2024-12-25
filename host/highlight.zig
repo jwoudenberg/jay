@@ -1,9 +1,5 @@
 const std = @import("std");
-const c = @cImport({
-    @cInclude("tree_sitter/api.h");
-    @cInclude("tree_sitter/highlight.h");
-    @cInclude("tree-sitter-roc.h");
-});
+const c = @import("c.zig");
 
 // This is a wrapper around tree-sitter-highlight, the companion object bundled
 // with tree-sitter for syntax highlighting.

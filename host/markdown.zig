@@ -1,8 +1,6 @@
 const std = @import("std");
 const xml = @import("xml.zig");
-const c = @cImport({
-    @cInclude("cmark-gfm.h");
-});
+const c = @import("c.zig");
 
 pub fn toHtml(writer: anytype, markdown: []const u8) !void {
     // TODO: do streaming parsing to avoid allocating the entire markdown doc.
