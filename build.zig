@@ -192,7 +192,7 @@ const Deps = struct {
     tree_sitter: std.Build.LazyPath,
     mime: *std.Build.Dependency,
     libcmark_gfm: *std.Build.Dependency,
-    tree_sitter_grammars: [1]*std.Build.Step.Compile,
+    tree_sitter_grammars: []*std.Build.Step.Compile,
 
     fn init(
         b: *std.Build,
@@ -201,26 +201,37 @@ const Deps = struct {
     ) !Deps {
         const tree_sitter = try pathFromEnvVar(b, "TREE_SITTER_PATH");
 
-        const roc_grammar_path = try pathFromEnvVar(b, "TREE_SITTER_GRAMMAR_PATHS");
-        const roc_grammar = b.addStaticLibrary(.{
-            .name = "tree-sitter-roc",
-            .target = target,
-            .optimize = optimize,
-        });
-        roc_grammar.root_module.addCSourceFiles(.{
-            .root = roc_grammar_path,
-            .files = &.{ "src/parser.c", "src/scanner.c" },
-        });
-        roc_grammar.linkLibC();
-        roc_grammar.root_module.addIncludePath(tree_sitter.path(b, "include"));
-        roc_grammar.root_module.addIncludePath(roc_grammar_path.path(b, "src"));
-        roc_grammar.installHeader(roc_grammar_path.path(b, "include/tree-sitter-roc.h"), "tree-sitter-roc.h");
+        const grammar_paths_env = try std.process.getEnvVarOwned(b.allocator, "TREE_SITTER_GRAMMAR_PATHS");
+        var grammar_paths_iter = std.mem.splitScalar(u8, grammar_paths_env, ':');
+        var grammar_paths = std.ArrayList(*std.Build.Step.Compile).init(b.allocator);
+        while (grammar_paths_iter.next()) |grammar_path_slice| {
+            const basename = std.fs.path.basename(grammar_path_slice);
+            const grammar_path: std.Build.LazyPath = .{ .cwd_relative = grammar_path_slice };
+            const name_start = 1 + std.mem.indexOfScalar(u8, basename, '-').?;
+            const name = basename[name_start..];
+            const grammar = b.addStaticLibrary(.{
+                .name = name,
+                .target = target,
+                .optimize = optimize,
+            });
+            grammar.root_module.addCSourceFile(.{ .file = grammar_path.path(b, "src/parser.c") });
+            if (try fileExists(grammar_path_slice, "src/scanner.c")) {
+                grammar.root_module.addCSourceFile(.{ .file = grammar_path.path(b, "src/scanner.c") });
+            }
+            grammar.linkLibC();
+            grammar.root_module.addIncludePath(tree_sitter.path(b, "include"));
+            grammar.root_module.addIncludePath(grammar_path.path(b, "src"));
+            const source_path = try std.fmt.allocPrint(b.allocator, "include/{s}.h", .{name});
+            const dest_path = try std.fmt.allocPrint(b.allocator, "{s}.h", .{name});
+            grammar.installHeader(grammar_path.path(b, source_path), dest_path);
+            try grammar_paths.append(grammar);
+        }
 
         return .{
             .b = b,
             .highlight = try pathFromEnvVar(b, "HIGHLIGHT_PATH"),
             .tree_sitter = tree_sitter,
-            .tree_sitter_grammars = .{roc_grammar},
+            .tree_sitter_grammars = grammar_paths.items,
             .mime = b.dependency("mime", .{
                 .target = target,
                 .optimize = optimize,
@@ -252,4 +263,13 @@ const Deps = struct {
 fn pathFromEnvVar(b: *std.Build, key: []const u8) !std.Build.LazyPath {
     const path: []const u8 = try std.process.getEnvVarOwned(b.allocator, key);
     return .{ .cwd_relative = path };
+}
+
+fn fileExists(dir_path: []const u8, sub_path: []const u8) !bool {
+    var dir = try std.fs.cwd().openDir(dir_path, .{});
+    defer dir.close();
+    dir.access(sub_path, .{}) catch |err| {
+        return if (err == error.FileNotFound) false else err;
+    };
+    return true;
 }

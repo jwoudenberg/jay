@@ -150,7 +150,8 @@
         "nixpkgs": "nixpkgs_2",
         "roc": "roc",
         "tree-sitter": "tree-sitter",
-        "tree-sitter-roc": "tree-sitter-roc"
+        "tree-sitter-roc": "tree-sitter-roc",
+        "tree-sitter-zig": "tree-sitter-zig"
       }
     },
     "rust-overlay": {
@@ -219,6 +220,22 @@
       "original": {
         "owner": "faldor20",
         "repo": "tree-sitter-roc",
+        "type": "github"
+      }
+    },
+    "tree-sitter-zig": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1734830668,
+        "narHash": "sha256-lDMmnmeGr2ti9W692ZqySWObzSUa9vY7f+oHZiE8N+U=",
+        "owner": "tree-sitter-grammars",
+        "repo": "tree-sitter-zig",
+        "rev": "b670c8df85a1568f498aa5c8cae42f51a90473c0",
+        "type": "github"
+      },
+      "original": {
+        "owner": "tree-sitter-grammars",
+        "repo": "tree-sitter-zig",
         "type": "github"
       }
     }

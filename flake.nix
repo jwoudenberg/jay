@@ -11,6 +11,8 @@
     # Tree-sitter grammars
     tree-sitter-roc.url = "github:faldor20/tree-sitter-roc";
     tree-sitter-roc.flake = false;
+    tree-sitter-zig.url = "github:tree-sitter-grammars/tree-sitter-zig";
+    tree-sitter-zig.flake = false;
   };
 
   outputs = inputs: {
@@ -23,10 +25,9 @@
         # tree-sitter grammars. Those are compiled as a shared library and omit
         # the header files, so not quite what this project needs.
         grammar =
-          input:
+          name: input:
           pkgs.stdenv.mkDerivation {
-            pname = "tree-sitter-roc";
-            version = "0.0.0";
+            name = name;
             src = "${input}";
 
             nativeBuildInputs = [
@@ -84,7 +85,10 @@
           '';
         };
 
-        tree-sitter-roc = grammar inputs.tree-sitter-roc;
+        grammars = [
+          (grammar "tree-sitter-roc" inputs.tree-sitter-roc)
+          (grammar "tree-sitter-zig" inputs.tree-sitter-zig)
+        ];
       in
       pkgs.mkShell {
         packages = [
@@ -99,7 +103,7 @@
         # Paths for build.zig to find these dependencies.
         TREE_SITTER_PATH = "${tree-sitter}";
         HIGHLIGHT_PATH = "${highlight}";
-        TREE_SITTER_GRAMMAR_PATHS = "${tree-sitter-roc}";
+        TREE_SITTER_GRAMMAR_PATHS = builtins.concatStringsSep ":" grammars;
       };
   };
 }
