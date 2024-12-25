@@ -188,6 +188,7 @@ fn makeTempFilePath(b: *std.Build, filename: []const u8) []const u8 {
 
 const Deps = struct {
     b: *std.Build,
+    options: *std.Build.Step.Options,
     highlight: std.Build.LazyPath,
     tree_sitter: std.Build.LazyPath,
     mime: *std.Build.Dependency,
@@ -203,7 +204,7 @@ const Deps = struct {
 
         const grammar_paths_env = try std.process.getEnvVarOwned(b.allocator, "TREE_SITTER_GRAMMAR_PATHS");
         var grammar_paths_iter = std.mem.splitScalar(u8, grammar_paths_env, ':');
-        var grammar_paths = std.ArrayList(*std.Build.Step.Compile).init(b.allocator);
+        var grammar_steps = std.ArrayList(*std.Build.Step.Compile).init(b.allocator);
         while (grammar_paths_iter.next()) |grammar_path_slice| {
             const basename = std.fs.path.basename(grammar_path_slice);
             const grammar_path: std.Build.LazyPath = .{ .cwd_relative = grammar_path_slice };
@@ -224,14 +225,18 @@ const Deps = struct {
             const source_path = try std.fmt.allocPrint(b.allocator, "include/{s}.h", .{name});
             const dest_path = try std.fmt.allocPrint(b.allocator, "{s}.h", .{name});
             grammar.installHeader(grammar_path.path(b, source_path), dest_path);
-            try grammar_paths.append(grammar);
+            try grammar_steps.append(grammar);
         }
+
+        var options = b.addOptions();
+        options.addOption([]const u8, "grammars", grammar_paths_env);
 
         return .{
             .b = b,
+            .options = options,
             .highlight = try pathFromEnvVar(b, "HIGHLIGHT_PATH"),
             .tree_sitter = tree_sitter,
-            .tree_sitter_grammars = grammar_paths.items,
+            .tree_sitter_grammars = grammar_steps.items,
             .mime = b.dependency("mime", .{
                 .target = target,
                 .optimize = optimize,
@@ -253,6 +258,8 @@ const Deps = struct {
 
         step.addIncludePath(self.tree_sitter.path(self.b, "include"));
         step.addObjectFile(self.tree_sitter.path(self.b, "lib/libtree-sitter.a"));
+
+        step.root_module.addOptions("zig_build_options", self.options);
 
         for (self.tree_sitter_grammars) |grammar| {
             step.linkLibrary(grammar);
