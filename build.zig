@@ -1,4 +1,5 @@
 const std = @import("std");
+const native_endian = @import("builtin").target.cpu.arch.endian();
 
 pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
@@ -202,16 +203,44 @@ const Deps = struct {
     ) !Deps {
         const tree_sitter = try pathFromEnvVar(b, "TREE_SITTER_PATH");
 
+        // We're passing information about available grammers into the Zig
+        // build as a couple of build options.
+        //
+        // The 'slices' build option contains one long slice containing
+        // null-terminated slices.
+        //
+        // The 'grammars' option contains u32 indexes into the slices array.
+        // Each grammar is represented by the following series of u32s.
+        // Ideally this would be a struct, but the current version of Zig has
+        // some code-generation troubles when attempting to pass complicated
+        // types as a build option.
+        //
+        //     [name][highlights][injections][locals]
+        //
+        //       name: The name of the language the grammar is for.
+        // highlights: The contents of queries/highlights.scm.
+        // injections: The contents of queries/injections.scm.
+        //     locals: The contents of queries/locals.scm.
+        //
+        var grammars_option = std.ArrayList(u32).init(b.allocator);
+
+        var slices_option = std.ArrayList(u8).init(b.allocator);
+        var slices_option_writer_state = std.io.countingWriter(slices_option.writer());
+        var slices_option_writer = slices_option_writer_state.writer();
+
         const grammar_paths_env = try std.process.getEnvVarOwned(b.allocator, "TREE_SITTER_GRAMMAR_PATHS");
         var grammar_paths_iter = std.mem.splitScalar(u8, grammar_paths_env, ':');
         var grammar_steps = std.ArrayList(*std.Build.Step.Compile).init(b.allocator);
+
         while (grammar_paths_iter.next()) |grammar_path_slice| {
             const basename = std.fs.path.basename(grammar_path_slice);
             const grammar_path: std.Build.LazyPath = .{ .cwd_relative = grammar_path_slice };
             const name_start = 1 + std.mem.indexOfScalar(u8, basename, '-').?;
-            const name = basename[name_start..];
+            const grammar_name = basename[name_start..];
+            const prefix = "tree-sitter-";
+            std.debug.assert(std.mem.startsWith(u8, grammar_name, prefix));
             const grammar = b.addStaticLibrary(.{
-                .name = name,
+                .name = grammar_name,
                 .target = target,
                 .optimize = optimize,
             });
@@ -222,14 +251,60 @@ const Deps = struct {
             grammar.linkLibC();
             grammar.root_module.addIncludePath(tree_sitter.path(b, "include"));
             grammar.root_module.addIncludePath(grammar_path.path(b, "src"));
-            const source_path = try std.fmt.allocPrint(b.allocator, "include/{s}.h", .{name});
-            const dest_path = try std.fmt.allocPrint(b.allocator, "{s}.h", .{name});
+            const source_path = try std.fmt.allocPrint(b.allocator, "include/{s}.h", .{grammar_name});
+            const dest_path = try std.fmt.allocPrint(b.allocator, "{s}.h", .{grammar_name});
             grammar.installHeader(grammar_path.path(b, source_path), dest_path);
             try grammar_steps.append(grammar);
+
+            const lang_name = grammar_name[prefix.len..];
+            const grammar_dir = try std.fs.cwd().openDir(grammar_path_slice, .{});
+            const highlights_query = try grammar_dir.readFileAlloc(
+                b.allocator,
+                "queries/highlights.scm",
+                1024 * 1024,
+            );
+            defer b.allocator.free(highlights_query);
+            const injections_query = grammar_dir.readFileAlloc(
+                b.allocator,
+                "queries/injections.scm",
+                1024 * 1024,
+            ) catch |err| blk: {
+                if (err == error.FileNotFound) break :blk "" else return err;
+            };
+            defer b.allocator.free(injections_query);
+            const locals_query = grammar_dir.readFileAlloc(
+                b.allocator,
+                "queries/locals.scm",
+                1024 * 1024,
+            ) catch |err| blk: {
+                if (err == error.FileNotFound) break :blk "" else return err;
+            };
+            defer b.allocator.free(locals_query);
+
+            // Write name
+            try grammars_option.append(@intCast(slices_option_writer_state.bytes_written));
+            try slices_option_writer.writeAll(lang_name);
+            try slices_option_writer.writeByte(0);
+
+            // Write queries/highlights.scm
+            try grammars_option.append(@intCast(slices_option_writer_state.bytes_written));
+            try slices_option_writer.writeAll(highlights_query);
+            try slices_option_writer.writeByte(0);
+
+            // Write queries/injections.scm
+            try grammars_option.append(@intCast(slices_option_writer_state.bytes_written));
+            try slices_option_writer.writeAll(injections_query);
+            try slices_option_writer.writeByte(0);
+
+            // Write queries/locals.scm
+            try grammars_option.append(@intCast(slices_option_writer_state.bytes_written));
+            try slices_option_writer.writeAll(locals_query);
+            try slices_option_writer.writeByte(0);
         }
 
         var options = b.addOptions();
-        options.addOption([]const u8, "grammars", grammar_paths_env);
+        options.addOption([]const u32, "grammars", try grammars_option.toOwnedSlice());
+        options.addOption([]const u8, "slices", try slices_option.toOwnedSlice());
 
         return .{
             .b = b,

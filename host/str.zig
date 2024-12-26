@@ -20,10 +20,14 @@ pub const Str = enum(usize) {
 
     pub const init_index = std.math.maxInt(usize);
 
+    pub fn len(self: Str) usize {
+        const res: *usize = @ptrFromInt(@intFromEnum(self));
+        return res.*;
+    }
+
     pub fn bytes(self: Str) []const u8 {
         const ptr: [*]u8 = @ptrFromInt(@intFromEnum(self));
-        const len: *usize = @ptrFromInt(@intFromEnum(self));
-        return (ptr + @sizeOf(usize))[0..len.*];
+        return (ptr + @sizeOf(usize))[0..self.len()];
     }
 
     pub fn index(self: Str) usize {
@@ -106,8 +110,11 @@ test "Str.Registry" {
     const str3 = try strs.intern("/other/file.txt");
 
     try std.testing.expectEqualStrings("/some/str/file.txt", str1.bytes());
+    try std.testing.expectEqual(18, str1.len());
     try std.testing.expectEqualStrings("/other/file.txt", str2.bytes());
+    try std.testing.expectEqual(15, str2.len());
     try std.testing.expectEqualStrings("/other/file.txt", str3.bytes());
+    try std.testing.expectEqual(15, str3.len());
 
     try std.testing.expectEqual(Str.init_index, str1.replaceIndex(4));
     try std.testing.expectEqual(4, str1.index());
