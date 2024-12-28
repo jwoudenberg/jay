@@ -5,18 +5,16 @@ const std = @import("std");
 const Str = @import("str.zig").Str;
 const Site = @import("site.zig").Site;
 
-pub fn serve(site: *Site) !void {
+pub fn spawnServer(site: *Site) !void {
     const loopback = try std.net.Ip4Address.parse("127.0.0.1", 0);
     const localhost = std.net.Address{ .in = loopback };
     var http_server = try localhost.listen(.{
         .reuse_port = true,
     });
-    defer http_server.deinit();
+    errdefer http_server.deinit();
 
     const addr = http_server.listen_address;
     const stdout = std.io.getStdOut().writer();
-    var source_root = try site.openSourceRoot(.{});
-    defer source_root.close();
     var buffer: ["http://localhost:00000".len]u8 = undefined;
     const url = try std.fmt.bufPrint(&buffer, "http://localhost:{}", .{addr.getPort()});
     try stdout.print("Listening on {s}\n", .{url});
@@ -25,8 +23,16 @@ pub fn serve(site: *Site) !void {
         try stdout.print("Failed to open browser: {s}\n", .{@errorName(err)});
     };
 
+    const thread = try std.Thread.spawn(.{}, serve, .{ site, http_server });
+    thread.detach();
+}
+
+fn serve(site: *Site, http_server_: std.net.Server) !void {
+    var http_server = http_server_;
+    defer http_server.deinit();
     while (true) {
         const connection = try http_server.accept();
+        errdefer connection.stream.close();
         const thread = try std.Thread.spawn(.{}, serveClient, .{ site, connection });
         thread.detach();
     }
@@ -43,17 +49,17 @@ pub fn serveClient(site: *Site, connection: std.net.Server.Connection) !void {
 }
 
 fn respond(site: *Site, request: *std.http.Server.Request) !void {
-    blk: {
-        const requested_path = site.strs.get(request.head.target[1..]) orelse break :blk;
-        const page = site.getPage(requested_path) orelse break :blk;
+    success: {
+        const requested_path = site.strs.get(request.head.target[1..]) orelse break :success;
+        const page = site.getPage(requested_path) orelse break :success;
         page.mutex.lock();
         defer page.mutex.unlock();
-        if (page.web_path != requested_path) break :blk;
+        if (page.web_path != requested_path) break :success;
         return servePage(page, .ok, request, site.output_root);
     }
-    blk: {
-        const custom_404 = site.strs.get("404") orelse break :blk;
-        const page = site.getPage(custom_404) orelse break :blk;
+    custom_404: {
+        const custom_404 = site.strs.get("404") orelse break :custom_404;
+        const page = site.getPage(custom_404) orelse break :custom_404;
         page.mutex.lock();
         defer page.mutex.unlock();
         return servePage(page, .not_found, request, site.output_root);

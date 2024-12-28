@@ -46,5 +46,6 @@
 +dev integration tests
 +dev changelog
 +dev use arena-allocator for roc runs
++dev find better solution than std.debug.print for error output
 
 +thinking supporting site hosted on subpath, do rss feeds require jay to know the domain?

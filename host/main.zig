@@ -7,7 +7,7 @@ const Str = @import("str.zig").Str;
 const fail = @import("fail.zig");
 const Site = @import("site.zig").Site;
 const Watcher = @import("watch.zig").Watcher(Str, Str.bytes);
-const serve = @import("serve.zig").serve;
+const spawnServer = @import("serve.zig").spawnServer;
 const platform = @import("platform.zig").platform;
 const bootstrap = @import("bootstrap.zig").bootstrap;
 const scanRecursively = @import("scan.zig").scanRecursively;
@@ -152,9 +152,7 @@ fn run_dev(gpa: std.mem.Allocator, argv0: []const u8) !void {
     defer watcher.deinit();
     var runLoop = try RunLoop.init(gpa, &site, &watcher, should_bootstrap);
 
-    // TODO: handle thread failures.
-    const thread = try std.Thread.spawn(.{}, serve, .{&site});
-    thread.detach();
+    try spawnServer(&site);
 
     var stdout = std.io.getStdOut().writer();
     while (true) try runLoop.loopOnce(&stdout);
