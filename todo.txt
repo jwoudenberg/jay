@@ -1,7 +1,6 @@
 +mvp write API documentation
 
 +fix crash on encountering an unsupported filetype
-+fix web server not working with firefox
 
 +test adding a file causes update of dependent
 +test deleting a file causes update of dependent

@@ -25,19 +25,20 @@ pub fn serve(site: *Site) !void {
         try stdout.print("Failed to open browser: {s}\n", .{@errorName(err)});
     };
 
-    var request_buffer: [8000]u8 = undefined;
-    accept: while (true) {
+    while (true) {
         const connection = try http_server.accept();
-        defer connection.stream.close();
-        var server = std.http.Server.init(connection, &request_buffer);
-        while (server.state == .ready) {
-            var request = server.receiveHead() catch |err| {
-                // https://ziglang.org/documentation/0.13.0/std/#std.http.Server.ReceiveHeadError
-                try stdout.print("Failed receiving request: {s}\n", .{@errorName(err)});
-                continue :accept;
-            };
-            try respond(site, &request);
-        }
+        const thread = try std.Thread.spawn(.{}, serveClient, .{ site, connection });
+        thread.detach();
+    }
+}
+
+pub fn serveClient(site: *Site, connection: std.net.Server.Connection) !void {
+    defer connection.stream.close();
+    var request_buffer: [8000]u8 = undefined;
+    var server = std.http.Server.init(connection, &request_buffer);
+    while (server.state == .ready) {
+        var request = server.receiveHead() catch return;
+        try respond(site, &request);
     }
 }
 
