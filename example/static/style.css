@@ -1,3 +1,99 @@
-h1 {
-  color: red;
+code {
+  /* Based on Dracula Theme: https://github.com/dracula/dracula-theme */
+  --hl-base00: #282A36;
+  --hl-base01: #44475A;
+  --hl-base02: #44475A;
+  --hl-base03: #6272A4;
+  --hl-base04: #F8F8F2;
+  --hl-base05: #F8F8F2;
+  --hl-base06: #F8F8F2;
+  --hl-base07: #F8F8F2;
+  --hl-base08: #F8F8F2;
+  --hl-base09: #BD93F9;
+  --hl-base0A: #8BE9FD;
+  --hl-base0B: #F1FA8C;
+  --hl-base0C: #FF5555;
+  --hl-base0D: #50FA7B;
+  --hl-base0E: #FF79C6;
+  --hl-base0F: #FF79C6;
+
+  display: block;
+  background: var(--hl-base00);
+  color: var(--hl-base05);
+}
+code .hl-attribute {
+  font-style: italic;
+}
+code .hl-comment {
+  color: var(--hl-base03);
+  font-style: italic;
+}
+code .hl-constant {
+  color: var(--hl-base09);
+}
+code .hl-constant.builtin {
+  color: var(--hl-base09);
+  font-weight: bold;
+}
+code .hl-constructor {
+}
+code .hl-embedded {
+}
+code .hl-function {
+  color: var(--hl-base0D);
+}
+code .hl-function.builtin {
+  color: var(--hl-base0D);
+  font-weight: bold;
+}
+code .hl-keyword {
+  color: var(--hl-base0E);
+}
+code .hl-module {
+}
+code .hl-number {
+  color: var(--hl-base09);
+  font-weight: bold;
+}
+code .hl-operator {
+  font-weight: bold;
+}
+code .hl-property {
+}
+code .hl-property.hl-builtin {
+  font-weight: bold;
+}
+code .hl-punctuation {
+}
+code .hl-punctuation.hl-bracket {
+}
+code .hl-punctuation.hl-delimiter {
+}
+code .hl-punctuation.hl-special {
+}
+code .hl-string {
+  color: var(--hl-base0B);
+}
+code .hl-string.hl-special {
+  color: var(--hl-base0C);
+}
+code .hl-tag {
+}
+code .hl-type {
+  color: var(--hl-base0A);
+}
+code .hl-type.hl-builtin {
+  color: var(--hl-base0A);
+  font-weight: bold;
+}
+code .hl-variable {
+  color: var(--hl-base08);
+}
+code .hl-variable.hl-builtin {
+  color: var(--hl-base08);
+  font-weight: bold;
+}
+code .hl-variable.hl-parameter {
+  color: var(--hl-base08);
+  text-decoration: underline;
 }

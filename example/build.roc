@@ -19,7 +19,9 @@ markdown =
 
 layout = \{ content, meta } ->
     Html.html {} [
-        Html.head {} [],
+        Html.head {} [
+            Html.link { rel: "stylesheet", href: "/static/style.css" } [],
+        ],
         Html.body {} [
             Html.h1 {} [Html.text meta.title],
             content,
