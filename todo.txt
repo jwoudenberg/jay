@@ -3,9 +3,6 @@
 +fix crash on encountering an unsupported filetype
 +fix web server not working with firefox
 
-+syntax strs.zig stores zero-terminated strings
-+syntax strs.zig has customizable payload size
-
 +test adding a file causes update of dependent
 +test deleting a file causes update of dependent
 

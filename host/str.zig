@@ -25,9 +25,9 @@ pub const Str = enum(usize) {
         return res.*;
     }
 
-    pub fn bytes(self: Str) []const u8 {
+    pub fn bytes(self: Str) [:0]const u8 {
         const ptr: [*]u8 = @ptrFromInt(@intFromEnum(self));
-        return (ptr + @sizeOf(usize))[0..self.len()];
+        return (ptr + @sizeOf(usize))[0..self.len() :0];
     }
 
     pub fn index(self: Str) usize {
@@ -87,12 +87,13 @@ pub const Str = enum(usize) {
             var buffer = try state.arena_state.allocator().alignedAlloc(
                 u8,
                 @sizeOf(usize),
-                2 * @sizeOf(usize) + slice.len,
+                2 * @sizeOf(usize) + slice.len + 1,
             );
             std.mem.writeInt(usize, buffer[0..@sizeOf(usize)], init_index, native_endian);
             std.mem.writeInt(usize, buffer[@sizeOf(usize) .. 2 * @sizeOf(usize)], slice.len, native_endian);
-            const interned_str = buffer[2 * @sizeOf(usize) ..];
+            const interned_str = buffer[2 * @sizeOf(usize) .. buffer.len - 1];
             @memcpy(interned_str, slice);
+            buffer[buffer.len - 1] = 0; // For convenience make all interned strings sentinel-terminated.
             const wrapped_str: Str = @enumFromInt(@intFromPtr(&buffer[@sizeOf(usize)]));
             get_or_put.key_ptr.* = interned_str;
             get_or_put.value_ptr.* = wrapped_str;

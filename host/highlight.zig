@@ -96,17 +96,6 @@ pub const Highlighter = struct {
             const end = std.mem.indexOfAnyPos(u8, highlights_query, start, " \t\n()") orelse highlights_query.len;
             offset = end;
 
-            buffer.len = 0;
-            try buf_writer.writeAll(highlights_query[1 + start .. end]);
-            try buf_writer.writeByte(0);
-            const name_z = buffer.constSlice()[0 .. buffer.len - 1 :0];
-            const getOrPut = names.getOrPutAssumeCapacity(name_z);
-            if (getOrPut.found_existing) continue;
-
-            const name_interned = try self.strs.intern(buffer.constSlice());
-            const name = name_interned.bytes()[0 .. buffer.len - 1 :0];
-            getOrPut.key_ptr.* = name;
-
             // For a name:
             //
             //     variable.parameter
@@ -115,16 +104,22 @@ pub const Highlighter = struct {
             //
             //     class="hl-variable hl-parameter"
             //
+            const name = try self.strs.intern(highlights_query[1 + start .. end]);
+            const name_bytes = name.bytes();
+            const getOrPut = names.getOrPutAssumeCapacity(name_bytes);
+            if (getOrPut.found_existing) continue;
+            getOrPut.key_ptr.* = name_bytes;
+
             buffer.len = 0;
             var name_offset: usize = 0;
             try buf_writer.writeAll("class=\"");
-            while (std.mem.indexOfScalarPos(u8, name, name_offset, '.')) |chunk_end| {
-                try buf_writer.print("hl-{s} ", .{name[name_offset..chunk_end]});
+            while (std.mem.indexOfScalarPos(u8, name_bytes, name_offset, '.')) |chunk_end| {
+                try buf_writer.print("hl-{s} ", .{name_bytes[name_offset..chunk_end]});
                 name_offset = chunk_end + 1;
             }
-            try buf_writer.print("hl-{s}\"\x00", .{name[name_offset..]});
+            try buf_writer.print("hl-{s}\"", .{name_bytes[name_offset..]});
             const attr_interned = try self.strs.intern(buffer.constSlice());
-            const attr = attr_interned.bytes()[0 .. attr_interned.len() - 1 :0];
+            const attr = attr_interned.bytes();
             getOrPut.value_ptr.* = attr;
         }
 
