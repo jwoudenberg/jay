@@ -5,7 +5,10 @@ const native_endian = @import("builtin").target.cpu.arch.endian();
 const Str = @import("str.zig").Str;
 
 const file_types = std.StaticStringMap(Lang).initComptime(.{
+    .{ "elm", .elm },
     .{ "roc", .roc },
+    .{ "rs", .rust },
+    .{ "rust", .rust },
     .{ "rvn", .roc },
     .{ "zig", .zig },
 });
@@ -52,7 +55,10 @@ pub const Highlighter = struct {
             self.ts_highlight_buffer,
             null,
         );
-        std.debug.assert(highlight_err == 0);
+        if (highlight_err != 0) {
+            std.debug.print("failed to run highlighting: {}\n", .{highlight_err});
+            return error.FailedToRunHighlighting;
+        }
 
         const output_len = c.ts_highlight_buffer_len(self.ts_highlight_buffer);
         const output_bytes = c.ts_highlight_buffer_content(self.ts_highlight_buffer);
@@ -128,12 +134,14 @@ pub const Highlighter = struct {
             @intCast(names.count()),
         ) orelse return error.FailedToCreateHighlighter;
 
+        const ts_language = grammar.ts_language() orelse return error.FailedToGetLanguage;
+
         const add_lang_err = c.ts_highlighter_add_language(
             grammar.ts_highlighter,
             grammar.name,
             grammar.name,
             null,
-            c.tree_sitter_roc(),
+            ts_language,
             highlights_query,
             injections_query,
             locals_query,
@@ -141,7 +149,10 @@ pub const Highlighter = struct {
             @intCast(injections_query.len),
             @intCast(locals_query.len),
         );
-        std.debug.assert(add_lang_err == 0);
+        if (add_lang_err != 0) {
+            std.debug.print("failed to add highlight language: {}\n", .{add_lang_err});
+            return error.FailedToAddHighlightLanguage;
+        }
 
         return grammar;
     }
@@ -150,12 +161,38 @@ pub const Highlighter = struct {
 test Highlighter {
     var highlighter = try Highlighter.init(std.testing.allocator);
     defer highlighter.deinit();
-    const input = "sum = 1 + 1";
-    const output = try highlighter.highlight("roc", input);
+
+    // Elm
+    try std.testing.expectEqualStrings(
+        \\<span class="hl-function hl-elm">sum</span> <span class="hl-keyword hl-operator hl-assignment hl-elm">=</span> <span class="hl-constant hl-numeric hl-elm">1</span> <span class="hl-keyword hl-operator hl-elm">+</span> <span class="hl-constant hl-numeric hl-elm">1</span>
+        \\
+    ,
+        (try highlighter.highlight("elm", "sum = 1 + 1")).?,
+    );
+
+    // Roc
     try std.testing.expectEqualStrings(
         \\<span class="hl-variable">sum</span> = <span class="hl-constant hl-numeric hl-integer">1</span> <span class="hl-operator">+</span> <span class="hl-constant hl-numeric hl-integer">1</span>
         \\
-    , output.?);
+    ,
+        (try highlighter.highlight("roc", "sum = 1 + 1")).?,
+    );
+
+    // Rust
+    try std.testing.expectEqualStrings(
+        \\<span class="hl-keyword">const</span> sum<span class="hl-punctuation hl-delimiter">:</span> <span class="hl-type hl-builtin">u32</span> = <span class="hl-constant hl-builtin">1</span> + <span class="hl-constant hl-builtin">1</span>
+        \\
+    ,
+        (try highlighter.highlight("rust", "const sum: u32 = 1 + 1")).?,
+    );
+
+    // Zig
+    try std.testing.expectEqualStrings(
+        \\<span class="hl-type hl-qualifier">const</span> <span class="hl-variable">sum</span> = <span class="hl-number">1</span> <span class="hl-operator">+</span> <span class="hl-number">1</span><span class="hl-punctuation hl-delimiter"></span>
+        \\
+    ,
+        (try highlighter.highlight("zig", "const sum = 1 + 1")).?,
+    );
 }
 
 const Grammar = struct {
@@ -164,6 +201,7 @@ const Grammar = struct {
     injections_query: [*:0]const u8 = "",
     locals_query: [*:0]const u8 = "",
     ts_highlighter: ?*c.TSHighlighter = null,
+    ts_language: *const fn () callconv(.C) ?*const c.TSLanguage,
 };
 
 pub const CStringContext = struct {
@@ -227,11 +265,18 @@ const grammars: []const Grammar = blk: {
         const locals_query: [*:0]const u8 = @ptrCast(slices[locals_start..]);
         offset += 1;
 
+        const ts_language_fn_name = std.fmt.comptimePrint(
+            "tree_sitter_{s}",
+            .{name},
+        );
+        const ts_language = @field(c, ts_language_fn_name);
+
         const grammar = Grammar{
             .name = name,
             .highlights_query = highlights_query,
             .injections_query = injections_query,
             .locals_query = locals_query,
+            .ts_language = &ts_language,
         };
         output[index] = grammar;
         index += 1;

@@ -150,7 +150,9 @@
         "nixpkgs": "nixpkgs_2",
         "roc": "roc",
         "tree-sitter": "tree-sitter",
+        "tree-sitter-elm": "tree-sitter-elm",
         "tree-sitter-roc": "tree-sitter-roc",
+        "tree-sitter-rust": "tree-sitter-rust",
         "tree-sitter-zig": "tree-sitter-zig"
       }
     },
@@ -207,6 +209,22 @@
         "type": "github"
       }
     },
+    "tree-sitter-elm": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1733956853,
+        "narHash": "sha256-LKXYQk7W/2KUvHGM7DV041IdR7IbpnaaTf3fxIzAlxo=",
+        "owner": "elm-tooling",
+        "repo": "tree-sitter-elm",
+        "rev": "e34bdc5c512918628b05b48e633f711123204e45",
+        "type": "github"
+      },
+      "original": {
+        "owner": "elm-tooling",
+        "repo": "tree-sitter-elm",
+        "type": "github"
+      }
+    },
     "tree-sitter-roc": {
       "flake": false,
       "locked": {
@@ -223,18 +241,35 @@
         "type": "github"
       }
     },
-    "tree-sitter-zig": {
+    "tree-sitter-rust": {
       "flake": false,
       "locked": {
-        "lastModified": 1734830668,
-        "narHash": "sha256-lDMmnmeGr2ti9W692ZqySWObzSUa9vY7f+oHZiE8N+U=",
-        "owner": "tree-sitter-grammars",
-        "repo": "tree-sitter-zig",
-        "rev": "b670c8df85a1568f498aa5c8cae42f51a90473c0",
+        "lastModified": 1732474138,
+        "narHash": "sha256-aT+tlrEKMgWqTEq/NHh8Vj92h6i1aU6uPikDyaP2vfc=",
+        "owner": "tree-sitter",
+        "repo": "tree-sitter-rust",
+        "rev": "cad8a206f2e4194676b9699f26f6560d07130d3f",
         "type": "github"
       },
       "original": {
-        "owner": "tree-sitter-grammars",
+        "owner": "tree-sitter",
+        "ref": "v0.23.2",
+        "repo": "tree-sitter-rust",
+        "type": "github"
+      }
+    },
+    "tree-sitter-zig": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1728795147,
+        "narHash": "sha256-o3RAbW8kLSfKxuQ/z7WDb5BaDVxZUG5oFutovRkErjk=",
+        "owner": "maxxnino",
+        "repo": "tree-sitter-zig",
+        "rev": "a80a6e9be81b33b182ce6305ae4ea28e29211bd5",
+        "type": "github"
+      },
+      "original": {
+        "owner": "maxxnino",
         "repo": "tree-sitter-zig",
         "type": "github"
       }

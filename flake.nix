@@ -9,9 +9,13 @@
     tree-sitter.flake = false;
 
     # Tree-sitter grammars
+    tree-sitter-elm.url = "github:elm-tooling/tree-sitter-elm";
+    tree-sitter-elm.flake = false;
     tree-sitter-roc.url = "github:faldor20/tree-sitter-roc";
     tree-sitter-roc.flake = false;
-    tree-sitter-zig.url = "github:tree-sitter-grammars/tree-sitter-zig";
+    tree-sitter-rust.url = "github:tree-sitter/tree-sitter-rust/v0.23.2";
+    tree-sitter-rust.flake = false;
+    tree-sitter-zig.url = "github:maxxnino/tree-sitter-zig";
     tree-sitter-zig.flake = false;
   };
 
@@ -26,8 +30,11 @@
         # the header files, so not quite what this project needs.
         grammar =
           name: input:
+          let
+            uppername = pkgs.lib.toUpper name;
+          in
           pkgs.stdenv.mkDerivation {
-            name = name;
+            name = "tree-sitter-${name}";
             src = "${input}";
 
             nativeBuildInputs = [
@@ -65,7 +72,24 @@
               fi
 
               mkdir -p $out/include
-              cp -r bindings/c/*.h $out/include
+              cat <<EOF > $out/include/tree-sitter-${name}.h
+              #ifndef TREE_SITTER_${uppername}_H_
+              #define TREE_SITTER_${uppername}_H_
+
+              typedef struct TSLanguage TSLanguage;
+
+              #ifdef __cplusplus
+              extern "C" {
+              #endif
+
+              const TSLanguage *tree_sitter_${name}(void);
+
+              #ifdef __cplusplus
+              }
+              #endif
+
+              #endif // TREE_SITTER_${uppername}_H_
+              EOF
             '';
           };
 
@@ -86,8 +110,10 @@
         };
 
         grammars = [
-          (grammar "tree-sitter-roc" inputs.tree-sitter-roc)
-          (grammar "tree-sitter-zig" inputs.tree-sitter-zig)
+          (grammar "elm" inputs.tree-sitter-elm)
+          (grammar "roc" inputs.tree-sitter-roc)
+          (grammar "rust" inputs.tree-sitter-rust)
+          (grammar "zig" inputs.tree-sitter-zig)
         ];
       in
       pkgs.mkShell {
