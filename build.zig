@@ -114,8 +114,9 @@ fn buildLegacy(
     const combined_archive = combine_archive.addOutputFileArg(makeTempFilePath(b, "combined.a"));
     combine_archive.addFileArg(deps.libcmark_gfm.artifact("cmark-gfm").getEmittedBin());
     combine_archive.addFileArg(deps.libcmark_gfm.artifact("cmark-gfm-extensions").getEmittedBin());
-    combine_archive.addFileArg(deps.tree_sitter.path(b, "lib/libtree-sitter.a"));
-    combine_archive.addFileArg(deps.highlight.path(b, "lib/libtree_sitter_highlight.a"));
+    for (deps.tree_sitter_grammars) |grammar| {
+        combine_archive.addFileArg(grammar.getEmittedBin());
+    }
     combine_archive.addFileArg(libhost.getEmittedBin());
 
     b.getInstallStep().dependOn(&b.addInstallFile(combined_archive, "platform/linux-x64.a").step);
