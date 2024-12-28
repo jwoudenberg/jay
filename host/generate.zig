@@ -8,7 +8,10 @@ const platform = @import("platform.zig").platform;
 const markdown = @import("markdown.zig");
 const xml = @import("xml.zig");
 
-pub fn generate(site: *Site, page: *Site.Page) !void {
+pub fn generate(
+    site: *Site,
+    page: *Site.Page,
+) !void {
     const arena = site.tmp_arena_state.allocator();
     switch (page.processing) {
         .none => {
@@ -62,7 +65,7 @@ pub fn generate(site: *Site, page: *Site.Page) !void {
             ) catch |err| if (err == error.FileNotFound) return else return err;
             const markdown_bytes = raw_source[page.frontmatter.len..];
             var html = try std.ArrayList(u8).initCapacity(arena, 1024 * 1024);
-            try markdown.toHtml(html.writer(), markdown_bytes);
+            try markdown.toHtml(&site.highlighter, html.writer(), markdown_bytes);
             const source = html.items;
             var replace_tags = try arena.alloc([]const u8, page.replace_tags.len);
             for (page.replace_tags, 0..) |tag, index| replace_tags[index] = tag.bytes();

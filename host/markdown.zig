@@ -1,8 +1,13 @@
 const std = @import("std");
 const xml = @import("xml.zig");
 const c = @import("c.zig");
+const Highlighter = @import("highlight.zig").Highlighter;
 
-pub fn toHtml(writer: anytype, markdown: []const u8) !void {
+pub fn toHtml(
+    highlighter: *Highlighter,
+    writer: anytype,
+    markdown: []const u8,
+) !void {
     // TODO: do streaming parsing to avoid allocating the entire markdown doc.
     const root_node = c.cmark_parse_document(
         @ptrCast(markdown),
@@ -18,11 +23,11 @@ pub fn toHtml(writer: anytype, markdown: []const u8) !void {
             c.CMARK_EVENT_DONE => break,
             c.CMARK_EVENT_ENTER => {
                 const node = c.cmark_iter_get_node(iter) orelse return error.CmarkNodeMissing;
-                try writeNode(writer, true, node);
+                try writeNode(highlighter, writer, true, node);
             },
             c.CMARK_EVENT_EXIT => {
                 const node = c.cmark_iter_get_node(iter) orelse return error.CmarkNodeMissing;
-                try writeNode(writer, false, node);
+                try writeNode(highlighter, writer, false, node);
             },
             else => |ev_type| {
                 std.debug.print("unexpected cmark event: {}\n", .{ev_type});
@@ -33,45 +38,47 @@ pub fn toHtml(writer: anytype, markdown: []const u8) !void {
 }
 
 test toHtml {
-    var buf = try std.BoundedArray(u8, 128).init(0);
+    var buf = try std.BoundedArray(u8, 1024).init(0);
+    var highlighter = try Highlighter.init(std.testing.allocator);
+    defer highlighter.deinit();
 
-    try toHtml(testWriter(&buf), "# header");
+    try toHtml(&highlighter, testWriter(&buf), "# header");
     try std.testing.expectEqualStrings(
         "<h1>header</h1>",
         buf.slice(),
     );
 
-    try toHtml(testWriter(&buf), "text & escaped");
+    try toHtml(&highlighter, testWriter(&buf), "text & escaped");
     try std.testing.expectEqualStrings(
         "<p>text &amp; escaped</p>",
         buf.slice(),
     );
 
-    try toHtml(testWriter(&buf), "**bold** and *cursed*");
+    try toHtml(&highlighter, testWriter(&buf), "**bold** and *cursed*");
     try std.testing.expectEqualStrings(
         "<p><strong>bold</strong> and <em>cursed</em></p>",
         buf.slice(),
     );
 
-    try toHtml(testWriter(&buf), "learn [Roc](roc-lang.org)!");
+    try toHtml(&highlighter, testWriter(&buf), "learn [Roc](roc-lang.org)!");
     try std.testing.expectEqualStrings(
         "<p>learn <a href=\"roc-lang.org\">Roc</a>!</p>",
         buf.slice(),
     );
 
-    try toHtml(testWriter(&buf), "look! ![eyes](eyes.png)");
+    try toHtml(&highlighter, testWriter(&buf), "look! ![eyes](eyes.png)");
     try std.testing.expectEqualStrings(
         "<p>look! <img src=\"eyes.png\" alt=\"eyes\" /></p>",
         buf.slice(),
     );
 
-    try toHtml(testWriter(&buf), "look! ![eyes](eyes.png \"stare\")");
+    try toHtml(&highlighter, testWriter(&buf), "look! ![eyes](eyes.png \"stare\")");
     try std.testing.expectEqualStrings(
         "<p>look! <img src=\"eyes.png\" alt=\"eyes\" title=\"stare\" /></p>",
         buf.slice(),
     );
 
-    try toHtml(testWriter(&buf),
+    try toHtml(&highlighter, testWriter(&buf),
         \\Groceries:
         \\- Broccoli
         \\- Cashews
@@ -81,7 +88,7 @@ test toHtml {
         buf.slice(),
     );
 
-    try toHtml(testWriter(&buf),
+    try toHtml(&highlighter, testWriter(&buf),
         \\Steps:
         \\1. Look
         \\1. Cross
@@ -91,7 +98,7 @@ test toHtml {
         buf.slice(),
     );
 
-    try toHtml(testWriter(&buf),
+    try toHtml(&highlighter, testWriter(&buf),
         \\Steps:
         \\
         \\2. Look
@@ -102,7 +109,7 @@ test toHtml {
         buf.slice(),
     );
 
-    try toHtml(testWriter(&buf),
+    try toHtml(&highlighter, testWriter(&buf),
         \\Groceries:
         \\
         \\- multiple
@@ -114,7 +121,7 @@ test toHtml {
         buf.slice(),
     );
 
-    try toHtml(testWriter(&buf),
+    try toHtml(&highlighter, testWriter(&buf),
         \\Before
         \\
         \\---
@@ -126,16 +133,16 @@ test toHtml {
         buf.slice(),
     );
 
-    try toHtml(testWriter(&buf), "Example: `1 + 1`");
+    try toHtml(&highlighter, testWriter(&buf), "Example: `1 + 1`");
     try std.testing.expectEqualStrings(
         "<p>Example: <code>1 + 1</code></p>",
         buf.slice(),
     );
 
-    try toHtml(testWriter(&buf),
+    try toHtml(&highlighter, testWriter(&buf),
         \\Example:
         \\
-        \\```roc
+        \\```
         \\1 + 1
         \\```
     );
@@ -144,7 +151,33 @@ test toHtml {
         buf.slice(),
     );
 
-    try toHtml(testWriter(&buf),
+    try toHtml(&highlighter, testWriter(&buf),
+        \\Example:
+        \\
+        \\```roc
+        \\1 + 1
+        \\```
+    );
+    try std.testing.expectEqualStrings(
+        \\<p>Example:</p><pre><code data-hl-lang="roc"><span class="hl-constant hl-numeric hl-integer">1</span> <span class="hl-operator">+</span> <span class="hl-constant hl-numeric hl-integer">1</span>
+        \\</code></pre>
+    ,
+        buf.slice(),
+    );
+
+    try toHtml(&highlighter, testWriter(&buf),
+        \\Example:
+        \\
+        \\```madeuplang
+        \\1 + 1
+        \\```
+    );
+    try std.testing.expectEqualStrings(
+        "<p>Example:</p><pre><code data-hl-lang=\"madeuplang\">1 + 1\n</code></pre>",
+        buf.slice(),
+    );
+
+    try toHtml(&highlighter, testWriter(&buf),
         \\Widget:
         \\
         \\<my-greeter>**hi**</my-greeter>
@@ -154,7 +187,7 @@ test toHtml {
         buf.slice(),
     );
 
-    try toHtml(testWriter(&buf),
+    try toHtml(&highlighter, testWriter(&buf),
         \\Html:
         \\
         \\<section><h2>Header!</h2></section>
@@ -174,6 +207,7 @@ fn writeCloseTag(writer: anytype, tag: []const u8) !void {
 }
 
 fn writeNode(
+    highlighter: *Highlighter,
     writer: anytype,
     comptime open: bool,
     node: *c.cmark_node,
@@ -214,9 +248,19 @@ fn writeNode(
             try writeTag(writer, "li");
         },
         c.CMARK_NODE_CODE_BLOCK => {
-            const code = c.cmark_node_get_literal(node);
-            try writer.writeAll("<pre><code>");
-            try writer.writeAll(std.mem.span(code));
+            const code = std.mem.span(c.cmark_node_get_literal(node));
+            const lang = std.mem.span(c.cmark_node_get_fence_info(node));
+            if (lang.len == 0) {
+                try writer.writeAll("<pre><code>");
+            } else {
+                try writer.print("<pre><code data-hl-lang=\"{s}\">", .{lang});
+            }
+
+            if (try highlighter.highlight(lang, code)) |highlighted| {
+                try writer.writeAll(highlighted);
+            } else {
+                try xml.writeEscaped(writer, code);
+            }
             try writer.writeAll("</code></pre>");
         },
         c.CMARK_NODE_HTML_BLOCK => {
@@ -310,7 +354,7 @@ fn writeNode(
     }
 }
 
-fn testWriter(buf: *std.BoundedArray(u8, 128)) std.BoundedArray(u8, 128).Writer {
+fn testWriter(buf: *std.BoundedArray(u8, 1024)) std.BoundedArray(u8, 1024).Writer {
     buf.len = 0;
     return buf.writer();
 }

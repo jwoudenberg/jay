@@ -10,6 +10,7 @@ const Str = @import("str.zig").Str;
 const BitSet = @import("bitset.zig").BitSet;
 const generate = @import("generate.zig").generate;
 const Error = @import("error.zig").Error;
+const Highlighter = @import("highlight.zig").Highlighter;
 
 pub const Site = struct {
     arena_state: std.heap.ArenaAllocator,
@@ -23,6 +24,7 @@ pub const Site = struct {
     patterns_matched_by_page: std.SegmentedList(BitSet, 0),
     pages_to_generate: BitSet,
     strs: Str.Registry,
+    highlighter: Highlighter,
     frontmatters: Frontmatters,
     errors: Error.Index,
 
@@ -57,6 +59,7 @@ pub const Site = struct {
             .ignore_patterns = ignore_patterns,
             .rules = &.{},
             .strs = strs,
+            .highlighter = try Highlighter.init(gpa),
             .list_patterns = std.SegmentedList(ListPattern, 0){},
             .patterns_matched_by_page = std.SegmentedList(BitSet, 0){},
             .pages_to_generate = BitSet{},
@@ -73,6 +76,7 @@ pub const Site = struct {
     }
 
     pub fn deinit(self: *Site) void {
+        self.highlighter.deinit();
         self.frontmatters.deinit();
         self.errors.deinit();
         self.arena_state.deinit();
