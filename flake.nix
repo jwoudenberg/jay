@@ -37,10 +37,7 @@
             name = "tree-sitter-${name}";
             src = "${input}";
 
-            nativeBuildInputs = [
-              pkgs.nodejs
-              pkgs.tree-sitter
-            ];
+            nativeBuildInputs = [ pkgs.nodejs ];
 
             CFLAGS = [
               "-Isrc"
@@ -52,7 +49,7 @@
             ];
 
             buildPhase = ''
-              tree-sitter generate
+              ${tree-sitter}/bin/tree-sitter generate
             '';
 
             installPhase = ''
