@@ -4,6 +4,12 @@ const zig_build_options = @import("zig_build_options");
 const native_endian = @import("builtin").target.cpu.arch.endian();
 const Str = @import("str.zig").Str;
 
+const file_types = std.StaticStringMap(Lang).initComptime(.{
+    .{ "roc", .roc },
+    .{ "rvn", .roc },
+    .{ "zig", .zig },
+});
+
 // This is a wrapper around tree-sitter-highlight, the companion object bundled
 // with tree-sitter for syntax highlighting.
 //
@@ -32,9 +38,10 @@ pub const Highlighter = struct {
 
     pub fn highlight(
         self: *Highlighter,
-        lang: Lang,
+        file_type: []const u8,
         input: []const u8,
-    ) ![]const u8 {
+    ) !?[]const u8 {
+        const lang = file_types.get(file_type) orelse return null;
         const grammar = try self.getGrammar(lang);
 
         const highlight_err = c.ts_highlighter_highlight(
@@ -144,11 +151,11 @@ test Highlighter {
     var highlighter = try Highlighter.init(std.testing.allocator);
     defer highlighter.deinit();
     const input = "sum = 1 + 1";
-    const output = try highlighter.highlight(.roc, input);
+    const output = try highlighter.highlight("roc", input);
     try std.testing.expectEqualStrings(
         \\<span class="hl-variable">sum</span> = <span class="hl-constant hl-numeric hl-integer">1</span> <span class="hl-operator">+</span> <span class="hl-constant hl-numeric hl-integer">1</span>
         \\
-    , output);
+    , output.?);
 }
 
 const Grammar = struct {
