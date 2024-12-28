@@ -27,24 +27,32 @@ pub fn spawnServer(site: *Site) !void {
     thread.detach();
 }
 
-fn serve(site: *Site, http_server_: std.net.Server) !void {
+fn serve(site: *Site, http_server_: std.net.Server) void {
     var http_server = http_server_;
     defer http_server.deinit();
     while (true) {
-        const connection = try http_server.accept();
+        const connection = http_server.accept() catch |err| {
+            std.debug.print("error while accepting connection from http client: {s}", .{@errorName(err)});
+            continue;
+        };
         errdefer connection.stream.close();
-        const thread = try std.Thread.spawn(.{}, serveClient, .{ site, connection });
+        const thread = std.Thread.spawn(.{}, serveClient, .{ site, connection }) catch |err| {
+            std.debug.print("error while while spawning thread for http client: {s}", .{@errorName(err)});
+            continue;
+        };
         thread.detach();
     }
 }
 
-pub fn serveClient(site: *Site, connection: std.net.Server.Connection) !void {
+pub fn serveClient(site: *Site, connection: std.net.Server.Connection) void {
     defer connection.stream.close();
     var request_buffer: [8000]u8 = undefined;
     var server = std.http.Server.init(connection, &request_buffer);
     while (server.state == .ready) {
         var request = server.receiveHead() catch return;
-        try respond(site, &request);
+        respond(site, &request) catch |err| {
+            std.debug.print("error while responding to http request: {s}", .{@errorName(err)});
+        };
     }
 }
 
