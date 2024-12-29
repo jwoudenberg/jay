@@ -1,4 +1,4 @@
-+mvp write API documentation
++mvp don't delete existing files when using 'output' command
 
 +fix crash on encountering an unsupported filetype
 

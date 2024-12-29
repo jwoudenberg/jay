@@ -1,9 +1,72 @@
+## Jay proccesses all the files in a project directory to build a site.
+##
+## For example, below on the left are the files of a simple blog.
+## On the right are the pages Jay will create for these files.
+##
+## ```
+## index.md           => /index.html
+## blog.md            => /blog.html
+## posts/
+##   a-great-day.md   => /posts/a-great-day.html
+## static/
+##   image.jpg        => /static/image.jpg
+##   style.css        => /static/style.css
+## README.md
+## build.roc
+## ```
+##
+## The `build.roc` file describes the processing Jay needs to perform for every
+## source file in the project. The following `build.roc` would produce the
+## example blog above:
+##
+## ```
+## #!/usr/bin/env roc
+## app [main] { pf: platform "github.com/jwoudenberg/roc-static-site" }
+##
+## main =
+##     { rules <-
+##         content:
+##             files ["*.md", "posts/*.md"]
+##             |> from_markdown,
+##         assets: files ["static/*"],
+##         ignore: ignore ["README.md"],
+##     }
+## ```
+##
+## Output files always have the same relative path as the source files they
+## were created from. A markdown source file `posts/2024/trying-jay.md` will
+## always produce an output path `/posts/2024/trying-jay.html`. Jay offers no
+## way to override this.
+##
+## Jay can generate an initial `build.roc` file for you. Find the details in
+## the documentation for the `bootstrap` function below.
+##
+## Once you have a `build.roc` file you can run it as a script:
+##
+## ```
+## ./build.roc --linker=legacy
+## ```
+##
+## This will start Jay in development mode. It will serve a preview of your
+## site and automatically rebuild it when you make changes to source files.
+##
+## To publish the site you can run a production build:
+##
+## ```
+## ./build.roc --linker=legacy prod output/
+## ```
+##
+## This command will generate site files in the `output/` directory, then exit.
+##
 module [
+    # page creation
     Pages,
     bootstrap,
-    rules,
     files,
     ignore,
+    rules,
+
+    # page rocessing
     from_markdown,
     wrap_html,
     replace_html,
@@ -17,13 +80,30 @@ import Host
 import Xml.Attributes
 import Rvn
 
-Markdown := {}
-
+## Instructions for building the pages of a website. This includes actual pages
+## such as an 'about' page or blog posts, but also assets like pictures and
+## stylesheets.
 Pages a : Pages.Internal.Pages a
+
+Markdown := {}
 
 Bootstrap := {}
 
-# Parse directory structure and rewrite build.roc with initial implementation.
+## Helper for generating a first Jay configuration, if you don't have one yet.
+## At the root of the project directory create a build.roc file, with these
+## contents:
+##
+## ```
+## #!/usr/bin/env roc
+## app [main] { pf: platform "github.com/jwoudenberg/roc-static-site" }
+##
+## import pf.Pages
+##
+## main = Pages.bootstrap
+## ```
+##
+## Now run the file with `./build.roc`. Jay will rewrite the file with an
+## initial configuration based on the source files in the project directory.
 bootstrap : Pages Bootstrap
 bootstrap = wrap [
     {
@@ -34,11 +114,40 @@ bootstrap = wrap [
     },
 ]
 
+## Combine rules for different types of pages into one value representing the
+## entire site.
+##
+## Typically sites call this once in the `main` function.
+##
+## ```
+## main =
+##     { rules <-
+##         assets: Pages.files ["assets/*"],
+##         ignore: Pages.ignore ["README.md"],
+##     }
+## ```
 rules : Pages a, Pages b, (a, b -> c) -> Pages c
 rules = \pages_a, pages_b, _ ->
     List.concat (unwrap pages_a) (unwrap pages_b)
     |> wrap
 
+## Takes a list of patterns, and adds all the source files matching one of the
+## patterns to your site as a page.
+##
+## ```
+## photos = files ["photos/*.jpg"]
+## ```
+##
+## Combine `files` with other functions for source files requiring processing:
+##
+## ```
+## posts =
+##     files ["posts/*.md"]
+##     |> from_markdown
+## ```
+##
+## Patterns may contain multiple '*' globs matching part of a filename.
+## '**' globs are not supported.
 files : List Str -> Pages type
 files = \patterns ->
     wrap [
@@ -50,6 +159,16 @@ files = \patterns ->
         },
     ]
 
+## Similar to `files`, `ignore` takes a list of patterns. Jay will ignore
+## source files matching these patterns and not generate output files for them.
+##
+## ```
+## main =
+##     { rules <-
+##         assets: Pages.files ["assets/*"],
+##         ignore: Pages.ignore ["README.md", ".git"],
+##     }
+## ```
 ignore : List Str -> Pages type
 ignore = \patterns ->
     wrap [
@@ -61,12 +180,86 @@ ignore = \patterns ->
         },
     ]
 
+## Process markdown source files, converting them to HTML files.
+##
+## ```
+## posts =
+##     files ["posts/*.md"]
+##     |> from_markdown
+## ```
+##
+## This function does not generate any `html` or `body` tags, only the
+## HTML tags for the markdown formatting in the source files. You can use
+## `wrap_html` to define a page layout.
+##
+##
+## ### Frontmatter
+##
+## You can optionally add a frontmatter at the start of your markdown files.
+##
+## ```
+## {
+##   title: "A blog post about Roc",
+## }
+## ```
+##
+## The frontmatter needs to be a Roc record. Record fields may contain
+## arbitrary Roc values. Check out the documentation for [Raven][1] to see
+## what's supported.
+##
+##
+## ### Syntax Highlighting
+##
+## Jay will add syntax highlighting for fenced code blocks. Jay currently has
+## support for the languages Roc, Elm, Rust, and Zig, with more planned. If you
+## need highlight support for a particular language, feel free to create an
+## issue on the Jay Github repo!
+##
+## Syntax highlighting will generate `span` elements in the generated code
+## blocks, which you can style using CSS. You can use [this example code][2] as
+## a starting point.
+##
+##
+## ### Github-Flavored Markdown
+##
+## Support for Github-Flavored Markdown extensions is planned, but not
+## currently implemented.
+##
+## [1]: https://github.com/jwoudenberg/rvn
+## [2]: https://github.com/jwoudenberg/jay/blob/main/example/static/style.css
 from_markdown : Pages Markdown -> Pages Html
 from_markdown = \pages ->
     unwrap pages
     |> List.map \page -> { page & processing: Markdown }
     |> wrap
 
+## Wrap additional HTML around each of a set of HTML pages.
+## This function is typically used to create page layouts.
+##
+## ```
+## posts =
+##     files ["posts/*.md"]
+##     |> from_markdown
+##     |> wrap_html layout
+##
+## layout = \{ content, path, meta } ->
+##     Html.html {} [
+##         Html.head {} [ Html.title {} [ Html.text meta.title ] ],
+##         Html.body {} [
+##             Html.h1 {} [ Html.text meta.title ],
+##             content,
+##         ]
+##     ]
+## ```
+##
+## `wrap_html` passes a record to the layout function with these fields:
+##
+## - `content`: The original HTML content of the page. Most of the time you
+##   will want to include this somewhere in the returned HTML.
+## - `path`: The path at which the current page will be served, for use in
+##   `href` attributes.
+## - `meta`: The frontmatter of markdown source files that included one,
+##    and `{}` for all other pages.
 wrap_html : Pages Html, ({ content : Html, path : Str, meta : {}a } => Html) -> Pages Html where a implements Decoding
 wrap_html = \pages, user_wrapper! ->
     wrapper! : Xml, Pages.Internal.HostPage => Xml
@@ -93,6 +286,11 @@ wrap_html = \pages, user_wrapper! ->
     }
     |> wrap
 
+## Get information about all pages matching a pattern. This is intended to be
+## used in combination with `wrap_html` or `replace_html`, for instance to
+## create a navigation element with links to other pages.
+##
+## See the documentation of `wrap_html` for an example of how to use this.
 list! : Str => List { path : Str, meta : {}a }
 list! = \pattern ->
     Host.list! pattern
@@ -106,7 +304,48 @@ list! = \pattern ->
                         Err _ -> crash "frontmatter bytes not UTF8-encoded"
         { path: result.path, meta }
 
-# Replace an HTML element in the passed in pages.
+## Replaces matching HTML tags with generated HTML content.
+## This is typically used to create widgets.
+##
+## Suppose you want to create an index page of your blog, showing all your
+## blog posts. Start by writting a markdown file:
+##
+## ```
+## # My Blog
+##
+## A list of all my previous posts!
+##
+## <list-of-posts/>
+## ```
+##
+## We can use `replace_html` to replace the custom `list-of-posts` HTML element
+## with a list of posts. Here's how that would look:
+##
+## ```
+## home_page =
+##     files ["index.md"]
+##     |> from_markdown
+##     |> replace_html "list-of-posts" list_of_posts!
+##
+## list_of_posts! = \_ ->
+##     posts = list! "posts/*"
+##     links = List.map posts \post ->
+##         Html.li {} [
+##             Html.a
+##                 { href: post.path }
+##                 [Html.text post.meta.title],
+##         ]
+##     Html.ul {} links
+## ```
+##
+## `replace_html` passes a record to the widget function with these fields:
+##
+## - `content`: The HTML content of the HTML tag that is replaced.
+## - `attrs`: The HTML attributes of the HTML tag that is replaced.
+## - `path`: The path at which the current page will be served, for use in
+##   `href` attributes.
+## - `meta`: The frontmatter of markdown source files that included one,
+##    and `{}` for all other pages.
 replace_html :
     Pages Html,
     Str,
