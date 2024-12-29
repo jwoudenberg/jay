@@ -1,3 +1,6 @@
+// Recusrively watching the project directory for changes in source files.
+// Currently only contains support for Linux using the fanotify API.
+
 const std = @import("std");
 const fanotify = @import("fanotify.zig");
 

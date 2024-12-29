@@ -1,8 +1,9 @@
-const std = @import("std");
-
 // Custom bitset that's different from the ones in Std in two ways:
 // - Backed by a SegmentedList to avoid re}llocations
 // - Automatically grows in size when setting/getting bit out of current bounds.
+
+const std = @import("std");
+
 pub const BitSet = struct {
     masks: std.SegmentedList(usize, 0) = std.SegmentedList(usize, 0){},
 

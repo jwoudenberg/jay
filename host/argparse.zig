@@ -1,3 +1,5 @@
+// Parsing command-line arguments Jay is started with.
+
 const std = @import("std");
 
 pub const Args = union(enum) {

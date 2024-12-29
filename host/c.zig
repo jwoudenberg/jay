@@ -1,3 +1,6 @@
+// Zig recommends including all C dependencies using a single @cImport(..)
+// call. This module makes that call, then exposes the result for other code.
+
 const std = @import("std");
 const zig_build_options = @import("zig_build_options");
 const native_endian = @import("builtin").target.cpu.arch.endian();

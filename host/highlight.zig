@@ -1,3 +1,6 @@
+// Integration with tree-sitter-highlight, for syntax highlighting in Markdown
+// code blocks.
+
 const std = @import("std");
 const c = @import("c.zig");
 const zig_build_options = @import("zig_build_options");

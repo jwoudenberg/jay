@@ -1,3 +1,5 @@
+// Markdown parsing using the github-flavored-markdown C-library.
+
 const std = @import("std");
 const xml = @import("xml.zig");
 const c = @import("c.zig");
