@@ -4,6 +4,7 @@ comptime {
     _ = @import("argparse.zig");
     _ = @import("bitset.zig");
     _ = @import("bootstrap.zig");
+    _ = @import("config.zig");
     _ = @import("error.zig");
     _ = @import("fail.zig");
     _ = @import("frontmatter.zig");
