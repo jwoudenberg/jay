@@ -1,6 +1,5 @@
 +fix crash on encountering an unsupported filetype
 +fix crash on metadata parsing error
-+fix crash on metadata containing a `[{}]` value
 +fix don't parse metadata for non-processed .md file
 
 +html support data attributes

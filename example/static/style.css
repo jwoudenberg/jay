@@ -1,4 +1,37 @@
-code {
+/*
+ * -- Quickest path to colors! --
+ *
+ * The quickest way to get started is to copy the CSS for the `pre > code {..}`
+ * selector below to your own project. You can then adjust the 16 CSS variables
+ * to your taste, or set them to one of the themes in the [base16][]
+ * specification.
+ *
+ * [base16]: https://github.com/chriskempson/base16
+ *
+ *
+ * -- Details on Jay and Syntax Highlighting --
+ *
+ * Jay uses [tree-sitter][] for syntax highlighting. Many programming language
+ * communities have produced tree-sitter grammars for their language, and Jay
+ * bundles a number of these. The grammars define what types of highlight
+ * groups exist for a language and what they are named.
+ *
+ * If a tree-sitter grammar marks a particular word in a code snippet as
+ * highlight group `foo`, then Jay adds a `span` element around it:
+ *
+ *     <pre><code data-hl-lang="some-lang">
+ *         ... <span class="hl-foo">word</span> ...
+ *     </code></pre>
+ *
+ * Language grammars are free to define their own highlight groups, but
+ * tree-sitter recommends they use a couple of common names where it makes
+ * sense. Below are CSS-selectors matching the classes on `span` elements for
+ * those common highlight names. By adding styles to these classes you should
+ * get some nice syntax highlighting going for a wide range of languages!
+ *
+ * [tree-sitter]: https://tree-sitter.github.io/tree-sitter/
+ */
+pre > code {
   /* Based on Dracula Theme: https://github.com/dracula/dracula-theme */
   --hl-base00: #282A36;
   --hl-base01: #44475A;
@@ -20,82 +53,84 @@ code {
   display: block;
   background: var(--hl-base00);
   color: var(--hl-base05);
-}
-code .hl-attribute {
-  font-style: italic;
-}
-code .hl-comment {
-  color: var(--hl-base03);
-  font-style: italic;
-}
-code .hl-constant {
-  color: var(--hl-base09);
-}
-code .hl-constant.builtin {
-  color: var(--hl-base09);
-  font-weight: bold;
-}
-code .hl-constructor {
-}
-code .hl-embedded {
-}
-code .hl-function {
-  color: var(--hl-base0D);
-}
-code .hl-function.builtin {
-  color: var(--hl-base0D);
-  font-weight: bold;
-}
-code .hl-keyword {
-  color: var(--hl-base0E);
-}
-code .hl-module {
-}
-code .hl-number {
-  color: var(--hl-base09);
-  font-weight: bold;
-}
-code .hl-operator {
-  font-weight: bold;
-}
-code .hl-property {
-}
-code .hl-property.hl-builtin {
-  font-weight: bold;
-}
-code .hl-punctuation {
-}
-code .hl-punctuation.hl-bracket {
-  color: var(--hl-base03);
-}
-code .hl-punctuation.hl-delimiter {
-  color: var(--hl-base03);
-}
-code .hl-punctuation.hl-special {
-}
-code .hl-string {
-  color: var(--hl-base0B);
-}
-code .hl-string.hl-special {
-  color: var(--hl-base0C);
-}
-code .hl-tag {
-}
-code .hl-type {
-  color: var(--hl-base0A);
-}
-code .hl-type.hl-builtin {
-  color: var(--hl-base0A);
-  font-weight: bold;
-}
-code .hl-variable {
-  color: var(--hl-base08);
-}
-code .hl-variable.hl-builtin {
-  color: var(--hl-base08);
-  font-weight: bold;
-}
-code .hl-variable.hl-parameter {
-  color: var(--hl-base08);
-  text-decoration: underline;
+
+  & .hl-attribute {
+    font-style: italic;
+  }
+  & .hl-comment {
+    color: var(--hl-base03);
+    font-style: italic;
+  }
+  & .hl-constant {
+    color: var(--hl-base09);
+  }
+  & .hl-constant.builtin {
+    color: var(--hl-base09);
+    font-weight: bold;
+  }
+  & .hl-constructor {
+  }
+  & .hl-embedded {
+  }
+  & .hl-function {
+    color: var(--hl-base0D);
+  }
+  & .hl-function.builtin {
+    color: var(--hl-base0D);
+    font-weight: bold;
+  }
+  & .hl-keyword {
+    color: var(--hl-base0E);
+  }
+  & .hl-module {
+  }
+  & .hl-number {
+    color: var(--hl-base09);
+    font-weight: bold;
+  }
+  & .hl-operator {
+    color: var(--hl-base0E);
+    font-weight: bold;
+  }
+  & .hl-property {
+  }
+  & .hl-property.hl-builtin {
+    font-weight: bold;
+  }
+  & .hl-punctuation {
+  }
+  & .hl-punctuation.hl-bracket {
+    color: var(--hl-base03);
+  }
+  & .hl-punctuation.hl-delimiter {
+    color: var(--hl-base03);
+  }
+  & .hl-punctuation.hl-special {
+  }
+  & .hl-string {
+    color: var(--hl-base0B);
+  }
+  & .hl-string.hl-special {
+    color: var(--hl-base0C);
+  }
+  & .hl-tag {
+  }
+  & .hl-type {
+    color: var(--hl-base0A);
+  }
+  & .hl-type.hl-builtin {
+    color: var(--hl-base0A);
+    font-weight: bold;
+  }
+  & .hl-variable {
+    color: var(--hl-base08);
+  }
+  & .hl-variable.hl-builtin {
+    color: var(--hl-base08);
+    font-weight: bold;
+  }
+  & .hl-variable.hl-parameter {
+    color: var(--hl-base08);
+    text-decoration: underline;
+  }
 }
