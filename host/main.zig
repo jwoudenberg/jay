@@ -743,6 +743,58 @@ test "change a file => jay updates the file and its dependents" {
     try expectFile(site.output_root, "file.html", "{ hi: 5 }\n");
 }
 
+test "add a file => jay updates dependents" {
+    var test_run_loop = try TestRunLoop.init(.{ .markdown_patterns = &.{"*.md"} });
+    defer test_run_loop.deinit();
+    const site = test_run_loop.test_site.site;
+
+    try site.source_root.writeFile(.{ .sub_path = "file.md", .data = "{}<dep pattern=\"dep*\"/>" });
+    try test_run_loop.loopOnce();
+    try expectFile(site.output_root, "file.html", "\n");
+
+    try site.source_root.writeFile(.{ .sub_path = "dep.md", .data = "{ hi: 5 }<xml/>" });
+    try test_run_loop.loopOnce();
+    try expectFile(site.output_root, "dep.html", "<xml/>\n");
+    try expectFile(site.output_root, "file.html", "{ hi: 5 }\n");
+}
+
+test "remove a file => jay updates its dependents" {
+    var test_run_loop = try TestRunLoop.init(.{ .markdown_patterns = &.{"*.md"} });
+    defer test_run_loop.deinit();
+    const site = test_run_loop.test_site.site;
+
+    try site.source_root.writeFile(.{ .sub_path = "dep.md", .data = "{ hi: 4 }<html/>" });
+    try site.source_root.writeFile(.{ .sub_path = "file.md", .data = "{}<dep pattern=\"dep*\"/>" });
+    try test_run_loop.loopOnce();
+    try expectFile(site.output_root, "dep.html", "<html/>\n");
+    try expectFile(site.output_root, "file.html", "{ hi: 4 }\n");
+
+    try site.source_root.deleteFile("dep.md");
+    try test_run_loop.loopOnce();
+    try expectNoFile(site.output_root, "dep.html");
+    try expectFile(site.output_root, "file.html", "\n");
+}
+
+test "add a markdown file with metadata => jay removes the metadata from output contents" {
+    var test_run_loop = try TestRunLoop.init(.{ .markdown_patterns = &.{"*.md"} });
+    defer test_run_loop.deinit();
+    const site = test_run_loop.test_site.site;
+
+    try site.source_root.writeFile(.{ .sub_path = "file.md", .data = "{ hi: 4 }<html/>" });
+    try test_run_loop.loopOnce();
+    try expectFile(site.output_root, "file.html", "<html/>\n");
+}
+
+test "add a non-markdown file starting with a '{' char => jay does not process the metadata" {
+    var test_run_loop = try TestRunLoop.init(.{ .static_patterns = &.{""} });
+    defer test_run_loop.deinit();
+    const site = test_run_loop.test_site.site;
+
+    try site.source_root.writeFile(.{ .sub_path = "file.md", .data = "{ <html/>" });
+    try test_run_loop.loopOnce();
+    try expectFile(site.output_root, "file.md", "{ <html/>");
+}
+
 test "change a file but not its metadata => jay updates the file" {
     var test_run_loop = try TestRunLoop.init(.{ .markdown_patterns = &.{"*.md"} });
     defer test_run_loop.deinit();

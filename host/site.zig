@@ -341,7 +341,11 @@ pub const Site = struct {
         }
 
         const arena = self.tmp_arena_state.allocator();
-        page.frontmatter = try self.frontmatters.read(arena, self.source_root, page.source_path);
+        if (page.processing == .markdown) {
+            page.frontmatter = try self.frontmatters.read(arena, self.source_root, page.source_path);
+        } else {
+            page.frontmatter = "{}";
+        }
 
         try generateDependents(self, page);
         try self.pages_to_generate.setValue(

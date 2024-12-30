@@ -1,7 +1,7 @@
 +fix crash on encountering an unsupported filetype
-
-+test adding a file causes update of dependent
-+test deleting a file causes update of dependent
++fix crash on metadata parsing error
++fix crash on metadata containing a `[{}]` value
++fix don't parse metadata for non-processed .md file
 
 +html support data attributes
 +html fix shadowed attributes
@@ -18,13 +18,13 @@
 
 +errors check xml pages have an xml-like extension
 +errors create user-friendlier error reports for unexpected errors
-+errors pass over editor errors
++errors make user errors look nicer
 +errors warn if site contains broken links
 +errors assert/convert html input files to ensure utf8 encoding of output
 +errors error output in the browser
 +errors collapse errors of the same type together
++errors show compilation errors when rebuilding build.roc
 
-+feature syntax highlighting in markdown snippets
 +feature github markdown extensions
 +feature support hashing static content paths (for cache-support)
 +feature support for non-markdown sources, via custom parser
