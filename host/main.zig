@@ -117,9 +117,13 @@ fn run_prod(gpa: std.mem.Allocator, argv0: []const u8, output_path: []const u8) 
     if (should_bootstrap) try bootstrap(gpa, &site);
     var watcher = NoOpWatcher{};
     try scanRecursively(gpa, &site, &watcher, try site.strs.intern(""));
-    try site.generatePages();
-    var stdout = std.io.getStdOut().writer();
-    try site.errors.print(&stdout);
+    if (site.errors.has_errors()) {
+        var stderr = std.io.getStdErr().writer();
+        try site.errors.print(&stderr);
+        std.process.exit(1);
+    } else {
+        try site.generatePages();
+    }
 }
 
 const NoOpWatcher = struct {

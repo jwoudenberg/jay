@@ -129,5 +129,9 @@ pub const Error = union(enum) {
                 try entry.value_ptr.print(writer);
             }
         }
+
+        pub fn has_errors(self: *Index) bool {
+            return self.errors.count() > 0;
+        }
     };
 };

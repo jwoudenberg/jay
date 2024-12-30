@@ -1,5 +1,3 @@
-+mvp show errors on 'output' command
-
 +fix crash on encountering an unsupported filetype
 
 +test adding a file causes update of dependent
