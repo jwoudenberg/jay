@@ -15,7 +15,7 @@
     tree-sitter-roc.flake = false;
     tree-sitter-rust.url = "github:tree-sitter/tree-sitter-rust/v0.23.2";
     tree-sitter-rust.flake = false;
-    tree-sitter-zig.url = "github:maxxnino/tree-sitter-zig";
+    tree-sitter-zig.url = "github:tree-sitter-grammars/tree-sitter-zig";
     tree-sitter-zig.flake = false;
   };
 

@@ -261,15 +261,15 @@
     "tree-sitter-zig": {
       "flake": false,
       "locked": {
-        "lastModified": 1728795147,
-        "narHash": "sha256-o3RAbW8kLSfKxuQ/z7WDb5BaDVxZUG5oFutovRkErjk=",
-        "owner": "maxxnino",
+        "lastModified": 1734830668,
+        "narHash": "sha256-lDMmnmeGr2ti9W692ZqySWObzSUa9vY7f+oHZiE8N+U=",
+        "owner": "tree-sitter-grammars",
         "repo": "tree-sitter-zig",
-        "rev": "a80a6e9be81b33b182ce6305ae4ea28e29211bd5",
+        "rev": "b670c8df85a1568f498aa5c8cae42f51a90473c0",
         "type": "github"
       },
       "original": {
-        "owner": "maxxnino",
+        "owner": "tree-sitter-grammars",
         "repo": "tree-sitter-zig",
         "type": "github"
       }
