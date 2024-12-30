@@ -40,67 +40,78 @@ pub fn toHtml(
 }
 
 test toHtml {
-    var buf = try std.BoundedArray(u8, 1024).init(0);
+    var buf: [1024]u8 = undefined;
+    var stream = std.io.FixedBufferStream([]u8){ .buffer = &buf, .pos = 0 };
+    var writer = stream.writer();
     var highlighter = try Highlighter.init(std.testing.allocator);
     defer highlighter.deinit();
 
-    try toHtml(&highlighter, testWriter(&buf), "# header");
+    stream.reset();
+    try toHtml(&highlighter, &writer, "# header");
     try std.testing.expectEqualStrings(
         "<h1>header</h1>",
-        buf.slice(),
+        stream.getWritten(),
     );
 
-    try toHtml(&highlighter, testWriter(&buf), "text & escaped");
+    stream.reset();
+    try toHtml(&highlighter, &writer, "text & escaped");
     try std.testing.expectEqualStrings(
         "<p>text &amp; escaped</p>",
-        buf.slice(),
+        stream.getWritten(),
     );
 
-    try toHtml(&highlighter, testWriter(&buf), "**bold** and *cursed*");
+    stream.reset();
+    try toHtml(&highlighter, &writer, "**bold** and *cursed*");
     try std.testing.expectEqualStrings(
         "<p><strong>bold</strong> and <em>cursed</em></p>",
-        buf.slice(),
+        stream.getWritten(),
     );
 
-    try toHtml(&highlighter, testWriter(&buf), "learn [Roc](roc-lang.org)!");
+    stream.reset();
+    try toHtml(&highlighter, &writer, "learn [Roc](roc-lang.org)!");
     try std.testing.expectEqualStrings(
         "<p>learn <a href=\"roc-lang.org\">Roc</a>!</p>",
-        buf.slice(),
+        stream.getWritten(),
     );
 
-    try toHtml(&highlighter, testWriter(&buf), "look! ![eyes](eyes.png)");
+    stream.reset();
+    try toHtml(&highlighter, &writer, "look! ![eyes](eyes.png)");
     try std.testing.expectEqualStrings(
         "<p>look! <img src=\"eyes.png\" alt=\"eyes\" /></p>",
-        buf.slice(),
+        stream.getWritten(),
     );
 
-    try toHtml(&highlighter, testWriter(&buf), "look! ![eyes](eyes.png \"stare\")");
+    stream.reset();
+    try toHtml(&highlighter, &writer, "look! ![eyes](eyes.png \"stare\")");
     try std.testing.expectEqualStrings(
         "<p>look! <img src=\"eyes.png\" alt=\"eyes\" title=\"stare\" /></p>",
-        buf.slice(),
+        stream.getWritten(),
     );
 
-    try toHtml(&highlighter, testWriter(&buf),
+    stream.reset();
+    try toHtml(&highlighter, &writer,
         \\Groceries:
         \\- Broccoli
         \\- Cashews
     );
     try std.testing.expectEqualStrings(
         "<p>Groceries:</p><ul><li>Broccoli</li><li>Cashews</li></ul>",
-        buf.slice(),
+        stream.getWritten(),
     );
 
-    try toHtml(&highlighter, testWriter(&buf),
+    stream.reset();
+    try toHtml(&highlighter, &writer,
         \\Steps:
         \\1. Look
         \\1. Cross
     );
     try std.testing.expectEqualStrings(
         "<p>Steps:</p><ol><li>Look</li><li>Cross</li></ol>",
-        buf.slice(),
+        stream.getWritten(),
     );
 
-    try toHtml(&highlighter, testWriter(&buf),
+    stream.reset();
+    try toHtml(&highlighter, &writer,
         \\Steps:
         \\
         \\2. Look
@@ -108,10 +119,11 @@ test toHtml {
     );
     try std.testing.expectEqualStrings(
         "<p>Steps:</p><ol start=\"2\"><li>Look</li><li>Cross</li></ol>",
-        buf.slice(),
+        stream.getWritten(),
     );
 
-    try toHtml(&highlighter, testWriter(&buf),
+    stream.reset();
+    try toHtml(&highlighter, &writer,
         \\Groceries:
         \\
         \\- multiple
@@ -120,10 +132,11 @@ test toHtml {
     );
     try std.testing.expectEqualStrings(
         "<p>Groceries:</p><ul><li><p>multiple</p><p>paragraphs</p></li></ul>",
-        buf.slice(),
+        stream.getWritten(),
     );
 
-    try toHtml(&highlighter, testWriter(&buf),
+    stream.reset();
+    try toHtml(&highlighter, &writer,
         \\Before
         \\
         \\---
@@ -132,16 +145,18 @@ test toHtml {
     );
     try std.testing.expectEqualStrings(
         "<p>Before</p><hr/><p>After</p>",
-        buf.slice(),
+        stream.getWritten(),
     );
 
-    try toHtml(&highlighter, testWriter(&buf), "Example: `1 + 1`");
+    stream.reset();
+    try toHtml(&highlighter, &writer, "Example: `1 + 1`");
     try std.testing.expectEqualStrings(
         "<p>Example: <code>1 + 1</code></p>",
-        buf.slice(),
+        stream.getWritten(),
     );
 
-    try toHtml(&highlighter, testWriter(&buf),
+    stream.reset();
+    try toHtml(&highlighter, &writer,
         \\Example:
         \\
         \\```
@@ -150,10 +165,11 @@ test toHtml {
     );
     try std.testing.expectEqualStrings(
         "<p>Example:</p><pre><code>1 + 1\n</code></pre>",
-        buf.slice(),
+        stream.getWritten(),
     );
 
-    try toHtml(&highlighter, testWriter(&buf),
+    stream.reset();
+    try toHtml(&highlighter, &writer,
         \\Example:
         \\
         \\```roc
@@ -164,10 +180,11 @@ test toHtml {
         \\<p>Example:</p><pre><code data-hl-lang="roc"><span class="hl-constant hl-numeric hl-integer">1</span> <span class="hl-operator">+</span> <span class="hl-constant hl-numeric hl-integer">1</span>
         \\</code></pre>
     ,
-        buf.slice(),
+        stream.getWritten(),
     );
 
-    try toHtml(&highlighter, testWriter(&buf),
+    stream.reset();
+    try toHtml(&highlighter, &writer,
         \\Example:
         \\
         \\```madeuplang
@@ -176,27 +193,29 @@ test toHtml {
     );
     try std.testing.expectEqualStrings(
         "<p>Example:</p><pre><code data-hl-lang=\"madeuplang\">1 + 1\n</code></pre>",
-        buf.slice(),
+        stream.getWritten(),
     );
 
-    try toHtml(&highlighter, testWriter(&buf),
+    stream.reset();
+    try toHtml(&highlighter, &writer,
         \\Widget:
         \\
         \\<my-greeter>**hi**</my-greeter>
     );
     try std.testing.expectEqualStrings(
         "<p>Widget:</p><p><my-greeter><strong>hi</strong></my-greeter></p>",
-        buf.slice(),
+        stream.getWritten(),
     );
 
-    try toHtml(&highlighter, testWriter(&buf),
+    stream.reset();
+    try toHtml(&highlighter, &writer,
         \\Html:
         \\
         \\<section><h2>Header!</h2></section>
     );
     try std.testing.expectEqualStrings(
         "<p>Html:</p><section><h2>Header!</h2></section>\n",
-        buf.slice(),
+        stream.getWritten(),
     );
 }
 
@@ -354,9 +373,4 @@ fn writeNode(
             return error.CmarkUnexpectedNodeType;
         },
     }
-}
-
-fn testWriter(buf: *std.BoundedArray(u8, 1024)) std.BoundedArray(u8, 1024).Writer {
-    buf.len = 0;
-    return buf.writer();
 }
