@@ -1,4 +1,3 @@
-+mvp don't delete existing files when using 'output' command
 +mvp show errors on 'output' command
 
 +fix crash on encountering an unsupported filetype

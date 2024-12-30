@@ -104,10 +104,12 @@ fn run() !void {
     }
 }
 
-fn run_prod(gpa: std.mem.Allocator, argv0: []const u8, output: []const u8) !void {
+fn run_prod(gpa: std.mem.Allocator, argv0: []const u8, output_path: []const u8) !void {
     var strs = try Str.Registry.init(gpa);
     defer strs.deinit();
-    var site = try createSite(gpa, argv0, output, strs);
+    var output_dir = try std.fs.cwd().makeOpenPath(output_path, .{});
+    defer output_dir.close();
+    var site = try createSite(gpa, argv0, output_dir, strs);
     defer site.source_root.close();
     defer site.output_root.close();
     defer site.deinit();
@@ -133,13 +135,15 @@ fn run_dev(gpa: std.mem.Allocator, argv0: []const u8) !void {
     var envMap = try EnvMap.init(gpa);
     defer envMap.deinit();
 
-    var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
-    const cwd = try std.posix.getcwd(&buf);
-    const roc_main_abs = try std.fs.path.resolve(gpa, &.{ cwd, argv0 });
-    defer gpa.free(roc_main_abs);
-
-    const cache_dir_path = try cacheDir(roc_main_abs, envMap, &buf);
-    var site = try createSite(gpa, argv0, cache_dir_path, strs);
+    var cache_dir = cache_dir: {
+        var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+        const cwd_path = try std.posix.getcwd(&buf);
+        const roc_main_abs = try std.fs.path.resolve(gpa, &.{ cwd_path, argv0 });
+        defer gpa.free(roc_main_abs);
+        break :cache_dir try cacheDir(std.fs.cwd(), roc_main_abs, envMap);
+    };
+    defer cache_dir.close();
+    var site = try createSite(gpa, argv0, cache_dir, strs);
     defer site.source_root.close();
     defer site.output_root.close();
     defer site.deinit();
@@ -199,7 +203,7 @@ const RunLoop = struct {
 fn createSite(
     gpa: std.mem.Allocator,
     argv0: []const u8,
-    output_dir_path: []const u8,
+    output_dir: std.fs.Dir,
     strs: Str.Registry,
 ) !Site {
     const source_root_path = std.fs.path.dirname(argv0) orelse "./";
@@ -210,62 +214,106 @@ fn createSite(
             .{ source_root_path, err },
         );
     };
-    const output_dir = try openOutputDir(output_dir_path);
-    return Site.init(gpa, source_root, roc_main, output_dir, strs);
+
+    // Produce output in a subdirectory with a somewhat unique name. This is a
+    // directory we can wipe without worrying we might `rm -r /`.
+    const output_root_dirname = "jay-output";
+    output_dir.deleteTree(output_root_dirname) catch |err| if (err != error.NotDir) return err;
+    const output_root = try output_dir.makeOpenPath(output_root_dirname, .{});
+
+    return Site.init(gpa, source_root, roc_main, output_root, strs);
 }
 
-fn cacheDir(roc_main_abs: []const u8, envMap: EnvMap, buf: []u8) ![]u8 {
+// Get a unique cache dir for each Jay-project.
+fn cacheDir(
+    cwd: std.fs.Dir,
+    roc_main_abs: []const u8,
+    envMap: EnvMap,
+) !std.fs.Dir {
+    var jay_cache_dir = blk: {
+        if (envMap.xdg_cache_home) |xdg_cache_home| {
+            var cache_dir = try cwd.makeOpenPath(xdg_cache_home, .{});
+            defer cache_dir.close();
+            break :blk try cache_dir.makeOpenPath("jay", .{});
+        }
+        if (envMap.home) |home_path| {
+            var home_dir = try cwd.makeOpenPath(home_path, .{});
+            defer home_dir.close();
+            break :blk try home_dir.makeOpenPath(".cache/jay", .{});
+        }
+        try fail.prettily(
+            \\I don't know where to generate temporary files.
+            \\
+            \\Normally I use $XDG_CACHE_HOME or $HOME to find a place where I can
+            \\create a cache directory, but both are unset.
+            \\
+        , .{});
+    };
+    defer jay_cache_dir.close();
+
     // In the hypothetical situation someone runs multiple instances of jay
-    // in parallel, I'd like those not to clobber each other's output
-    // directories. We create a subdirectory for each.
-    const output_dir = std.hash.murmur.Murmur3_32.hash(roc_main_abs);
-
-    if (envMap.xdg_cache_home) |xdg_cache_home| {
-        return std.fmt.bufPrint(buf, "{s}/jay/{}", .{ xdg_cache_home, output_dir });
-    }
-
-    if (envMap.home) |home_dir| {
-        return std.fmt.bufPrint(buf, "{s}/.cache/jay/{}", .{ home_dir, output_dir });
-    }
-
-    try fail.prettily(
-        \\I don't know where to generate temporary files.
-        \\
-        \\Normally I use $XDG_CACHE_HOME or $HOME to find a place where I can
-        \\create a cache directory, but both are unset.
-        \\
-    , .{});
+    // in parallel, they should not to clobber each other's output directories.
+    // We create a subdirectory for each.
+    var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+    const project_dir_hash = std.hash.Wyhash.hash(0, roc_main_abs);
+    const project_dir_name = try std.fmt.bufPrint(&buf, "{}", .{project_dir_hash});
+    return jay_cache_dir.makeOpenPath(project_dir_name, .{});
 }
 
 test cacheDir {
-    var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+    var tmpdir = std.testing.tmpDir(.{});
+    defer tmpdir.cleanup();
 
-    try std.testing.expectEqualStrings(
-        "/cache/jay/1289569777",
-        try cacheDir(
+    // Create directory in $XDG_CACHE_HOME if it is set.
+    {
+        var cache_dir = try cacheDir(
+            tmpdir.dir,
             "/project/build.roc",
-            .{ .xdg_cache_home = "/cache", .home = "/home" },
-            &buf,
-        ),
-    );
+            .{ .xdg_cache_home = "cache", .home = "home" },
+        );
+        defer cache_dir.close();
+        try cache_dir.writeFile(.{ .sub_path = "test", .data = "" });
+        try tmpdir.dir.access("cache/jay/11302437488756564278/test", .{});
+    }
 
-    try std.testing.expectEqualStrings(
-        "/home/.cache/jay/1289569777",
-        try cacheDir(
+    // Create directory in $HOME when it is set but $XDG_CACHE_HOME is not.
+    {
+        var cache_dir = try cacheDir(
+            tmpdir.dir,
             "/project/build.roc",
-            .{ .xdg_cache_home = null, .home = "/home" },
-            &buf,
-        ),
-    );
+            .{ .xdg_cache_home = null, .home = "home" },
+        );
+        defer cache_dir.close();
+        try cache_dir.writeFile(.{ .sub_path = "test", .data = "" });
+        try tmpdir.dir.access("home/.cache/jay/11302437488756564278/test", .{});
+    }
 
+    // Return error if $HOME and $XDG_CACHE_HOME are both unset.
     try std.testing.expectError(
         error.PrettyError,
         cacheDir(
+            tmpdir.dir,
             "/project/build.roc",
             .{ .xdg_cache_home = null, .home = null },
-            &buf,
         ),
     );
+
+    // Open existing directory if cache path already exists
+    {
+        const cache_path = "cache/jay/11302437488756564278";
+        var cache_dir_orig = try tmpdir.dir.makeOpenPath(cache_path, .{});
+        defer cache_dir_orig.close();
+
+        var cache_dir = try cacheDir(
+            tmpdir.dir,
+            "/project/build.roc",
+            .{ .xdg_cache_home = "cache", .home = null },
+        );
+        defer cache_dir.close();
+        try cache_dir.writeFile(.{ .sub_path = "test", .data = "" });
+
+        try cache_dir_orig.access("test", .{});
+    }
 }
 
 // Env variables relevant for this app.
@@ -288,13 +336,6 @@ const EnvMap = struct {
         self.arena_state.deinit();
     }
 };
-
-fn openOutputDir(path: []const u8) !std.fs.Dir {
-    const cwd = std.fs.cwd();
-    cwd.deleteTree(path) catch |err| if (err != error.NotDir) return err;
-    try cwd.makePath(path);
-    return cwd.openDir(path, .{});
-}
 
 fn getOptEnvVar(gpa: std.mem.Allocator, key: []const u8) !?[]const u8 {
     return std.process.getEnvVarOwned(gpa, key) catch |err| {
