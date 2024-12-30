@@ -5,12 +5,16 @@ const std = @import("std");
 const Str = @import("str.zig").Str;
 const Site = @import("site.zig").Site;
 
+const ports_to_try = [_]u16{ 8080, 0 };
+
 pub fn spawnServer(site: *Site) !void {
-    const loopback = try std.net.Ip4Address.parse("127.0.0.1", 0);
-    const localhost = std.net.Address{ .in = loopback };
-    var http_server = try localhost.listen(.{
-        .reuse_port = true,
-    });
+    var http_server = for (ports_to_try) |port| {
+        const loopback = try std.net.Ip4Address.parse("127.0.0.1", port);
+        const localhost = std.net.Address{ .in = loopback };
+        break localhost.listen(.{ .reuse_address = true }) catch |err| {
+            if (err == error.AddressInUse) continue else return err;
+        };
+    } else return error.NoFreePortForFileServer;
     errdefer http_server.deinit();
 
     const addr = http_server.listen_address;
