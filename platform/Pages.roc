@@ -203,13 +203,15 @@ ignore = \patterns ->
 ## ### Syntax Highlighting
 ##
 ## Jay will add syntax highlighting for fenced code blocks. Jay currently has
-## support for the languages Roc, Elm, Rust, and Zig, with more planned. If you
+## support for the languages the languages, with more planned. If you
 ## need highlight support for a particular language, feel free to create an
 ## issue on the Jay Github repo!
 ##
 ## Syntax highlighting will generate `span` elements in the generated code
 ## blocks, which you can style using CSS. You can use [this example code][2] as
 ## a starting point.
+##
+## Supported languages: Elm, Roc, Rust, Zig, Nix, Ruby, JSON, Haskell
 ##
 ##
 ## ### Github-Flavored Markdown

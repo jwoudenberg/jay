@@ -9,8 +9,14 @@ const Str = @import("str.zig").Str;
 
 const file_types = std.StaticStringMap(Lang).initComptime(.{
     .{ "elm", .elm },
+    .{ "haskell", .haskell },
+    .{ "hs", .haskell },
+    .{ "json", .json },
+    .{ "nix", .nix },
+    .{ "rb", .ruby },
     .{ "roc", .roc },
     .{ "rs", .rust },
+    .{ "ruby", .ruby },
     .{ "rust", .rust },
     .{ "rvn", .roc },
     .{ "zig", .zig },
@@ -168,12 +174,44 @@ test Highlighter {
         (try highlighter.highlight("elm", "sum = 1 + 1")).?,
     );
 
+    // Haskell
+    try std.testing.expectEqualStrings(
+        \\<span class="hl-type">sum</span> <span class="hl-operator">=</span> <span class="hl-number">1</span> <span class="hl-operator">+</span> <span class="hl-number">1</span>
+        \\
+    ,
+        (try highlighter.highlight("haskell", "sum = 1 + 1")).?,
+    );
+
+    // Json
+    try std.testing.expectEqualStrings(
+        \\{ <span class="hl-string">&quot;hi&quot;</span>: <span class="hl-number">4</span> }
+        \\
+    ,
+        (try highlighter.highlight("json", "{ \"hi\": 4 }")).?,
+    );
+
+    // Nix
+    try std.testing.expectEqualStrings(
+        \\<span class="hl-function"><span class="hl-variable">sum</span></span> <span class="hl-punctuation hl-delimiter">=</span> <span class="hl-number">1</span> <span class="hl-operator">+</span> <span class="hl-number">1</span>
+        \\
+    ,
+        (try highlighter.highlight("nix", "sum = 1 + 1")).?,
+    );
+
     // Roc
     try std.testing.expectEqualStrings(
         \\<span class="hl-variable">sum</span> = <span class="hl-constant hl-numeric hl-integer">1</span> <span class="hl-operator">+</span> <span class="hl-constant hl-numeric hl-integer">1</span>
         \\
     ,
         (try highlighter.highlight("roc", "sum = 1 + 1")).?,
+    );
+
+    // Ruby
+    try std.testing.expectEqualStrings(
+        \\<span class="hl-variable">sum</span> <span class="hl-operator">=</span> <span class="hl-number">1</span> + <span class="hl-number">1</span>
+        \\
+    ,
+        (try highlighter.highlight("ruby", "sum = 1 + 1")).?,
     );
 
     // Rust

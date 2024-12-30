@@ -8,6 +8,7 @@
 +html figure out what to do with httpEquiv
 +html custom attributes
 +html empty attributes
++html add option for including raw html (such as `&nbsp;`)
 
 +site for jay project with cookbooks
 +site example of gitbook-like site
@@ -23,6 +24,7 @@
 +errors error output in the browser
 +errors collapse errors of the same type together
 +errors show compilation errors when rebuilding build.roc
++errors show error when calling `crash` in Roc
 
 +feature github markdown extensions
 +feature support hashing static content paths (for cache-support)

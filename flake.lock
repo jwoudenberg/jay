@@ -151,7 +151,11 @@
         "roc": "roc",
         "tree-sitter": "tree-sitter",
         "tree-sitter-elm": "tree-sitter-elm",
+        "tree-sitter-haskell": "tree-sitter-haskell",
+        "tree-sitter-json": "tree-sitter-json",
+        "tree-sitter-nix": "tree-sitter-nix",
         "tree-sitter-roc": "tree-sitter-roc",
+        "tree-sitter-ruby": "tree-sitter-ruby",
         "tree-sitter-rust": "tree-sitter-rust",
         "tree-sitter-zig": "tree-sitter-zig"
       }
@@ -225,6 +229,54 @@
         "type": "github"
       }
     },
+    "tree-sitter-haskell": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1731307714,
+        "narHash": "sha256-9yerJ3Cxfr1dU0GmWN9LiLjmdBpP8+fE1hDmP1oQHLI=",
+        "owner": "tree-sitter",
+        "repo": "tree-sitter-haskell",
+        "rev": "2c2fcb22e3b939ed59ae8d6f10500c3213c68670",
+        "type": "github"
+      },
+      "original": {
+        "owner": "tree-sitter",
+        "repo": "tree-sitter-haskell",
+        "type": "github"
+      }
+    },
+    "tree-sitter-json": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1731893652,
+        "narHash": "sha256-hmcwRbTn0xPrV1OufXXq6VNhCopa1NQJhDsY3VSPovw=",
+        "owner": "tree-sitter",
+        "repo": "tree-sitter-json",
+        "rev": "4d770d31f732d50d3ec373865822fbe659e47c75",
+        "type": "github"
+      },
+      "original": {
+        "owner": "tree-sitter",
+        "repo": "tree-sitter-json",
+        "type": "github"
+      }
+    },
+    "tree-sitter-nix": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1732876307,
+        "narHash": "sha256-B2DSacC5+FwyBtzsKaelr19Osc93we7BSH8HG1uIksk=",
+        "owner": "nix-community",
+        "repo": "tree-sitter-nix",
+        "rev": "21897cc3dcd15325303e46b85295b743742af6ab",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "tree-sitter-nix",
+        "type": "github"
+      }
+    },
     "tree-sitter-roc": {
       "flake": false,
       "locked": {
@@ -238,6 +290,22 @@
       "original": {
         "owner": "faldor20",
         "repo": "tree-sitter-roc",
+        "type": "github"
+      }
+    },
+    "tree-sitter-ruby": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1731300497,
+        "narHash": "sha256-iu3MVJl0Qr/Ba+aOttmEzMiVY6EouGi5wGOx5ofROzA=",
+        "owner": "tree-sitter",
+        "repo": "tree-sitter-ruby",
+        "rev": "71bd32fb7607035768799732addba884a37a6210",
+        "type": "github"
+      },
+      "original": {
+        "owner": "tree-sitter",
+        "repo": "tree-sitter-ruby",
         "type": "github"
       }
     },

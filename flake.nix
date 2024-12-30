@@ -11,8 +11,16 @@
     # Tree-sitter grammars
     tree-sitter-elm.url = "github:elm-tooling/tree-sitter-elm";
     tree-sitter-elm.flake = false;
+    tree-sitter-haskell.url = "github:tree-sitter/tree-sitter-haskell";
+    tree-sitter-haskell.flake = false;
+    tree-sitter-json.url = "github:tree-sitter/tree-sitter-json";
+    tree-sitter-json.flake = false;
+    tree-sitter-nix.url = "github:nix-community/tree-sitter-nix";
+    tree-sitter-nix.flake = false;
     tree-sitter-roc.url = "github:faldor20/tree-sitter-roc";
     tree-sitter-roc.flake = false;
+    tree-sitter-ruby.url = "github:tree-sitter/tree-sitter-ruby";
+    tree-sitter-ruby.flake = false;
     tree-sitter-rust.url = "github:tree-sitter/tree-sitter-rust/v0.23.2";
     tree-sitter-rust.flake = false;
     tree-sitter-zig.url = "github:tree-sitter-grammars/tree-sitter-zig";
@@ -64,6 +72,11 @@
                 cp src/scanner.c $out/src/scanner.c
               fi
 
+              # tree-sitter-haskell has a unicode.h file.
+              if [[ -e src/unicode.h ]]; then
+                cp src/unicode.h $out/src/unicode.h
+              fi
+
               if [[ -d queries ]]; then
                 cp -r queries $out
               fi
@@ -108,7 +121,11 @@
 
         grammars = [
           (grammar "elm" inputs.tree-sitter-elm)
+          (grammar "haskell" inputs.tree-sitter-haskell)
+          (grammar "json" inputs.tree-sitter-json)
+          (grammar "nix" inputs.tree-sitter-nix)
           (grammar "roc" inputs.tree-sitter-roc)
+          (grammar "ruby" inputs.tree-sitter-ruby)
           (grammar "rust" inputs.tree-sitter-rust)
           (grammar "zig" inputs.tree-sitter-zig)
         ];
