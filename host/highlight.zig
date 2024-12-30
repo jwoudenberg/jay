@@ -186,7 +186,7 @@ test Highlighter {
 
     // Zig
     try std.testing.expectEqualStrings(
-        \\<span class="hl-type hl-qualifier">const</span> <span class="hl-variable">sum</span> = <span class="hl-number">1</span> <span class="hl-operator">+</span> <span class="hl-number">1</span><span class="hl-punctuation hl-delimiter"></span>
+        \\<span class="hl-keyword">const</span> <span class="hl-constant">sum</span> <span class="hl-operator">=</span> <span class="hl-number">1</span> <span class="hl-operator">+</span> <span class="hl-number">1</span><span class="hl-punctuation hl-delimiter"></span>
         \\
     ,
         (try highlighter.highlight("zig", "const sum = 1 + 1")).?,

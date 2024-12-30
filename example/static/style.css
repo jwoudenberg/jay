@@ -66,8 +66,10 @@ code .hl-property.hl-builtin {
 code .hl-punctuation {
 }
 code .hl-punctuation.hl-bracket {
+  color: var(--hl-base03);
 }
 code .hl-punctuation.hl-delimiter {
+  color: var(--hl-base03);
 }
 code .hl-punctuation.hl-special {
 }
