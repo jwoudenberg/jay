@@ -227,16 +227,15 @@ fn generateCodeForRules(site: *const Site, source_root: std.fs.Dir) !void {
         \\import pf.Pages
         \\import pf.Html
         \\
-        \\main =
-        \\    { Pages.rules <-
+        \\main = Pages.collect [
         \\
     );
     for (site.rules) |rule| {
         switch (rule.processing) {
-            .markdown => try writer.writeAll("        markdown,\n"),
+            .markdown => try writer.writeAll("    markdown,\n"),
             .none => {
                 try writer.writeAll(
-                    \\        Pages.files [
+                    \\    Pages.files [
                 );
                 for (rule.patterns, 0..) |pattern, index| {
                     try writer.print("\"{s}\"", .{pattern.bytes()});
@@ -253,7 +252,7 @@ fn generateCodeForRules(site: *const Site, source_root: std.fs.Dir) !void {
         }
     }
     try writer.writeAll(
-        \\        Pages.ignore [
+        \\    Pages.ignore [
     );
     const user_ignore_patterns = site.user_ignore_patterns();
     for (user_ignore_patterns, 0..) |pattern, index| {
@@ -267,7 +266,7 @@ fn generateCodeForRules(site: *const Site, source_root: std.fs.Dir) !void {
         \\
     );
     try writer.writeAll(
-        \\    }
+        \\]
         \\
         \\
     );
@@ -339,12 +338,11 @@ test generateCodeForRules {
         \\import pf.Pages
         \\import pf.Html
         \\
-        \\main =
-        \\    { Pages.rules <-
-        \\        markdown,
-        \\        Pages.files ["static"],
-        \\        Pages.ignore [".git", ".gitignore"],
-        \\    }
+        \\main = Pages.collect [
+        \\    markdown,
+        \\    Pages.files ["static"],
+        \\    Pages.ignore [".git", ".gitignore"],
+        \\]
         \\
         \\markdown =
         \\    Pages.files ["posts/*.md", "*.md"]

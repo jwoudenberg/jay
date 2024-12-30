@@ -23,14 +23,11 @@
 ## #!/usr/bin/env roc
 ## app [main] { pf: platform "github.com/jwoudenberg/roc-static-site" }
 ##
-## main =
-##     { rules <-
-##         content:
-##             files ["*.md", "posts/*.md"]
-##             |> from_markdown,
-##         assets: files ["static/*"],
-##         ignore: ignore ["README.md"],
-##     }
+## main = Pages.collect [
+##     files ["*.md", "posts/*.md"] |> from_markdown,
+##     files ["static/*"],
+##     ignore ["README.md"],
+## ]
 ## ```
 ##
 ## Output files always have the same relative path as the source files they
@@ -64,7 +61,7 @@ module [
     bootstrap,
     files,
     ignore,
-    rules,
+    collect,
 
     # page rocessing
     from_markdown,
@@ -85,10 +82,6 @@ import Rvn
 ## stylesheets.
 Pages a : Pages.Internal.Pages a
 
-Markdown := {}
-
-Bootstrap := {}
-
 ## Helper for generating a first Jay configuration, if you don't have one yet.
 ## At the root of the project directory create a build.roc file, with these
 ## contents:
@@ -104,7 +97,7 @@ Bootstrap := {}
 ##
 ## Now run the file with `./build.roc`. Jay will rewrite the file with an
 ## initial configuration based on the source files in the project directory.
-bootstrap : Pages Bootstrap
+bootstrap : Pages [Bootstrap]
 bootstrap = wrap [
     {
         patterns: [],
@@ -120,15 +113,15 @@ bootstrap = wrap [
 ## Typically sites call this once in the `main` function.
 ##
 ## ```
-## main =
-##     { rules <-
-##         assets: Pages.files ["assets/*"],
-##         ignore: Pages.ignore ["README.md"],
-##     }
+## main = collect [
+##     Pages.ignore ["README.md"],
+##     Pages.files ["assets/*"],
+## ]
+##
 ## ```
-rules : Pages a, Pages b, (a, b -> c) -> Pages c
-rules = \pages_a, pages_b, _ ->
-    List.concat (unwrap pages_a) (unwrap pages_b)
+collect : List (Pages a) -> Pages a
+collect = \rules ->
+    List.walk rules [] (\acc, rule -> List.concat acc (unwrap rule))
     |> wrap
 
 ## Takes a list of patterns, and adds all the source files matching one of the
@@ -163,13 +156,12 @@ files = \patterns ->
 ## source files matching these patterns and not generate output files for them.
 ##
 ## ```
-## main =
-##     { rules <-
-##         assets: Pages.files ["assets/*"],
-##         ignore: Pages.ignore ["README.md", ".git"],
-##     }
+## main = Pages.collect [
+##     Pages.files ["assets/*"],
+##     Pages.ignore ["README.md", ".git"],
+## ]
 ## ```
-ignore : List Str -> Pages type
+ignore : List Str -> Pages [Ignored]
 ignore = \patterns ->
     wrap [
         {
@@ -227,7 +219,7 @@ ignore = \patterns ->
 ##
 ## [1]: https://github.com/jwoudenberg/rvn
 ## [2]: https://github.com/jwoudenberg/jay/blob/main/example/static/style.css
-from_markdown : Pages Markdown -> Pages Html
+from_markdown : Pages [Markdown] -> Pages [Html]
 from_markdown = \pages ->
     unwrap pages
     |> List.map \page -> { page & processing: Markdown }
@@ -260,7 +252,7 @@ from_markdown = \pages ->
 ##   `href` attributes.
 ## - `meta`: The frontmatter of markdown source files that included one,
 ##    and `{}` for all other pages.
-wrap_html : Pages Html, ({ content : Html, path : Str, meta : {}a } => Html) -> Pages Html where a implements Decoding
+wrap_html : Pages [Html], ({ content : Html, path : Str, meta : {}a } => Html) -> Pages [Html] where a implements Decoding
 wrap_html = \pages, user_wrapper! ->
     wrapper! : Xml, Pages.Internal.HostPage => Xml
     wrapper! = \content, page ->
@@ -347,10 +339,10 @@ list! = \pattern ->
 ## - `meta`: The frontmatter of markdown source files that included one,
 ##    and `{}` for all other pages.
 replace_html :
-    Pages Html,
+    Pages [Html],
     Str,
     ({ content : Html, attrs : {}attrs, path : Str, meta : {}a } => Html)
-    -> Pages Html
+    -> Pages [Html]
 replace_html = \pages, name, user_replacer! ->
     replacer! : Xml, Pages.Internal.Page, Pages.Internal.HostPage => Xml
     replacer! = \original, page, host_page ->
