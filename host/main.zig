@@ -911,6 +911,78 @@ test "add an untypical file type => jay shows an error" {
     , test_run_loop.output());
 }
 
+test "add a symlink to a directory => jay treats it as a regular directory" {
+    var tmpdir = std.testing.tmpDir(.{});
+    defer tmpdir.cleanup();
+    try tmpdir.dir.writeFile(.{ .sub_path = "file.md", .data = "{}<html/>" });
+
+    var test_run_loop = try TestRunLoop.init(.{ .markdown_patterns = &.{"linked/*"} });
+    defer test_run_loop.deinit();
+    var site = test_run_loop.test_site.site;
+    const watcher = test_run_loop.watcher;
+
+    var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+    const link_target = try std.fmt.bufPrint(&buf, "../{s}", .{tmpdir.sub_path});
+    try site.source_root.symLink(link_target, "linked", .{ .is_directory = true });
+
+    // Perform the initial scan => Jay scans the symlinked directory
+    try scanRecursively(std.testing.allocator, site, watcher, "");
+    try test_run_loop.loopOnce();
+    try std.testing.expectEqualStrings("", test_run_loop.output());
+    try expectFile(site.output_root, "linked/file.html", "<html/>\n");
+
+    // Change source file in symlinked directory => Jay regenerates the output file
+    try tmpdir.dir.writeFile(.{ .sub_path = "file.md", .data = "{}<span/>" });
+    try test_run_loop.loopOnce();
+    try std.testing.expectEqualStrings("", test_run_loop.output());
+    try expectFile(site.output_root, "linked/file.html", "<span/>\n");
+
+    // Delete symlink => Jay deletes outputs for source files in symlinked directory
+    try site.source_root.deleteFile("linked");
+    try test_run_loop.loopOnce();
+    try std.testing.expectEqualStrings("", test_run_loop.output());
+    try expectNoFile(site.output_root, "linked/file.html");
+}
+
+test "add a symlink to a file => jay shows an error" {
+    var tmpdir = std.testing.tmpDir(.{});
+    defer tmpdir.cleanup();
+    try tmpdir.dir.writeFile(.{ .sub_path = "file.md", .data = "{}<html/>" });
+
+    var test_run_loop = try TestRunLoop.init(.{ .markdown_patterns = &.{"*"} });
+    defer test_run_loop.deinit();
+    var site = test_run_loop.test_site.site;
+    const watcher = test_run_loop.watcher;
+
+    var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+    const link_target = try std.fmt.bufPrint(&buf, "../{s}/file.md", .{tmpdir.sub_path});
+    try site.source_root.symLink(link_target, "file.md", .{ .is_directory = false });
+
+    // Perform the initial scan => Jay scans the symlinked file
+    try scanRecursively(std.testing.allocator, site, watcher, "");
+    try test_run_loop.loopOnce();
+    try std.testing.expectEqualStrings(
+        \\The following source file is a symlink:
+        \\
+        \\    file.md
+        \\
+        \\I don't currently support symlinks to individual source
+        \\files. If this functionality is important to you, I'd
+        \\love to hear about your usecase. Please create an issue
+        \\at https://github.com/jwoudenberg/jay. Thank you!
+        \\
+        \\Tip: I do support symlinks to directories, maybe that
+        \\     works as an alternative!
+        \\
+    , test_run_loop.output());
+    try expectNoFile(site.output_root, "file.html");
+
+    // Remove the symlink => Jay stops showing the error
+    try site.source_root.deleteFile("file.md");
+    try test_run_loop.loopOnce();
+    try std.testing.expectEqualStrings("", test_run_loop.output());
+}
+
 fn expectFile(dir: std.fs.Dir, path: []const u8, expected: []const u8) !void {
     var buf: [1024]u8 = undefined;
     const contents = try dir.readFile(path, &buf);
