@@ -20,9 +20,10 @@ pub fn build(b: *std.Build) !void {
     }
 
     buildDynhost(b, deps, optimize, target, roc_paths.items);
-    buildLegacy(b, deps, optimize, target);
+    const legacy = buildLegacy(b, deps, optimize, target);
     buildGlue(b);
-    buildDocs(b, roc_paths.items);
+    const docs = buildDocs(b, roc_paths.items);
+    buildSite(b, docs, legacy);
     runTests(b, deps, optimize, target);
 
     b.getInstallStep().dependOn(&b.addInstallDirectory(.{
@@ -92,7 +93,7 @@ fn buildLegacy(
     deps: Deps,
     optimize: std.builtin.OptimizeMode,
     target: std.Build.ResolvedTarget,
-) void {
+) *std.Build.Step {
     // Build the host again, this time as a library for static linking.
     const libhost = b.addStaticLibrary(.{
         .name = "jay",
@@ -120,6 +121,8 @@ fn buildLegacy(
     combine_archive.addFileArg(libhost.getEmittedBin());
 
     b.getInstallStep().dependOn(&b.addInstallFile(combined_archive, "platform/linux-x64.a").step);
+
+    return &combine_archive.step;
 }
 
 fn buildGlue(b: *std.Build) void {
@@ -142,8 +145,9 @@ fn buildGlue(b: *std.Build) void {
 fn buildDocs(
     b: *std.Build,
     roc_paths: []std.Build.LazyPath,
-) void {
+) *std.Build.Step {
     const docs = b.addSystemCommand(&.{"roc"});
+    docs.setEnvironmentVariable("ROC_DOCS_URL_ROOT", "/docs");
     docs.addArgs(&.{"docs"});
     docs.addFileArg(b.path("platform/main.roc"));
     docs.addArgs(&.{"--output"});
@@ -157,6 +161,26 @@ fn buildDocs(
         .source_dir = docs_dir,
         .install_dir = .{ .prefix = {} },
         .install_subdir = "docs",
+    }).step);
+
+    return &docs.step;
+}
+
+fn buildSite(
+    b: *std.Build,
+    docs: *std.Build.Step,
+    legacy: *std.Build.Step,
+) void {
+    const site = b.addSystemCommand(&.{"./site/build.roc"});
+    site.addArgs(&.{ "--linker=legacy", "prod" });
+    site.step.dependOn(docs);
+    site.step.dependOn(legacy);
+    const site_dir = site.addOutputDirectoryArg(b.makeTempPath());
+
+    b.getInstallStep().dependOn(&b.addInstallDirectory(.{
+        .source_dir = site_dir,
+        .install_dir = .{ .prefix = {} },
+        .install_subdir = "site",
     }).step);
 }
 

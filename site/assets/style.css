@@ -1,0 +1,177 @@
+body {
+  --max-width: 600px;
+  margin: 0;
+  font-family: 'IBM Plex Sans', sans-serif;
+}
+
+.header {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+  background: #cdf7e4;
+  padding: 0 calc(max(0.6em, (100vw - var(--max-width)) / 2));
+
+  & h1 {
+    font-size: 1.2rem;
+    font-weight: normal;
+
+    & a {
+      text-decoration: none;
+      color: inherit;
+    }
+  }
+
+  & nav ul {
+    display: flex;
+    flex-direction: row;
+    gap: 1.3em;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+
+    & a {
+      color: inherit;
+      text-decoration: none;
+    }
+  }
+}
+
+.home, .guide {
+  max-width: var(--max-width);
+  margin: auto;
+  padding: 0.6em;
+}
+
+.home {
+  & h1 {
+    text-align: center;
+    font-size: 6em;
+    font-weight: normal;
+    margin-top: 3rem;
+    margin-bottom: 2rem;
+    text-shadow: 2px 4px 0px #64e8ae;
+  }
+
+  & .description {
+    text-align: center;
+    margin-bottom: 4rem;
+  }
+
+  & ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 3rem;
+  }
+
+  & li {
+    max-width: 60%;
+    margin-bottom: 2em;
+    line-height: 1.5em;
+    text-decoration: underline;
+    text-decoration-thickness: 3px;
+    text-decoration-color: #64e8ae;
+
+    &:nth-child(even) {
+      align-self: end;
+      text-align: right;
+    }
+  }
+}
+
+pre > code {
+  --hl-base: #222222;
+  --hl-light: #7c9489;
+  --hl-accent: #388260;
+
+  display: block;
+  color: var(--hl-base);
+  font-size: 1.2em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+
+  & .hl-attribute {
+    font-style: italic;
+  }
+  & .hl-comment {
+    color: var(--hl-light);
+    font-style: italic;
+  }
+  & .hl-constant {
+    color: var(--hl-contant);
+  }
+  & .hl-constant.builtin {
+    color: var(--hl-contant);
+    font-weight: bold;
+  }
+  & .hl-constructor {
+  }
+  & .hl-embedded {
+  }
+  & .hl-function {
+    color: var(--hl-accent);
+  }
+  & .hl-function.builtin {
+    color: var(--hl-accent);
+    font-weight: bold;
+  }
+  & .hl-keyword {
+    color: var(--hl-accent);
+    font-weight: bold;
+  }
+  & .hl-module {
+    color: var(--hl-light);
+  }
+  & .hl-number {
+    color: var(--hl-contant);
+    font-weight: bold;
+  }
+  & .hl-operator {
+    color: var(--hl-accent);
+    font-weight: bold;
+  }
+  & .hl-property {
+  }
+  & .hl-property.hl-builtin {
+    font-weight: bold;
+  }
+  & .hl-punctuation {
+  }
+  & .hl-punctuation.hl-bracket {
+    color: var(--hl-light);
+  }
+  & .hl-punctuation.hl-delimiter {
+    color: var(--hl-light);
+  }
+  & .hl-punctuation.hl-special {
+  }
+  & .hl-string {
+    color: var(--hl-accent);
+  }
+  & .hl-string.hl-special {
+    color: var(--hl-accent);
+  }
+  & .hl-tag {
+  }
+  & .hl-type {
+    color: var(--hl-accent);
+  }
+  & .hl-type.hl-builtin {
+    color: var(--hl-accent);
+    font-weight: bold;
+  }
+  & .hl-variable {
+    color: var(--hl-base);
+  }
+  & .hl-variable.hl-builtin {
+    color: var(--hl-base);
+    font-weight: bold;
+  }
+  & .hl-variable.hl-parameter {
+    color: var(--hl-base);
+    text-decoration: underline;
+  }
+}
