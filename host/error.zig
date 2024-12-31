@@ -12,6 +12,7 @@ pub const Error = union(enum) {
         source_paths: [2]Str,
     },
     markdown_rule_applied_to_non_markdown_file: Str,
+    invalid_frontmatter: Str,
 
     fn print(self: Error, writer: anytype) !void {
         switch (self) {
@@ -85,6 +86,22 @@ pub const Error = union(enum) {
                     path,
                     path[0..(path.len - std.fs.path.extension(path).len)],
                 });
+            },
+            .invalid_frontmatter => {
+                const path = self.invalid_frontmatter.bytes();
+                try writer.print(
+                    \\There's something wrong with the frontmatter at the top
+                    \\of this markdown file:
+                    \\
+                    \\  {s}
+                    \\
+                    \\I believe there's a frontmatter there because the file
+                    \\starts with a '{{' character, but can't read the rest.
+                    \\I'm expecting a valid Roc record.
+                    \\
+                    \\Tip: Copy the frontmatter into `roc repl` to validate it.
+                    \\
+                , .{path});
             },
         }
     }

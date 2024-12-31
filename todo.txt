@@ -1,7 +1,3 @@
-+fix crash on encountering an unsupported filetype
-+fix crash on metadata parsing error
-+fix don't parse metadata for non-processed .md file
-
 +html support data attributes
 +html fix shadowed attributes
 +html add doctype

@@ -342,7 +342,18 @@ pub const Site = struct {
 
         const arena = self.tmp_arena_state.allocator();
         if (page.processing == .markdown) {
-            page.frontmatter = try self.frontmatters.read(arena, self.source_root, page.source_path);
+            if (try self.frontmatters.read(
+                arena,
+                self.source_root,
+                page.source_path,
+            )) |frontmatter| {
+                page.frontmatter = frontmatter;
+            } else {
+                return self.errors.add(
+                    source_path,
+                    Error{ .invalid_frontmatter = source_path },
+                );
+            }
         } else {
             page.frontmatter = "{}";
         }

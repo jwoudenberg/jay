@@ -35,7 +35,7 @@ pub const Frontmatters = struct {
         arena: std.mem.Allocator,
         source_root: std.fs.Dir,
         source_path: Str,
-    ) ![]const u8 {
+    ) !?[]const u8 {
         const bytes = try source_root.readFileAlloc(arena, source_path.bytes(), 1024 * 1024);
         var meta_bytes: []const u8 = "{}";
         if (firstNonWhitespaceByte(bytes) == '{') {
@@ -48,15 +48,7 @@ pub const Frontmatters = struct {
             meta_bytes = dropTrailingHeaderLines(bytes[0..meta_len]);
         }
 
-        if (meta_bytes.len == 0) {
-            try fail.prettily(
-                \\I ran into an error attempting to decode the metadata
-                \\at the start of this file:
-                \\
-                \\    {s}
-                \\
-            , .{source_path.bytes()});
-        }
+        if (meta_bytes.len == 0) return null;
 
         const get_or_put = try self.frontmatters.getOrPut(self.gpa, source_path.index());
         if (get_or_put.found_existing) {
@@ -90,13 +82,13 @@ pub const Frontmatters = struct {
         try tmpdir.dir.writeFile(.{ .sub_path = "file1.txt", .data = "no frontmatter" });
         try std.testing.expectEqualStrings(
             "{}",
-            (try frontmatters.read(arena, tmpdir.dir, try strs.intern("file1.txt"))),
+            (try frontmatters.read(arena, tmpdir.dir, try strs.intern("file1.txt"))).?,
         );
 
         try tmpdir.dir.writeFile(.{ .sub_path = "file2.txt", .data = "{ hi: 3 }\n# header" });
         try std.testing.expectEqualStrings(
             "{ hi: 3 }",
-            (try frontmatters.read(arena, tmpdir.dir, try strs.intern("file2.txt"))),
+            (try frontmatters.read(arena, tmpdir.dir, try strs.intern("file2.txt"))).?,
         );
     }
 };

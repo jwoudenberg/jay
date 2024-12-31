@@ -836,6 +836,28 @@ test "add a file for a markdown rule without a markdown extension => jay shows a
     try std.testing.expectEqualStrings("", test_run_loop.output());
 }
 
+test "markdown file contains invalid metadata => jay shows an error" {
+    var test_run_loop = try TestRunLoop.init(.{ .markdown_patterns = &.{"*.md"} });
+    defer test_run_loop.deinit();
+    var site = test_run_loop.test_site.site;
+
+    try site.source_root.writeFile(.{ .sub_path = "file.md", .data = "{<html/>" });
+    try test_run_loop.loopOnce();
+    try std.testing.expectEqualStrings(
+        \\There's something wrong with the frontmatter at the top
+        \\of this markdown file:
+        \\
+        \\  file.md
+        \\
+        \\I believe there's a frontmatter there because the file
+        \\starts with a '{' character, but can't read the rest.
+        \\I'm expecting a valid Roc record.
+        \\
+        \\Tip: Copy the frontmatter into `roc repl` to validate it.
+        \\
+    , test_run_loop.output());
+}
+
 fn expectFile(dir: std.fs.Dir, path: []const u8, expected: []const u8) !void {
     var buf: [1024]u8 = undefined;
     const contents = try dir.readFile(path, &buf);
