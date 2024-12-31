@@ -98,7 +98,8 @@ pub const Site = struct {
         const page = self.pages.at(page_index);
         page.mutex.lock();
         defer page.mutex.unlock();
-        return if (page.deleted) null else page;
+        const scanned = page.scanned orelse return null;
+        return if (scanned.deleted) null else page;
     }
 
     // Let scan know that a certain source path exists and might recently have
@@ -106,17 +107,22 @@ pub const Site = struct {
     pub fn touchPage(self: *Site, source_path: Str) !void {
         _ = self.tmp_arena_state.reset(.{ .retain_with_limit = 1024 * 1024 });
         const new = source_path.index() == Str.init_index or source_path != self.pages.at(source_path.index()).source_path;
-        const deleted = !try self.fileExists(source_path);
-        if (new and deleted) {
-            self.errors.remove(source_path);
-        } else if (new and !deleted) {
-            try self.initPage(source_path);
-        } else if (!new and deleted) {
-            try self.deletePage(source_path);
-        } else if (!new and !deleted) {
-            try self.scanPage(source_path);
-        } else {
-            unreachable;
+
+        if (self.source_root.statFile(source_path.bytes())) |stat| {
+            if (new) {
+                try self.initPage(source_path, stat);
+            } else {
+                try self.scanPage(source_path, stat);
+            }
+        } else |err| {
+            if (err != error.FileNotFound) return err;
+
+            // File was deleted
+            if (new) {
+                self.errors.remove(source_path);
+            } else {
+                try self.deletePage(source_path);
+            }
         }
     }
 
@@ -137,19 +143,18 @@ pub const Site = struct {
         const md_page = site.getPage(file_md).?;
         try std.testing.expectEqual(0, md_page.rule_index);
         try std.testing.expectEqualStrings("file.md", md_page.source_path.bytes());
-        try std.testing.expectEqualStrings("file.html", md_page.output_path.bytes());
-        try std.testing.expectEqualStrings("file", md_page.web_path.bytes());
+        try std.testing.expectEqualStrings("file.html", md_page.scanned.?.output_path.bytes());
+        try std.testing.expectEqualStrings("file", md_page.scanned.?.web_path.bytes());
         try std.testing.expectEqual(0, md_page.source_path.index());
-        try std.testing.expectEqual(0, md_page.web_path.index());
-        try std.testing.expectEqual(0, md_page.output_path.index());
+        try std.testing.expectEqual(0, md_page.scanned.?.web_path.index());
+        try std.testing.expectEqual(0, md_page.scanned.?.output_path.index());
         try std.testing.expectEqual(.markdown, md_page.processing);
         try std.testing.expectEqual(site.rules[0].replace_tags, md_page.replace_tags);
-        try std.testing.expectEqual(null, md_page.output_len);
+        try std.testing.expectEqual(null, md_page.generated);
         try std.testing.expect(site.pages_to_generate.isSet(md_page.source_path.index()));
-        try std.testing.expect(!md_page.deleted);
-        try std.testing.expectEqual(null, md_page.output_len);
-        try std.testing.expectEqualStrings("{}", md_page.frontmatter.?);
-        try std.testing.expectEqualStrings("text/html", @tagName(md_page.mime_type));
+        try std.testing.expect(!md_page.scanned.?.deleted);
+        try std.testing.expectEqualStrings("{}", md_page.scanned.?.frontmatter.?);
+        try std.testing.expectEqualStrings("text/html", @tagName(md_page.scanned.?.mime_type));
 
         // Insert static file.
         const style_css = try site.strs.intern("style.css");
@@ -157,34 +162,33 @@ pub const Site = struct {
         const css_page = site.getPage(style_css).?;
         try std.testing.expectEqual(1, css_page.rule_index);
         try std.testing.expectEqualStrings("style.css", css_page.source_path.bytes());
-        try std.testing.expectEqualStrings("style.css", css_page.output_path.bytes());
-        try std.testing.expectEqualStrings("style.css", css_page.web_path.bytes());
+        try std.testing.expectEqualStrings("style.css", css_page.scanned.?.output_path.bytes());
+        try std.testing.expectEqualStrings("style.css", css_page.scanned.?.web_path.bytes());
         try std.testing.expectEqual(1, css_page.source_path.index());
-        try std.testing.expectEqual(1, css_page.web_path.index());
-        try std.testing.expectEqual(1, css_page.output_path.index());
+        try std.testing.expectEqual(1, css_page.scanned.?.web_path.index());
+        try std.testing.expectEqual(1, css_page.scanned.?.output_path.index());
         try std.testing.expectEqual(.none, css_page.processing);
         try std.testing.expectEqual(site.rules[1].replace_tags, css_page.replace_tags);
-        try std.testing.expectEqual(null, css_page.output_len);
+        try std.testing.expectEqual(null, css_page.generated);
         try std.testing.expect(site.pages_to_generate.isSet(css_page.source_path.index()));
-        try std.testing.expect(!css_page.deleted);
-        try std.testing.expectEqual(null, css_page.output_len);
-        try std.testing.expectEqualStrings("{}", css_page.frontmatter.?);
-        try std.testing.expectEqualStrings("text/css", @tagName(css_page.mime_type));
+        try std.testing.expect(!css_page.scanned.?.deleted);
+        try std.testing.expectEqualStrings("{}", css_page.scanned.?.frontmatter.?);
+        try std.testing.expectEqualStrings("text/css", @tagName(css_page.scanned.?.mime_type));
 
         // Update markdown file making changes.
         site.pages_to_generate.unsetAll(); // clear flags
         try site.source_root.writeFile(.{ .sub_path = "file.md", .data = "{ hi: 4 }\x09" });
         try site.touchPage(file_md);
         try std.testing.expect(site.pages_to_generate.isSet(md_page.source_path.index()));
-        try std.testing.expect(!md_page.deleted);
-        try std.testing.expectEqualStrings("{ hi: 4 }", md_page.frontmatter.?);
+        try std.testing.expect(!md_page.scanned.?.deleted);
+        try std.testing.expectEqualStrings("{ hi: 4 }", md_page.scanned.?.frontmatter.?);
 
         // Delete markdown file
         site.pages_to_generate.unsetAll(); // clear flags
         try site.source_root.deleteFile("file.md");
         try site.touchPage(file_md);
         try std.testing.expect(!site.pages_to_generate.isSet(md_page.source_path.index()));
-        try std.testing.expect(md_page.deleted);
+        try std.testing.expect(md_page.scanned.?.deleted);
         try std.testing.expectEqual(null, site.getPage(file_md));
         try std.testing.expectEqual(Str.init_index, (try site.strs.intern("file.html")).index());
         try std.testing.expectEqual(Str.init_index, (try site.strs.intern("file")).index());
@@ -194,10 +198,10 @@ pub const Site = struct {
         try site.source_root.writeFile(.{ .sub_path = "file.md", .data = "{}\x02" });
         try site.touchPage(file_md);
         try std.testing.expect(site.pages_to_generate.isSet(md_page.source_path.index()));
-        try std.testing.expect(!md_page.deleted);
-        try std.testing.expectEqual(null, md_page.output_len);
-        try std.testing.expectEqualStrings("{}", md_page.frontmatter.?);
-        try std.testing.expectEqualStrings("text/html", @tagName(md_page.mime_type));
+        try std.testing.expect(!md_page.scanned.?.deleted);
+        try std.testing.expectEqual(null, md_page.generated);
+        try std.testing.expectEqualStrings("{}", md_page.scanned.?.frontmatter.?);
+        try std.testing.expectEqualStrings("text/html", @tagName(md_page.scanned.?.mime_type));
     }
 
     // Perform page generations in a loop, until none are left to-do. We first
@@ -229,14 +233,7 @@ pub const Site = struct {
         }
     }
 
-    fn fileExists(self: *Site, source_path: Str) !bool {
-        _ = self.source_root.statFile(source_path.bytes()) catch |err| {
-            if (err == error.FileNotFound) return false else return err;
-        };
-        return true;
-    }
-
-    fn initPage(self: *Site, source_path: Str) !void {
+    fn initPage(self: *Site, source_path: Str, stat: std.fs.File.Stat) !void {
         // Find matching rule.
         const rule_index = try self.ruleForPath(source_path) orelse return;
         const rule = self.rules[rule_index];
@@ -248,14 +245,8 @@ pub const Site = struct {
             .rule_index = rule_index,
             .processing = rule.processing,
             .replace_tags = rule.replace_tags,
-
-            // Set when we first scan the page.
-            .output_len = null,
-            .mime_type = undefined,
-            .output_path = undefined,
-            .web_path = undefined,
-            .deleted = undefined,
-            .frontmatter = undefined,
+            .scanned = null,
+            .generated = null,
         };
 
         const page_index: usize = self.pages.count();
@@ -272,24 +263,25 @@ pub const Site = struct {
             }
         }
 
-        try self.scanPage(source_path);
+        try self.scanPage(source_path, stat);
     }
 
     fn deletePage(self: *Site, source_path: Str) !void {
-        var page = self.pages.at(source_path.index());
+        const page = self.pages.at(source_path.index());
+        var scanned = &(page.scanned orelse return);
 
-        page.deleted = true;
-        self.output_root.deleteFile(page.output_path.bytes()) catch |err| {
+        scanned.deleted = true;
+        self.output_root.deleteFile(scanned.output_path.bytes()) catch |err| {
             if (err != error.FileNotFound) return err;
         };
 
         // Clear the page index on output and web strs, so that other pages
         // might reuse these without reporting a conflict.
-        if (page.output_path != page.source_path) {
-            _ = page.output_path.replaceIndex(Str.init_index);
+        if (scanned.output_path != page.source_path) {
+            _ = scanned.output_path.replaceIndex(Str.init_index);
         }
-        if (page.web_path != page.source_path) {
-            _ = page.web_path.replaceIndex(Str.init_index);
+        if (scanned.web_path != page.source_path) {
+            _ = scanned.web_path.replaceIndex(Str.init_index);
         }
 
         // Update dependents that might include content from or a link to
@@ -298,9 +290,32 @@ pub const Site = struct {
         return;
     }
 
-    fn scanPage(self: *Site, source_path: Str) !void {
+    fn scanPage(self: *Site, source_path: Str, stat: std.fs.File.Stat) !void {
         const page_index = source_path.index();
         var page = self.pages.at(page_index);
+
+        switch (stat.kind) {
+            .file => {},
+            .directory => return error.UnexpectedDirPasstedToPageScan,
+            .block_device,
+            .character_device,
+            .named_pipe,
+            .sym_link,
+            .unix_domain_socket,
+            .whiteout,
+            .door,
+            .event_port,
+            .unknown,
+            => |kind| {
+                return self.errors.add(
+                    source_path,
+                    Error{ .unsupported_source_file = .{
+                        .source_path = source_path,
+                        .kind = kind,
+                    } },
+                );
+            },
+        }
 
         // Calculate output path.
         const output_path = switch (page.processing) {
@@ -328,31 +343,15 @@ pub const Site = struct {
             });
         }
 
-        page.output_path = output_path;
-        page.web_path = web_path;
-        _ = output_path.replaceIndex(page_index);
-        _ = web_path.replaceIndex(page_index);
-
-        page.mime_type = mime.extension_map.get(extension) orelse .@"application/octet-stream";
-
-        if (page.deleted) {
-            page.deleted = false;
-            try generateDependents(self, page);
-        }
-
         const arena = self.tmp_arena_state.allocator();
-        if (page.processing == .markdown) {
+        const frontmatter = if (page.processing == .markdown)
             switch (try self.frontmatters.read(
                 arena,
                 self.source_root,
                 page.source_path,
             )) {
-                .frontmatter => |frontmatter| {
-                    page.frontmatter = frontmatter;
-                },
-                .no_frontmatter => {
-                    page.frontmatter = null;
-                },
+                .frontmatter => |frontmatter| frontmatter,
+                .no_frontmatter => null,
                 .failed_to_parse => {
                     return self.errors.add(
                         source_path,
@@ -360,9 +359,19 @@ pub const Site = struct {
                     );
                 },
             }
-        } else {
-            page.frontmatter = "{}";
-        }
+        else
+            "{}";
+
+        page.scanned = .{
+            .output_path = output_path,
+            .web_path = web_path,
+            .mime_type = mime.extension_map.get(extension) orelse .@"application/octet-stream",
+            .frontmatter = frontmatter,
+            .deleted = false,
+        };
+
+        _ = output_path.replaceIndex(page_index);
+        _ = web_path.replaceIndex(page_index);
 
         try generateDependents(self, page);
         try self.pages_to_generate.setValue(
@@ -407,12 +416,17 @@ pub const Site = struct {
         // output and web path are in this category for a future in which we
         // might want to perform content-addressable output names for some
         // paths.
-        output_path: Str,
-        web_path: Str,
-        mime_type: mime.Type,
-        output_len: ?u64,
-        frontmatter: ?[]const u8,
-        deleted: bool,
+        scanned: ?struct {
+            output_path: Str,
+            web_path: Str,
+            mime_type: mime.Type,
+            frontmatter: ?[]const u8,
+            deleted: bool,
+        },
+
+        generated: ?struct {
+            output_len: u64,
+        },
     };
 
     // Enum pairs should be a subset of those in Platform.Processing enum.
@@ -492,7 +506,8 @@ pub const Site = struct {
                     const page = self.site.pages.at(page_index);
                     page.mutex.lock();
                     defer page.mutex.unlock();
-                    return if (page.deleted) continue else page;
+                    const scanned = page.scanned orelse continue;
+                    return if (scanned.deleted) continue else page;
                 }
             }
             return null;

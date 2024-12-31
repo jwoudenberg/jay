@@ -13,6 +13,7 @@ pub fn generate(
     page: *Site.Page,
 ) !void {
     const arena = site.tmp_arena_state.allocator();
+    const scanned = page.scanned orelse return error.CantGenerateForUnscannedPage;
     switch (page.processing) {
         .none => {
             // I'd like to use the below, but get the following error when I do:
@@ -63,7 +64,7 @@ pub fn generate(
                 page.source_path.bytes(),
                 1024 * 1024,
             ) catch |err| if (err == error.FileNotFound) return else return err;
-            const markdown_bytes = if (page.frontmatter) |frontmatter|
+            const markdown_bytes = if (scanned.frontmatter) |frontmatter|
                 raw_source[frontmatter.len..]
             else
                 raw_source;
@@ -96,7 +97,8 @@ const OutputWriter = struct {
     counting_writer: std.io.CountingWriter(std.fs.File.Writer),
 
     fn init(site: *Site, page: *Site.Page) !OutputWriter {
-        const output_path_bytes = page.output_path.bytes();
+        const scanned = page.scanned orelse return error.CantOutputUnscannedPage;
+        const output_path_bytes = scanned.output_path.bytes();
         if (std.fs.path.dirname(output_path_bytes)) |dir| try site.output_root.makePath(dir);
         const output = try site.output_root.createFile(output_path_bytes, .{ .truncate = true });
         errdefer output.close();
@@ -109,7 +111,9 @@ const OutputWriter = struct {
     }
 
     fn deinit(self: *OutputWriter) void {
-        self.page.output_len = self.counting_writer.bytes_written;
+        self.page.generated = .{
+            .output_len = self.counting_writer.bytes_written,
+        };
         defer self.output.close();
     }
 

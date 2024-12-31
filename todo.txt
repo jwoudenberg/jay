@@ -1,3 +1,6 @@
++fix don't crash on error.MismatchedCloseAndOpenTags
++fix don't crash on file permission error
+
 +html support data attributes
 +html fix shadowed attributes
 +html add doctype

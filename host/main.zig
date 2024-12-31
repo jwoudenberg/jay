@@ -874,6 +874,58 @@ test "markdown file contains invalid metadata => jay shows an error" {
     try std.testing.expectEqualStrings("", test_run_loop.output());
 }
 
+test "add an untypical file type => jay shows an error" {
+    var test_run_loop = try TestRunLoop.init(.{ .markdown_patterns = &.{"*"} });
+    defer test_run_loop.deinit();
+    var site = test_run_loop.test_site.site;
+    const watcher = test_run_loop.watcher;
+
+    // Create a FIFO (named pipe). We could create a number of esoteric POSIX
+    // files here, just picking FIFO because it's relatively easy.
+    std.debug.assert(0 == std.os.linux.mknodat(
+        site.source_root.fd,
+        "file",
+        std.os.linux.S.IFIFO | std.os.linux.S.IRWXU,
+        0,
+    ));
+
+    // Perform the initial scan => Jay reports an error
+    try scanRecursively(std.testing.allocator, site, watcher, try site.strs.intern(""));
+    try test_run_loop.loopOnce();
+    try std.testing.expectEqualStrings(
+        \\I came across a source file with type 'named_pipe':
+        \\
+        \\  file
+        \\
+        \\I don't support files of type 'named_pipe'. Please remove it, or
+        \\add an ignore pattern for it.
+        \\
+    , test_run_loop.output());
+
+    // Remove the file => Jay removes the error
+    try site.source_root.deleteFile("file");
+    try test_run_loop.loopOnce();
+    try std.testing.expectEqualStrings("", test_run_loop.output());
+
+    // Add the file and let the watcher find it => Hay reports the error again
+    std.debug.assert(0 == std.os.linux.mknodat(
+        site.source_root.fd,
+        "file",
+        std.os.linux.S.IFIFO | std.os.linux.S.IRWXU,
+        0,
+    ));
+    try test_run_loop.loopOnce();
+    try std.testing.expectEqualStrings(
+        \\I came across a source file with type 'named_pipe':
+        \\
+        \\  file
+        \\
+        \\I don't support files of type 'named_pipe'. Please remove it, or
+        \\add an ignore pattern for it.
+        \\
+    , test_run_loop.output());
+}
+
 fn expectFile(dir: std.fs.Dir, path: []const u8, expected: []const u8) !void {
     var buf: [1024]u8 = undefined;
     const contents = try dir.readFile(path, &buf);

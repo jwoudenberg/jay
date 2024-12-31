@@ -13,11 +13,14 @@ pub const Error = union(enum) {
     },
     markdown_rule_applied_to_non_markdown_file: Str,
     invalid_frontmatter: Str,
+    unsupported_source_file: struct {
+        source_path: Str,
+        kind: std.fs.File.Kind,
+    },
 
     fn print(self: Error, writer: anytype) !void {
         switch (self) {
-            .no_rule_for_page => {
-                const source_path = self.no_rule_for_page;
+            .no_rule_for_page => |payload| {
                 try writer.print(
                     \\I can't find a pattern matching the following source path:
                     \\
@@ -31,10 +34,12 @@ pub const Error = union(enum) {
                     \\    Pages.files ["{s}"]
                     \\
                     \\
-                , .{ source_path.bytes(), source_path.bytes() });
+                , .{
+                    payload.bytes(),
+                    payload.bytes(),
+                });
             },
-            .conflicting_rules => {
-                const err = self.conflicting_rules;
+            .conflicting_rules => |payload| {
                 try writer.print(
                     \\The following file is matched by multiple rules:
                     \\
@@ -45,10 +50,9 @@ pub const Error = union(enum) {
                     \\    {any}
                     \\
                     \\
-                , .{ err.source_path.bytes(), err.rule_indices });
+                , .{ payload.source_path.bytes(), payload.rule_indices });
             },
-            .conflicting_source_files => {
-                const err = self.conflicting_source_files;
+            .conflicting_source_files => |payload| {
                 try writer.print(
                     \\I found multiple source files for a single page URL.
                     \\
@@ -64,13 +68,13 @@ pub const Error = union(enum) {
                     \\Tip: Rename one of the files so both get a unique URL.
                     \\
                 , .{
-                    err.source_paths[0].bytes(),
-                    err.source_paths[1].bytes(),
-                    err.web_path.bytes(),
+                    payload.source_paths[0].bytes(),
+                    payload.source_paths[1].bytes(),
+                    payload.web_path.bytes(),
                 });
             },
-            .markdown_rule_applied_to_non_markdown_file => {
-                const path = self.markdown_rule_applied_to_non_markdown_file.bytes();
+            .markdown_rule_applied_to_non_markdown_file => |payload| {
+                const path = payload.bytes();
                 try writer.print(
                     \\One of the pages for a markdown rule does not have a
                     \\markdown extension:
@@ -87,8 +91,7 @@ pub const Error = union(enum) {
                     path[0..(path.len - std.fs.path.extension(path).len)],
                 });
             },
-            .invalid_frontmatter => {
-                const path = self.invalid_frontmatter.bytes();
+            .invalid_frontmatter => |payload| {
                 try writer.print(
                     \\There's something wrong with the frontmatter at the top
                     \\of this markdown file:
@@ -101,7 +104,22 @@ pub const Error = union(enum) {
                     \\
                     \\Tip: Copy the frontmatter into `roc repl` to validate it.
                     \\
-                , .{path});
+                , .{payload.bytes()});
+            },
+            .unsupported_source_file => |payload| {
+                try writer.print(
+                    \\I came across a source file with type '{s}':
+                    \\
+                    \\  {s}
+                    \\
+                    \\I don't support files of type '{s}'. Please remove it, or
+                    \\add an ignore pattern for it.
+                    \\
+                , .{
+                    @tagName(payload.kind),
+                    payload.source_path.bytes(),
+                    @tagName(payload.kind),
+                });
             },
         }
     }

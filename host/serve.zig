@@ -66,7 +66,8 @@ fn respond(site: *Site, request: *std.http.Server.Request) !void {
         const page = site.getPage(requested_path) orelse break :success;
         page.mutex.lock();
         defer page.mutex.unlock();
-        if (page.web_path != requested_path) break :success;
+        const scanned = page.scanned orelse break :success;
+        if (scanned.web_path != requested_path) break :success;
         return servePage(page, .ok, request, site.output_root);
     }
     custom_404: {
@@ -85,14 +86,16 @@ fn servePage(
     request: *std.http.Server.Request,
     output_dir: std.fs.Dir,
 ) !void {
+    const scanned = page.scanned orelse return error.CantServeUnscannedPage;
+    const generated = page.generated orelse return error.CantServeUngeneratedPage;
     var send_buffer: [8000]u8 = undefined;
     var response = request.respondStreaming(.{
         .send_buffer = &send_buffer,
-        .content_length = page.output_len orelse return error.OutputLenUnset,
+        .content_length = generated.output_len,
         .respond_options = .{
             .status = status,
             .extra_headers = &.{
-                .{ .name = "content-type", .value = @tagName(page.mime_type) },
+                .{ .name = "content-type", .value = @tagName(scanned.mime_type) },
                 .{ .name = "cache-control", .value = "max-age=0, must-revalidate" },
             },
         },
@@ -102,7 +105,7 @@ fn servePage(
     var fifo = std.fifo.LinearFifo(u8, .Slice).init(&fifo_buffer);
     defer fifo.deinit();
 
-    const file = try output_dir.openFile(page.output_path.bytes(), .{});
+    const file = try output_dir.openFile(scanned.output_path.bytes(), .{});
     defer file.close();
     try fifo.pump(file.reader(), response.writer());
 

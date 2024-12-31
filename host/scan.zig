@@ -108,7 +108,11 @@ pub const SourceDirIterator = struct {
 
             const path = try self.site.strs.intern(path_bytes);
             switch (entry.kind) {
-                .file => {
+                .file, .block_device, .character_device, .named_pipe, .unix_domain_socket, .whiteout, .door, .event_port, .unknown => {
+                    // Many of these file types are unsupported, but we're not
+                    // going to block scanning on that. We'll handle the error
+                    // later in `Site`, where we can track the error in a
+                    // non-blocking fashion.
                     return .{
                         .path = path,
                         .is_dir = false,
@@ -120,25 +124,14 @@ pub const SourceDirIterator = struct {
                         .is_dir = true,
                     };
                 },
-                .block_device,
-                .character_device,
-                .named_pipe,
-                .sym_link,
-                .unix_domain_socket,
-                .whiteout,
-                .door,
-                .event_port,
-                .unknown,
-                => {
+                .sym_link => {
                     try fail.prettily(
-                        \\Encountered a path of type {s}:
+                        \\Encountered a symlink:
                         \\
                         \\    {s}
                         \\
-                        \\I don't support generating pages from this type of file!
-                        \\
-                        \\Tip: Remove the path from the source directory.
-                    , .{ @tagName(entry.kind), path.bytes() });
+                        \\I don't support symlinks in source files at the moment.
+                    , .{path.bytes()});
                 },
             }
         }
