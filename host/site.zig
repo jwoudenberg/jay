@@ -148,7 +148,7 @@ pub const Site = struct {
         try std.testing.expect(site.pages_to_generate.isSet(md_page.source_path.index()));
         try std.testing.expect(!md_page.deleted);
         try std.testing.expectEqual(null, md_page.output_len);
-        try std.testing.expectEqualStrings("{}", md_page.frontmatter);
+        try std.testing.expectEqualStrings("{}", md_page.frontmatter.?);
         try std.testing.expectEqualStrings("text/html", @tagName(md_page.mime_type));
 
         // Insert static file.
@@ -168,7 +168,7 @@ pub const Site = struct {
         try std.testing.expect(site.pages_to_generate.isSet(css_page.source_path.index()));
         try std.testing.expect(!css_page.deleted);
         try std.testing.expectEqual(null, css_page.output_len);
-        try std.testing.expectEqualStrings("{}", css_page.frontmatter);
+        try std.testing.expectEqualStrings("{}", css_page.frontmatter.?);
         try std.testing.expectEqualStrings("text/css", @tagName(css_page.mime_type));
 
         // Update markdown file making changes.
@@ -177,7 +177,7 @@ pub const Site = struct {
         try site.touchPage(file_md);
         try std.testing.expect(site.pages_to_generate.isSet(md_page.source_path.index()));
         try std.testing.expect(!md_page.deleted);
-        try std.testing.expectEqualStrings("{ hi: 4 }", md_page.frontmatter);
+        try std.testing.expectEqualStrings("{ hi: 4 }", md_page.frontmatter.?);
 
         // Delete markdown file
         site.pages_to_generate.unsetAll(); // clear flags
@@ -196,7 +196,7 @@ pub const Site = struct {
         try std.testing.expect(site.pages_to_generate.isSet(md_page.source_path.index()));
         try std.testing.expect(!md_page.deleted);
         try std.testing.expectEqual(null, md_page.output_len);
-        try std.testing.expectEqualStrings("{}", md_page.frontmatter);
+        try std.testing.expectEqualStrings("{}", md_page.frontmatter.?);
         try std.testing.expectEqualStrings("text/html", @tagName(md_page.mime_type));
     }
 
@@ -342,17 +342,23 @@ pub const Site = struct {
 
         const arena = self.tmp_arena_state.allocator();
         if (page.processing == .markdown) {
-            if (try self.frontmatters.read(
+            switch (try self.frontmatters.read(
                 arena,
                 self.source_root,
                 page.source_path,
-            )) |frontmatter| {
-                page.frontmatter = frontmatter;
-            } else {
-                return self.errors.add(
-                    source_path,
-                    Error{ .invalid_frontmatter = source_path },
-                );
+            )) {
+                .frontmatter => |frontmatter| {
+                    page.frontmatter = frontmatter;
+                },
+                .no_frontmatter => {
+                    page.frontmatter = null;
+                },
+                .failed_to_parse => {
+                    return self.errors.add(
+                        source_path,
+                        Error{ .invalid_frontmatter = source_path },
+                    );
+                },
             }
         } else {
             page.frontmatter = "{}";
@@ -405,7 +411,7 @@ pub const Site = struct {
         web_path: Str,
         mime_type: mime.Type,
         output_len: ?u64,
-        frontmatter: []const u8,
+        frontmatter: ?[]const u8,
         deleted: bool,
     };
 

@@ -30,14 +30,22 @@ pub const Frontmatters = struct {
         return self.frontmatters.get(source_path.index());
     }
 
+    const ReadResult = union(enum) {
+        frontmatter: []const u8,
+        no_frontmatter: void,
+        failed_to_parse: void,
+    };
+
     pub fn read(
         self: *Frontmatters,
         arena: std.mem.Allocator,
         source_root: std.fs.Dir,
         source_path: Str,
-    ) !?[]const u8 {
+    ) !ReadResult {
         const bytes = try source_root.readFileAlloc(arena, source_path.bytes(), 1024 * 1024);
         var meta_bytes: []const u8 = "{}";
+        if (firstNonWhitespaceByte(bytes) != '{') return .{ .no_frontmatter = void{} };
+
         if (firstNonWhitespaceByte(bytes) == '{') {
             var meta_len: u64 = undefined;
             meta_len = platform.getMetadataLength(bytes);
@@ -48,7 +56,7 @@ pub const Frontmatters = struct {
             meta_bytes = dropTrailingHeaderLines(bytes[0..meta_len]);
         }
 
-        if (meta_bytes.len == 0) return null;
+        if (meta_bytes.len == 0) return .{ .failed_to_parse = void{} };
 
         const get_or_put = try self.frontmatters.getOrPut(self.gpa, source_path.index());
         if (get_or_put.found_existing) {
@@ -56,10 +64,10 @@ pub const Frontmatters = struct {
                 self.gpa.free(get_or_put.value_ptr.*);
                 get_or_put.value_ptr.* = try self.gpa.dupe(u8, meta_bytes);
             }
-            return get_or_put.value_ptr.*;
+            return .{ .frontmatter = get_or_put.value_ptr.* };
         } else {
             get_or_put.value_ptr.* = try self.gpa.dupe(u8, meta_bytes);
-            return get_or_put.value_ptr.*;
+            return .{ .frontmatter = get_or_put.value_ptr.* };
         }
     }
 
@@ -80,15 +88,15 @@ pub const Frontmatters = struct {
         // This test makes use of the test platform defined in platform.zig!
 
         try tmpdir.dir.writeFile(.{ .sub_path = "file1.txt", .data = "no frontmatter" });
-        try std.testing.expectEqualStrings(
-            "{}",
-            (try frontmatters.read(arena, tmpdir.dir, try strs.intern("file1.txt"))).?,
+        try std.testing.expectEqual(
+            ReadResult{ .no_frontmatter = void{} },
+            (try frontmatters.read(arena, tmpdir.dir, try strs.intern("file1.txt"))),
         );
 
         try tmpdir.dir.writeFile(.{ .sub_path = "file2.txt", .data = "{ hi: 3 }\n# header" });
         try std.testing.expectEqualStrings(
             "{ hi: 3 }",
-            (try frontmatters.read(arena, tmpdir.dir, try strs.intern("file2.txt"))).?,
+            (try frontmatters.read(arena, tmpdir.dir, try strs.intern("file2.txt"))).frontmatter,
         );
     }
 };

@@ -435,6 +435,17 @@ test "add a source file => jay generates an output file for it" {
     try expectFile(site.output_root, "file.html", "<html/>\n");
 }
 
+test "add a markdown source file without frontmatter => jay generates an output file for it" {
+    var test_run_loop = try TestRunLoop.init(.{ .markdown_patterns = &.{"*.md"} });
+    defer test_run_loop.deinit();
+    var site = test_run_loop.test_site.site;
+
+    try site.source_root.writeFile(.{ .sub_path = "file.md", .data = "<html/>" });
+    try test_run_loop.loopOnce();
+    try std.testing.expectEqualStrings("", test_run_loop.output());
+    try expectFile(site.output_root, "file.html", "<html/>\n");
+}
+
 test "delete a source file => jay deletes its output file" {
     var test_run_loop = try TestRunLoop.init(.{ .markdown_patterns = &.{"*.md"} });
     defer test_run_loop.deinit();
@@ -856,6 +867,11 @@ test "markdown file contains invalid metadata => jay shows an error" {
         \\Tip: Copy the frontmatter into `roc repl` to validate it.
         \\
     , test_run_loop.output());
+
+    // Fix the frontmatter => Jay removes the error
+    try site.source_root.writeFile(.{ .sub_path = "file.md", .data = "{}<html/>" });
+    try test_run_loop.loopOnce();
+    try std.testing.expectEqualStrings("", test_run_loop.output());
 }
 
 fn expectFile(dir: std.fs.Dir, path: []const u8, expected: []const u8) !void {

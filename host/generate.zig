@@ -63,7 +63,10 @@ pub fn generate(
                 page.source_path.bytes(),
                 1024 * 1024,
             ) catch |err| if (err == error.FileNotFound) return else return err;
-            const markdown_bytes = raw_source[page.frontmatter.len..];
+            const markdown_bytes = if (page.frontmatter) |frontmatter|
+                raw_source[frontmatter.len..]
+            else
+                raw_source;
             var html = try std.ArrayList(u8).initCapacity(arena, 1024 * 1024);
             try markdown.toHtml(&site.highlighter, html.writer(), markdown_bytes);
             const source = html.items;

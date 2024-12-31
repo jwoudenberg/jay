@@ -88,7 +88,7 @@ fn getPagesMatchingPattern(roc_pattern: *RocStr) !RocList {
         page.mutex.lock();
         defer page.mutex.unlock();
         try results.append(Page{
-            .meta = RocList.fromSlice(u8, page.frontmatter, false),
+            .meta = RocList.fromSlice(u8, page.frontmatter orelse "{}", false),
             .path = RocStr.fromSlice(page.web_path.bytes()),
             .tags = RocList.empty(),
             .len = 0,
@@ -193,7 +193,7 @@ const Platform = struct {
             });
         }
         const roc_page = Page{
-            .meta = RocList.fromSlice(u8, page.frontmatter, false),
+            .meta = RocList.fromSlice(u8, page.frontmatter orelse "{}", false),
             .path = RocStr.fromSlice(page.web_path.bytes()),
             .ruleIndex = @as(u32, @intCast(page.rule_index)),
             .tags = RocList.fromSlice(Tag, try roc_tags.toOwnedSlice(), true),
@@ -265,7 +265,7 @@ const TestPlatform = struct {
             const end = std.mem.indexOfScalarPos(u8, tag.attributes, start, '"').?;
             const pattern = tag.attributes[start..end];
             var pages = try site.pagesMatchingPattern(page.source_path, pattern);
-            while (pages.next()) |dep| try writer.writeAll(dep.frontmatter);
+            while (pages.next()) |dep| try writer.writeAll(dep.frontmatter orelse "{}");
         }
         try writer.writeAll(source[index..]);
     }
