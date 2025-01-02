@@ -17,6 +17,7 @@ pub const Error = union(enum) {
         source_path: Str,
         kind: std.fs.File.Kind,
     },
+    source_file_is_symlink: Str,
 
     fn print(self: Error, writer: anytype) !void {
         switch (self) {
@@ -120,6 +121,22 @@ pub const Error = union(enum) {
                     payload.source_path.bytes(),
                     @tagName(payload.kind),
                 });
+            },
+            .source_file_is_symlink => |source_path| {
+                try writer.print(
+                    \\The following source file is a symlink:
+                    \\
+                    \\    {s}
+                    \\
+                    \\I don't currently support symlinks to individual source
+                    \\files. If this functionality is important to you, I'd
+                    \\love to hear about your usecase. Please create an issue
+                    \\at https://github.com/jwoudenberg/jay. Thank you!
+                    \\
+                    \\Tip: I do support symlinks to directories, maybe that
+                    \\     works as an alternative!
+                    \\
+                , .{source_path.bytes()});
             },
         }
     }

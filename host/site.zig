@@ -108,7 +108,15 @@ pub const Site = struct {
         _ = self.tmp_arena_state.reset(.{ .retain_with_limit = 1024 * 1024 });
         const new = source_path.index() == Str.init_index or source_path != self.pages.at(source_path.index()).source_path;
 
-        if (self.source_root.statFile(source_path.bytes())) |stat| {
+        // Not using Zig's std.fs.Dir.statFile here because it follows
+        // symlinks. If the path is a symlinked file we want to detect it so
+        // we can show an error.
+        if (std.posix.fstatat(
+            self.source_root.fd,
+            source_path.bytes(),
+            std.posix.AT.SYMLINK_NOFOLLOW,
+        )) |posix_stat| {
+            const stat = std.fs.File.Stat.fromSystem(posix_stat);
             if (new) {
                 try self.initPage(source_path, stat);
             } else {
@@ -297,10 +305,28 @@ pub const Site = struct {
         switch (stat.kind) {
             .file => {},
             .directory => return error.UnexpectedDirPasstedToPageScan,
+            .sym_link => {
+                // A symlink to a file (rather than a directory) creates
+                // problems for file watching. We watch source directories, and
+                // if the symlinked file is not in a watched directory, the
+                // watcher will miss changes to the file.
+                //
+                // We could change the watching logic, either by watching
+                // individual files if they live outside of the project, or
+                // the parent directories of those files. Both approaches raise
+                // new questions I'm not sure are worth answering.
+                //
+                // As long as we can't fully support symlinked files, including
+                // in the watcher, I prefer disallowing symlinked files
+                // entirely over supporting them partially.
+                return self.errors.add(
+                    source_path,
+                    Error{ .source_file_is_symlink = source_path },
+                );
+            },
             .block_device,
             .character_device,
             .named_pipe,
-            .sym_link,
             .unix_domain_socket,
             .whiteout,
             .door,

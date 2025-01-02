@@ -116,7 +116,7 @@ fn run_prod(gpa: std.mem.Allocator, argv0: []const u8, output_path: []const u8) 
     const should_bootstrap = try platform.getRules(gpa, &site);
     if (should_bootstrap) try bootstrap(gpa, &site);
     var watcher = NoOpWatcher{};
-    try scanRecursively(gpa, &site, &watcher, try site.strs.intern(""));
+    try scanRecursively(gpa, &site, &watcher, "");
     if (site.errors.has_errors()) {
         var stderr = std.io.getStdErr().writer();
         try site.errors.print(&stderr);
@@ -183,7 +183,7 @@ const RunLoop = struct {
             try bootstrap(gpa, site);
         }
 
-        try scanRecursively(gpa, site, watcher, try site.strs.intern(""));
+        try scanRecursively(gpa, site, watcher, "");
         try site.generatePages();
 
         return .{
@@ -363,10 +363,10 @@ fn handle_change(
                 gpa,
                 site,
                 watcher,
-                try site.strs.intern(""),
+                "",
             );
         },
-        .dir_changed => |entry| {
+        .path_changed => |entry| {
             var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
             const path_bytes = if (entry.dir.bytes().len == 0)
                 entry.file_name
@@ -376,31 +376,9 @@ fn handle_change(
                     "{s}/{s}",
                     .{ entry.dir.bytes(), entry.file_name },
                 );
-            if (!Site.matchAny(site.ignore_patterns, path_bytes)) {
-                const path = try site.strs.intern(path_bytes);
-                try scanRecursively(gpa, site, watcher, path);
-            }
+            try scanRecursively(gpa, site, watcher, path_bytes);
 
-            // A directory change even might mean something got deleted, so
-            // touch all the directory's pages to check they still exist.
-            var pages = site.iterator();
-            while (pages.next()) |page| {
-                if (std.mem.startsWith(u8, page.source_path.bytes(), path_bytes)) {
-                    try site.touchPage(page.source_path);
-                }
-            }
-        },
-        .file_changed => |entry| {
-            var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
-            const path_bytes = if (entry.dir.bytes().len == 0)
-                entry.file_name
-            else
-                try std.fmt.bufPrint(
-                    &buf,
-                    "{s}/{s}",
-                    .{ entry.dir.bytes(), entry.file_name },
-                );
-            const path = try site.strs.intern(path_bytes);
+            const path = site.strs.get(path_bytes) orelse return;
             if (path == site.roc_main) {
                 rebuildRocMain(gpa) catch |err| {
                     // In case of a file busy error the write to roc main might
@@ -408,8 +386,15 @@ fn handle_change(
                     // finishes, we can try to execv again then.
                     if (err != error.FileBusy) return err;
                 };
-            } else if (!Site.matchAny(site.ignore_patterns, path_bytes)) {
-                try site.touchPage(path);
+            } else if (site.getPage(path) == null) {
+                // A directory change even might mean something got deleted, so
+                // touch all the directory's pages to check they still exist.
+                var pages = site.iterator();
+                while (pages.next()) |page| {
+                    if (std.mem.startsWith(u8, page.source_path.bytes(), path_bytes)) {
+                        try site.touchPage(page.source_path);
+                    }
+                }
             }
         },
     }
@@ -890,7 +875,7 @@ test "add an untypical file type => jay shows an error" {
     ));
 
     // Perform the initial scan => Jay reports an error
-    try scanRecursively(std.testing.allocator, site, watcher, try site.strs.intern(""));
+    try scanRecursively(std.testing.allocator, site, watcher, "");
     try test_run_loop.loopOnce();
     try std.testing.expectEqualStrings(
         \\I came across a source file with type 'named_pipe':

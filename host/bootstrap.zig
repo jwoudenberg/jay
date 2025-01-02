@@ -6,7 +6,7 @@ const std = @import("std");
 const Site = @import("site.zig").Site;
 const TestSite = @import("site.zig").TestSite;
 const fail = @import("fail.zig");
-const SourceDirIterator = @import("scan.zig").SourceDirIterator;
+const Scanner = @import("scan.zig").Scanner;
 const Watcher = @import("watch.zig").Watcher(Str, Str.bytes);
 const Str = @import("str.zig").Str;
 const glob = @import("glob.zig");
@@ -15,17 +15,13 @@ pub fn bootstrap(
     gpa: std.mem.Allocator,
     site: *Site,
 ) !void {
-    var source_root = try site.openSourceRoot(.{ .iterate = true });
-    defer source_root.close();
-
-    try bootstrapRules(gpa, site, source_root);
-    try generateCodeForRules(site, source_root);
+    try bootstrapRules(gpa, site);
+    try generateCodeForRules(site);
 }
 
 fn bootstrapRules(
     gpa: std.mem.Allocator,
     site: *Site,
-    source_root: std.fs.Dir,
 ) !void {
     const site_arena = site.allocator();
     var arena_state = std.heap.ArenaAllocator.init(gpa);
@@ -59,42 +55,53 @@ fn bootstrapRules(
         try site.strs.intern("LICENSE*"),
     };
 
-    var scan_queue = std.ArrayList(Str).init(tmp_arena);
-    try scan_queue.append(try site.strs.intern(""));
+    const Filter = struct {
+        const Self = @This();
+        site: *Site,
+        pub fn keep(self: *Self, path: []const u8) bool {
+            return !Site.matchAny(self.site.ignore_patterns, path);
+        }
+    };
 
-    jobs_loop: while (scan_queue.popOrNull()) |dir| {
-        var iterator = try SourceDirIterator.init(site, source_root, dir) orelse continue :jobs_loop;
-        defer iterator.deinit();
-        paths_loop: while (try iterator.next()) |entry| {
-            const source_path = entry.path;
-            if (entry.is_dir) {
-                try scan_queue.append(source_path);
+    var scanner = Scanner(Filter).init(
+        gpa,
+        site.strs,
+        Filter{ .site = site },
+        site.source_root,
+    );
+    defer scanner.deinit();
+    try scanner.scan("");
+
+    paths_loop: while (try scanner.next()) |entry| {
+        const source_path_bytes = entry.path.bytes();
+
+        for (bootstrap_ignore_patterns) |bootstrap_ignore_pattern| {
+            if (glob.match(bootstrap_ignore_pattern.bytes(), source_path_bytes)) {
+                const path = try site.strs.intern(source_path_bytes);
+                try ignore_patterns.append(path);
+                scanner.endCurrentDir();
                 continue :paths_loop;
             }
-
-            const source_path_bytes = source_path.bytes();
-            pattern_loop: for (bootstrap_ignore_patterns) |bootstrap_ignore_pattern| {
-                const path = site.strs.get(source_path_bytes) orelse continue :pattern_loop;
-                if (glob.match(bootstrap_ignore_pattern.bytes(), path.bytes())) {
-                    try ignore_patterns.append(path);
-                    continue :paths_loop;
-                }
-            }
-
-            const pattern_bytes = try patternForPath(tmp_arena, source_path_bytes);
-            const pattern = try site.strs.intern(pattern_bytes);
-            var patterns = if (Site.isMarkdown(source_path_bytes))
-                &markdown_patterns
-            else
-                &static_patterns;
-            for (patterns.items) |existing_pattern| {
-                if (pattern == existing_pattern) break;
-            } else {
-                try patterns.append(pattern);
-            }
-            site.rules[0].patterns = static_patterns.items;
-            site.rules[1].patterns = markdown_patterns.items;
         }
+
+        switch (entry.is_dir) {
+            .yes => continue,
+            .unsure => {},
+        }
+
+        const pattern_bytes = try patternForPath(tmp_arena, source_path_bytes);
+        const pattern = try site.strs.intern(pattern_bytes);
+        var patterns = if (Site.isMarkdown(source_path_bytes))
+            &markdown_patterns
+        else
+            &static_patterns;
+        for (patterns.items) |existing_pattern| {
+            if (pattern == existing_pattern) break;
+        } else {
+            try patterns.append(pattern);
+        }
+        site.rules[0].patterns = static_patterns.items;
+        site.rules[1].patterns = markdown_patterns.items;
     }
 
     site.rules[0].patterns = try site_arena.dupe(Str, site.rules[0].patterns);
@@ -120,13 +127,9 @@ test bootstrapRules {
     try site.source_root.writeFile(.{ .sub_path = "index.md", .data = "{}\x02" });
     try site.source_root.writeFile(.{ .sub_path = ".gitignore", .data = "" });
 
-    var source_root = try site.openSourceRoot(.{ .iterate = true });
-    defer source_root.close();
-
     try bootstrapRules(
         std.testing.allocator,
         site,
-        source_root,
     );
 
     try std.testing.expectEqual(3, site.ignore_patterns.len);
@@ -178,8 +181,8 @@ fn patternForPath(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
         );
 }
 
-fn generateCodeForRules(site: *const Site, source_root: std.fs.Dir) !void {
-    const file = try source_root.openFile(site.roc_main.bytes(), .{ .mode = .read_write });
+fn generateCodeForRules(site: *const Site) !void {
+    const file = try site.source_root.openFile(site.roc_main.bytes(), .{ .mode = .read_write });
     defer file.close();
 
     // The size of my minimal bootstrap examples is 119 bytes at time of
@@ -328,7 +331,7 @@ test generateCodeForRules {
     };
     site.ignore_patterns = &ignore_patterns;
 
-    try generateCodeForRules(site, site.source_root);
+    try generateCodeForRules(site);
 
     const generated = try site.source_root.readFileAlloc(std.testing.allocator, "build.roc", 1024 * 1024);
     defer std.testing.allocator.free(generated);

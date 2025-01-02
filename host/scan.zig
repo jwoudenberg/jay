@@ -13,21 +13,33 @@ pub fn scanRecursively(
     gpa: std.mem.Allocator,
     site: *Site,
     watcher: anytype,
-    init_dir: Str,
+    init_path: []const u8,
 ) !void {
-    var scan_queue = std.ArrayList(Str).init(gpa);
-    defer scan_queue.deinit();
-    try scan_queue.append(init_dir);
-    while (scan_queue.popOrNull()) |dir| {
-        try watcher.watchDir(dir);
-        var iterator = try SourceDirIterator.init(site, site.source_root, dir) orelse continue;
-        defer iterator.deinit();
-        while (try iterator.next()) |entry| {
-            if (entry.is_dir) {
-                try scan_queue.append(entry.path);
-            } else {
+    const Filter = struct {
+        const Self = @This();
+        site: *Site,
+        pub fn keep(self: *Self, path: []const u8) bool {
+            return !Site.matchAny(self.site.ignore_patterns, path);
+        }
+    };
+    var scanner = Scanner(Filter).init(
+        gpa,
+        site.strs,
+        Filter{ .site = site },
+        site.source_root,
+    );
+    defer scanner.deinit();
+    try scanner.scan(init_path);
+    while (try scanner.next()) |entry| {
+        switch (entry.is_dir) {
+            .yes => {
+                try watcher.watchDir(entry.path);
+                // TODO: communicate path to Site, in case it was a file before.
+            },
+            .unsure => {
+                // TODO: pass error to Site, so it doesn't need to `stat`.
                 try site.touchPage(entry.path);
-            }
+            },
         }
     }
 }
@@ -50,7 +62,7 @@ test scanRecursively {
         std.testing.allocator,
         site,
         &watcher,
-        try site.strs.intern(""),
+        "",
     );
 
     try std.testing.expect(null != site.getPage(try site.strs.intern("one")));
@@ -58,83 +70,121 @@ test scanRecursively {
     try std.testing.expect(null != site.getPage(try site.strs.intern("dir/three")));
 }
 
-pub const SourceDirIterator = struct {
-    dir: std.fs.Dir,
-    iterator: std.fs.Dir.Iterator,
-    site: *Site,
-    dir_path: Str,
+pub fn Scanner(Filter: type) type {
+    return struct {
+        const Self = @This();
 
-    const Entry = struct {
-        path: Str,
-        is_dir: bool,
-    };
+        allocator: std.mem.Allocator,
+        strs: Str.Registry,
+        queue: std.SegmentedList(Str, 0),
+        source_root: std.fs.Dir,
+        filter: Filter,
+        current_dir: ?CurrentDir,
 
-    pub fn init(site: *Site, source_root: std.fs.Dir, dir_path: Str) !?SourceDirIterator {
-        const path = if (dir_path.bytes().len == 0) "./" else dir_path.bytes();
-        const dir = source_root.openDir(path, .{ .iterate = true }) catch |err| {
-            if (err == error.FileNotFound) {
-                return null;
-            } else {
-                return err;
-            }
+        const CurrentDir = struct {
+            sub_path: Str,
+            dir: std.fs.Dir,
+            iterator: std.fs.Dir.Iterator,
         };
-        const iterator = dir.iterate();
-        return .{
-            .dir = dir,
-            .iterator = iterator,
-            .site = site,
-            .dir_path = dir_path,
+
+        const Entry = struct {
+            path: Str,
+            is_dir: enum { yes, unsure },
         };
-    }
 
-    pub fn deinit(self: *SourceDirIterator) void {
-        self.dir.close();
-    }
-
-    pub fn next(self: *SourceDirIterator) !?Entry {
-        var buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;
-        while (true) {
-            const entry = try self.iterator.next() orelse break;
-            const path_bytes = if (self.dir_path.bytes().len == 0) blk: {
-                break :blk entry.name;
-            } else blk: {
-                break :blk try std.fmt.bufPrint(
-                    &buffer,
-                    "{s}/{s}",
-                    .{ self.dir_path.bytes(), entry.name },
-                );
+        pub fn init(
+            allocator: std.mem.Allocator,
+            strs: Str.Registry,
+            filter: Filter,
+            source_root: std.fs.Dir,
+        ) Self {
+            return .{
+                .allocator = allocator,
+                .strs = strs,
+                .filter = filter,
+                .source_root = source_root,
+                .queue = std.SegmentedList(Str, 0){},
+                .current_dir = null,
             };
-            if (Site.matchAny(self.site.ignore_patterns, path_bytes)) continue;
+        }
 
-            const path = try self.site.strs.intern(path_bytes);
-            switch (entry.kind) {
-                .file, .block_device, .character_device, .named_pipe, .unix_domain_socket, .whiteout, .door, .event_port, .unknown => {
-                    // Many of these file types are unsupported, but we're not
-                    // going to block scanning on that. We'll handle the error
-                    // later in `Site`, where we can track the error in a
-                    // non-blocking fashion.
-                    return .{
-                        .path = path,
-                        .is_dir = false,
-                    };
-                },
-                .directory => {
-                    return .{
-                        .path = path,
-                        .is_dir = true,
-                    };
-                },
-                .sym_link => {
-                    try fail.prettily(
-                        \\Encountered a symlink:
-                        \\
-                        \\    {s}
-                        \\
-                        \\I don't support symlinks in source files at the moment.
-                    , .{path.bytes()});
-                },
+        pub fn deinit(self: *Self) void {
+            self.endCurrentDir();
+            self.queue.deinit(self.allocator);
+        }
+
+        pub fn scan(self: *Self, path: []const u8) !void {
+            const interned = try self.strs.intern(path);
+            if (self.filter.keep(path)) {
+                try self.queue.append(self.allocator, interned);
             }
         }
-        return null;
-    }
-};
+
+        pub fn next(self: *Self) !?Entry {
+            return while (true) {
+                // Continue scanning the current directory, or else get the next
+                // path from the scan queue.
+
+                if (self.current_dir) |*current| {
+                    if (try current.iterator.next()) |iter_entry| {
+                        const path = if (current.sub_path.bytes().len == 0)
+                            iter_entry.name
+                        else blk: {
+                            var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+                            break :blk try std.fmt.bufPrint(
+                                &buf,
+                                "{s}/{s}",
+                                .{ current.sub_path.bytes(), iter_entry.name },
+                            );
+                        };
+                        try self.scan(path);
+                        continue;
+                    } else {
+                        self.endCurrentDir();
+                    }
+                }
+
+                if (self.queue.pop()) |path| {
+                    // We want to support symlinks as regular files/directories,
+                    // and need a reliable way to figure out if a path refers
+                    // to a directory or not, regardless of whether the path is
+                    // a symlink. The easiest way to do this is to try to open
+                    // the path as a directory.
+                    if (self.source_root.openDir(
+                        if (path.bytes().len == 0) "./" else path.bytes(),
+                        .{ .iterate = true },
+                    )) |dir| {
+                        self.current_dir = .{
+                            .sub_path = path,
+                            .dir = dir,
+                            .iterator = dir.iterate(),
+                        };
+                        return .{
+                            .path = path,
+                            .is_dir = .yes,
+                        };
+                    } else |_| {
+                        // We expect to typicall see error.NotDir in this
+                        // branch, but even if it's something else we'll
+                        // continue at this point. We'll `stat` the file in
+                        // Site and will handle errors there.
+                        return .{
+                            .path = path,
+                            .is_dir = .unsure,
+                        };
+                    }
+                }
+
+                return null;
+            };
+        }
+
+        pub fn endCurrentDir(self: *Self) void {
+            if (self.current_dir) |current| {
+                var dir = current.dir;
+                dir.close();
+                self.current_dir = null;
+            }
+        }
+    };
+}

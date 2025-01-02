@@ -150,10 +150,7 @@ pub fn Watcher(
             const file_name_z: [*:0]u8 = @ptrCast((&file_handle.f_handle).ptr + file_handle.handle_bytes);
             const file_name = std.mem.span(file_name_z);
 
-            return if (mask.ONDIR)
-                .{ .dir_changed = .{ .dir = dir, .file_name = file_name } }
-            else
-                .{ .file_changed = .{ .dir = dir, .file_name = file_name } };
+            return .{ .path_changed = .{ .dir = dir, .file_name = file_name } };
         }
 
         pub fn next_wait(self: *Self, max_wait_ms: i32) !?Change {
@@ -174,14 +171,11 @@ pub fn Watcher(
         };
 
         pub const Change = union(enum) {
-            dir_changed: Entry,
-            file_changed: Entry,
             changes_missed: void,
-        };
-
-        pub const Entry = struct {
-            dir: Dir,
-            file_name: []const u8,
+            path_changed: struct {
+                dir: Dir,
+                file_name: []const u8,
+            },
         };
     };
 }
@@ -213,7 +207,7 @@ test "file watching produces expected events" {
 
     // Create a file triggers a change.
     try root.writeFile(.{ .sub_path = "test.txt", .data = "content" });
-    try expectChange(&watcher, .{ .file_changed = .{ .dir = "", .file_name = "test.txt" } });
+    try expectChange(&watcher, .{ .path_changed = .{ .dir = "", .file_name = "test.txt" } });
 
     // Opening, reading from, nor writing to a file triggers a change.
     var file = try root.openFile("test.txt", .{ .mode = .read_only });
@@ -227,28 +221,28 @@ test "file watching produces expected events" {
 
     // Closing a file opened for writing triggers a change.
     file.close();
-    try expectChange(&watcher, .{ .file_changed = .{ .dir = "", .file_name = "test.txt" } });
+    try expectChange(&watcher, .{ .path_changed = .{ .dir = "", .file_name = "test.txt" } });
 
     // Moving a file out of the directory triggers a change.
     try std.fs.rename(root, "test.txt", unwatched, "backup.txt");
-    try expectChange(&watcher, .{ .file_changed = .{ .dir = "", .file_name = "test.txt" } });
+    try expectChange(&watcher, .{ .path_changed = .{ .dir = "", .file_name = "test.txt" } });
 
     // Moving a file into the watched directory triggers a change.
     try std.fs.rename(unwatched, "backup.txt", root, "test2.txt");
-    try expectChange(&watcher, .{ .file_changed = .{ .dir = "", .file_name = "test2.txt" } });
+    try expectChange(&watcher, .{ .path_changed = .{ .dir = "", .file_name = "test2.txt" } });
 
     // Renaming a file triggers two changes for the old and new name.
     try root.rename("test2.txt", "test3.txt");
-    try expectChange(&watcher, .{ .file_changed = .{ .dir = "", .file_name = "test2.txt" } });
-    try expectChange(&watcher, .{ .file_changed = .{ .dir = "", .file_name = "test3.txt" } });
+    try expectChange(&watcher, .{ .path_changed = .{ .dir = "", .file_name = "test2.txt" } });
+    try expectChange(&watcher, .{ .path_changed = .{ .dir = "", .file_name = "test3.txt" } });
 
     // Deleting a file triggers a change.
     try root.deleteFile("test3.txt");
-    try expectChange(&watcher, .{ .file_changed = .{ .dir = "", .file_name = "test3.txt" } });
+    try expectChange(&watcher, .{ .path_changed = .{ .dir = "", .file_name = "test3.txt" } });
 
     // Creating a subdirectory triggers a change.
     try root.makeDir("mid");
-    try expectChange(&watcher, .{ .dir_changed = .{ .dir = "", .file_name = "mid" } });
+    try expectChange(&watcher, .{ .path_changed = .{ .dir = "", .file_name = "mid" } });
 
     var mid = try root.openDir("mid", .{});
     defer mid.close();
@@ -260,12 +254,12 @@ test "file watching produces expected events" {
 
     // Creating a file in a nested directry triggers a change.
     try mid.writeFile(.{ .sub_path = "test.txt", .data = "content" });
-    try expectChange(&watcher, .{ .file_changed = .{ .dir = "mid", .file_name = "test.txt" } });
+    try expectChange(&watcher, .{ .path_changed = .{ .dir = "mid", .file_name = "test.txt" } });
 
     // Moving a file between watched dirs triggers two changes.
     try std.fs.rename(mid, "test.txt", low, "test.txt");
-    try expectChange(&watcher, .{ .file_changed = .{ .dir = "mid", .file_name = "test.txt" } });
-    try expectChange(&watcher, .{ .file_changed = .{ .dir = "mid/low", .file_name = "test.txt" } });
+    try expectChange(&watcher, .{ .path_changed = .{ .dir = "mid", .file_name = "test.txt" } });
+    try expectChange(&watcher, .{ .path_changed = .{ .dir = "mid/low", .file_name = "test.txt" } });
 
     // Deleting a file from a directory after unwatching it triggers no change.
     var path_buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
@@ -276,15 +270,15 @@ test "file watching produces expected events" {
 
     // Moving a directory out of the project triggers a change.
     try std.fs.rename(mid, "low", unwatched, "low");
-    try expectChange(&watcher, .{ .dir_changed = .{ .dir = "mid", .file_name = "low" } });
+    try expectChange(&watcher, .{ .path_changed = .{ .dir = "mid", .file_name = "low" } });
 
     // Moving a directory into the project triggers a change.
     try std.fs.rename(unwatched, "low", mid, "low2");
-    try expectChange(&watcher, .{ .dir_changed = .{ .dir = "mid", .file_name = "low2" } });
+    try expectChange(&watcher, .{ .path_changed = .{ .dir = "mid", .file_name = "low2" } });
 
     // Deleting a directory triggers a change for the directory.
     try mid.deleteDir("low2");
-    try expectChange(&watcher, .{ .dir_changed = .{ .dir = "mid", .file_name = "low2" } });
+    try expectChange(&watcher, .{ .path_changed = .{ .dir = "mid", .file_name = "low2" } });
 }
 
 fn identity(path: []const u8) []const u8 {
@@ -303,8 +297,7 @@ fn expectChange(
     const entries =
         switch (expected) {
         .changes_missed => return,
-        .file_changed => .{ expected.file_changed, actual.file_changed },
-        .dir_changed => .{ expected.dir_changed, actual.dir_changed },
+        .path_changed => .{ expected.path_changed, actual.path_changed },
     };
     try std.testing.expectEqualStrings(entries[0].dir, entries[1].dir);
     try std.testing.expectEqualStrings(entries[0].file_name, entries[1].file_name);
