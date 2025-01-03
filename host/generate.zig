@@ -100,6 +100,12 @@ const OutputWriter = struct {
         const scanned = page.scanned orelse return error.CantOutputUnscannedPage;
         const output_path_bytes = scanned.output_path.bytes();
         if (std.fs.path.dirname(output_path_bytes)) |dir| try site.output_root.makePath(dir);
+        site.output_root.deleteDir(output_path_bytes) catch |err| switch (err) {
+            error.NotDir,
+            error.FileNotFound,
+            => {},
+            else => return err,
+        };
         const output = try site.output_root.createFile(output_path_bytes, .{ .truncate = true });
         errdefer output.close();
         const counting_writer = std.io.countingWriter(output.writer());

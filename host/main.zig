@@ -386,15 +386,6 @@ pub fn handleChange(
                     // finishes, we can try to execv again then.
                     if (err != error.FileBusy) return err;
                 };
-            } else if (site.getPage(path) == null) {
-                // A directory change even might mean something got deleted, so
-                // touch all the directory's pages to check they still exist.
-                var pages = site.iterator();
-                while (pages.next()) |page| {
-                    if (std.mem.startsWith(u8, page.source_path.bytes(), path_bytes)) {
-                        try site.touchPage(page.source_path);
-                    }
-                }
             }
         },
     }

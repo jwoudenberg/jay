@@ -34,11 +34,10 @@ pub fn scanRecursively(
         switch (entry.is_dir) {
             .yes => {
                 try watcher.watchDir(entry.path);
-                // TODO: communicate path to Site, in case it was a file before.
+                try site.touchPage(entry.path, true);
             },
             .unsure => {
-                // TODO: pass error to Site, so it doesn't need to `stat`.
-                try site.touchPage(entry.path);
+                try site.touchPage(entry.path, false);
             },
         }
     }

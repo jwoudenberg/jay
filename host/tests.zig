@@ -602,6 +602,46 @@ test "add a symlink to a file => jay shows an error" {
     try std.testing.expectEqualStrings("", test_run_loop.output());
 }
 
+test "replace source file path with a directory => jay removes output for source file" {
+    var test_run_loop = try TestRunLoop.init(.{ .markdown_patterns = &.{"*.md"} });
+    defer test_run_loop.deinit();
+    var site = test_run_loop.test_site.site;
+
+    try site.source_root.writeFile(.{ .sub_path = "file.md", .data = "{}<html/>" });
+    try test_run_loop.loopOnce();
+    try std.testing.expectEqualStrings("", test_run_loop.output());
+    try expectFile(site.output_root, "file.html", "<html/>\n");
+
+    try site.source_root.deleteFile("file.md");
+    try site.source_root.makePath("file.md");
+    try test_run_loop.loopOnce();
+    try std.testing.expectEqualStrings("", test_run_loop.output());
+    try expectNoFile(site.output_root, "file.html");
+}
+
+test "replace source directory path with a file => jay removes outputs for directory contents" {
+    var test_run_loop = try TestRunLoop.init(.{ .static_patterns = &.{"bird"} });
+    defer test_run_loop.deinit();
+    var extern_dir = std.testing.tmpDir(.{});
+    defer extern_dir.cleanup();
+    var site = test_run_loop.test_site.site;
+
+    try site.source_root.makePath("bird");
+    try site.source_root.writeFile(.{ .sub_path = "bird/jay.html", .data = "<html/>" });
+    try test_run_loop.loopOnce();
+    try std.testing.expectEqualStrings("", test_run_loop.output());
+    try expectFile(site.output_root, "bird/jay.html", "<html/>");
+
+    try std.fs.rename(site.source_root, "bird", extern_dir.dir, "bird");
+    try site.source_root.writeFile(.{ .sub_path = "bird", .data = "<span/>" });
+    try test_run_loop.loopOnce();
+    try std.testing.expectEqualStrings("", test_run_loop.output());
+    try expectFile(site.output_root, "bird", "<span/>");
+    try expectNoFile(site.output_root, "bird/jay.html");
+}
+
+// -- test helpers --
+
 fn expectFile(dir: std.fs.Dir, path: []const u8, expected: []const u8) !void {
     var buf: [1024]u8 = undefined;
     const contents = try dir.readFile(path, &buf);

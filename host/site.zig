@@ -104,33 +104,55 @@ pub const Site = struct {
 
     // Let scan know that a certain source path exists and might recently have
     // seen changes.
-    pub fn touchPage(self: *Site, source_path: Str) !void {
+    pub fn touchPage(self: *Site, source_path: Str, is_dir: bool) !void {
+        // If a path changed its sub paths might be affected to. Scan those
+        // first. This can be relevant if we swap out a directory path with a
+        // file.
+        var pages = self.iterator();
+        while (pages.next()) |page| {
+            // TODO: consider optimizing away the string comparisons.
+            if (page.source_path != source_path and
+                std.mem.startsWith(u8, page.source_path.bytes(), source_path.bytes()))
+            {
+                try self.touchPage_(page.source_path, false);
+            }
+        }
+        try self.touchPage_(source_path, is_dir);
+    }
+
+    pub fn touchPage_(self: *Site, source_path: Str, is_dir: bool) !void {
         _ = self.tmp_arena_state.reset(.{ .retain_with_limit = 1024 * 1024 });
-        const new = source_path.index() == Str.init_index or source_path != self.pages.at(source_path.index()).source_path;
+        const is_new =
+            source_path.index() == Str.init_index or
+            source_path != self.pages.at(source_path.index()).source_path;
 
         // Not using Zig's std.fs.Dir.statFile here because it follows
         // symlinks. If the path is a symlinked file we want to detect it so
         // we can show an error.
-        if (std.posix.fstatat(
-            self.source_root.fd,
-            source_path.bytes(),
-            std.posix.AT.SYMLINK_NOFOLLOW,
-        )) |posix_stat| {
+        file_exists: {
+            const posix_stat = std.posix.fstatat(
+                self.source_root.fd,
+                source_path.bytes(),
+                std.posix.AT.SYMLINK_NOFOLLOW,
+            ) catch |err| {
+                if (err == error.FileNotFound)
+                    break :file_exists
+                else
+                    return err;
+            };
             const stat = std.fs.File.Stat.fromSystem(posix_stat);
-            if (new) {
-                try self.initPage(source_path, stat);
-            } else {
-                try self.scanPage(source_path, stat);
-            }
-        } else |err| {
-            if (err != error.FileNotFound) return err;
+            if (is_dir) break :file_exists;
+            return if (is_new)
+                self.initPage(source_path, stat)
+            else
+                self.scanPage(source_path, stat);
+        }
 
-            // File was deleted
-            if (new) {
-                self.errors.remove(source_path);
-            } else {
-                try self.deletePage(source_path);
-            }
+        // File was deleted
+        if (is_new) {
+            self.errors.remove(source_path);
+        } else {
+            try self.deletePage(source_path);
         }
     }
 
@@ -147,7 +169,7 @@ pub const Site = struct {
 
         // Insert markdown file.
         const file_md = try site.strs.intern("file.md");
-        try site.touchPage(file_md);
+        try site.touchPage(file_md, false);
         const md_page = site.getPage(file_md).?;
         try std.testing.expectEqual(0, md_page.rule_index);
         try std.testing.expectEqualStrings("file.md", md_page.source_path.bytes());
@@ -166,7 +188,7 @@ pub const Site = struct {
 
         // Insert static file.
         const style_css = try site.strs.intern("style.css");
-        try site.touchPage(style_css);
+        try site.touchPage(style_css, false);
         const css_page = site.getPage(style_css).?;
         try std.testing.expectEqual(1, css_page.rule_index);
         try std.testing.expectEqualStrings("style.css", css_page.source_path.bytes());
@@ -186,7 +208,7 @@ pub const Site = struct {
         // Update markdown file making changes.
         site.pages_to_generate.unsetAll(); // clear flags
         try site.source_root.writeFile(.{ .sub_path = "file.md", .data = "{ hi: 4 }\x09" });
-        try site.touchPage(file_md);
+        try site.touchPage(file_md, false);
         try std.testing.expect(site.pages_to_generate.isSet(md_page.source_path.index()));
         try std.testing.expect(!md_page.scanned.?.deleted);
         try std.testing.expectEqualStrings("{ hi: 4 }", md_page.scanned.?.frontmatter.?);
@@ -194,7 +216,7 @@ pub const Site = struct {
         // Delete markdown file
         site.pages_to_generate.unsetAll(); // clear flags
         try site.source_root.deleteFile("file.md");
-        try site.touchPage(file_md);
+        try site.touchPage(file_md, false);
         try std.testing.expect(!site.pages_to_generate.isSet(md_page.source_path.index()));
         try std.testing.expect(md_page.scanned.?.deleted);
         try std.testing.expectEqual(null, site.getPage(file_md));
@@ -204,7 +226,7 @@ pub const Site = struct {
         // Recreate a markdown file
         site.pages_to_generate.unsetAll(); // clear flags
         try site.source_root.writeFile(.{ .sub_path = "file.md", .data = "{}\x02" });
-        try site.touchPage(file_md);
+        try site.touchPage(file_md, false);
         try std.testing.expect(site.pages_to_generate.isSet(md_page.source_path.index()));
         try std.testing.expect(!md_page.scanned.?.deleted);
         try std.testing.expectEqual(null, md_page.generated);
@@ -304,7 +326,11 @@ pub const Site = struct {
 
         switch (stat.kind) {
             .file => {},
-            .directory => return error.UnexpectedDirPasstedToPageScan,
+            .directory => {
+                // Gracefully recover if a path has become a directory by the
+                // time we scan it.
+                return;
+            },
             .sym_link => {
                 // A symlink to a file (rather than a directory) creates
                 // problems for file watching. We watch source directories, and
