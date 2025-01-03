@@ -1,5 +1,6 @@
 body {
   --max-width: 600px;
+  --header-color: #cdf7e4;
   margin: 0;
   font-family: 'IBM Plex Sans', sans-serif;
 }
@@ -8,32 +9,34 @@ body {
   display: flex;
   flex-direction: row;
   justify-content: space-between;
-  align-items: center;
-  background: #cdf7e4;
+  align-items: stretch;
+  background: var(--header-color);
+  height: 3rem;
   padding: 0 calc(max(0.6em, (100vw - var(--max-width)) / 2));
+
+  & a {
+    text-decoration: none;
+    color: inherit;
+    height: 100%;
+    display: flex;
+    align-items: center;
+  }
 
   & h1 {
     font-size: 1.2rem;
     font-weight: normal;
-
-    & a {
-      text-decoration: none;
-      color: inherit;
-    }
+    margin: 0;
   }
 
   & nav ul {
     display: flex;
     flex-direction: row;
+    align-items: stretch;
     gap: 1.3em;
+    height: 100%;
     list-style: none;
     margin: 0;
     padding: 0;
-
-    & a {
-      color: inherit;
-      text-decoration: none;
-    }
   }
 }
 
