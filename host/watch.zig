@@ -161,6 +161,7 @@ pub fn Watcher(
         }
 
         const fan_mask: fanotify.fanotify.MarkMask = .{
+            .ATTRIB = true,
             .CLOSE_WRITE = true,
             .CREATE = true,
             .DELETE = true,

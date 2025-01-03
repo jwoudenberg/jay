@@ -34,10 +34,10 @@ pub fn scanRecursively(
         switch (entry.is_dir) {
             .yes => {
                 try watcher.watchDir(entry.path);
-                try site.touchPage(entry.path, true);
+                try site.touchPath(entry.path, true);
             },
             .unsure => {
-                try site.touchPage(entry.path, false);
+                try site.touchPath(entry.path, false);
             },
         }
     }

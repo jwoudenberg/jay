@@ -34,6 +34,8 @@ pub const Frontmatters = struct {
         frontmatter: []const u8,
         no_frontmatter: void,
         failed_to_parse: void,
+        file_not_found: void,
+        access_denied: void,
     };
 
     pub fn read(
@@ -42,7 +44,15 @@ pub const Frontmatters = struct {
         source_root: std.fs.Dir,
         source_path: Str,
     ) !ReadResult {
-        const bytes = try source_root.readFileAlloc(arena, source_path.bytes(), 1024 * 1024);
+        const bytes = source_root.readFileAlloc(
+            arena,
+            source_path.bytes(),
+            1024 * 1024,
+        ) catch |err| switch (err) {
+            error.FileNotFound => return .file_not_found,
+            error.AccessDenied => return .access_denied,
+            else => return err,
+        };
         var meta_bytes: []const u8 = "{}";
         if (firstNonWhitespaceByte(bytes) != '{') return .{ .no_frontmatter = void{} };
 
@@ -97,6 +107,11 @@ pub const Frontmatters = struct {
         try std.testing.expectEqualStrings(
             "{ hi: 3 }",
             (try frontmatters.read(arena, tmpdir.dir, try strs.intern("file2.txt"))).frontmatter,
+        );
+
+        try std.testing.expectEqual(
+            ReadResult{ .file_not_found = void{} },
+            (try frontmatters.read(arena, tmpdir.dir, try strs.intern("file3.txt"))),
         );
     }
 };

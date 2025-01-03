@@ -640,6 +640,35 @@ test "replace source directory path with a file => jay removes outputs for direc
     try expectNoFile(site.output_root, "bird/jay.html");
 }
 
+test "add a source file the current user cannot read => jay shows an error" {
+    var test_run_loop = try TestRunLoop.init(.{ .markdown_patterns = &.{"*.md"} });
+    defer test_run_loop.deinit();
+    var site = test_run_loop.test_site.site;
+
+    try site.source_root.writeFile(.{
+        .sub_path = "file.md",
+        .data = "{}<html/>",
+        .flags = .{ .mode = 0 },
+    });
+    try test_run_loop.loopOnce();
+    try std.testing.expectEqualStrings(
+        \\I don't have permission to read the following source path:
+        \\
+        \\    file.md
+        \\
+        \\Change permissions of the file so I can read it, or add
+        \\an ignore pattern for this file.
+        \\
+    , test_run_loop.output());
+    try expectNoFile(site.output_root, "file.html");
+
+    //Change file permissions to allow read access => jay stops showing error
+    try std.posix.fchmodat(site.source_root.fd, "file.md", std.os.linux.S.IRUSR, 0);
+    try test_run_loop.loopOnce();
+    try std.testing.expectEqualStrings("", test_run_loop.output());
+    try expectFile(site.output_root, "file.html", "<html/>\n");
+}
+
 // -- test helpers --
 
 fn expectFile(dir: std.fs.Dir, path: []const u8, expected: []const u8) !void {

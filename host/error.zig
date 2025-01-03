@@ -18,6 +18,7 @@ pub const Error = union(enum) {
         kind: std.fs.File.Kind,
     },
     source_file_is_symlink: Str,
+    source_path_access_denied: Str,
 
     fn print(self: Error, writer: anytype) !void {
         switch (self) {
@@ -135,6 +136,17 @@ pub const Error = union(enum) {
                     \\
                     \\Tip: I do support symlinks to directories, maybe that
                     \\     works as an alternative!
+                    \\
+                , .{source_path.bytes()});
+            },
+            .source_path_access_denied => |source_path| {
+                try writer.print(
+                    \\I don't have permission to read the following source path:
+                    \\
+                    \\    {s}
+                    \\
+                    \\Change permissions of the file so I can read it, or add
+                    \\an ignore pattern for this file.
                     \\
                 , .{source_path.bytes()});
             },
