@@ -1,3 +1,40 @@
+{
+    title: "Syntax Highlighting",
+    order: 2,
+}
+
+Jay has support for syntax highlighting of the following languages:
+
+- Elm
+- Haskell
+- JSON
+- Nix
+- Roc
+- Ruby
+- Rust
+- Zig
+
+If the language you want to highlight is not included, let us know by creating an issue on the Jay repo!
+
+Jay highlights fenced code blocks in markdown source files.
+
+````markdown
+Here's some sample code:
+
+```roc
+expect 1 + 1 == 2
+```
+````
+
+## Quickest Path to Color
+
+The quickest way to get started is to copy the `CSS` below in a stylesheet included in your pages.
+You can then adjust the 16 CSS variables to your taste, or set them to one of the themes in the [base16][]
+specification.
+
+[base16]: https://github.com/chriskempson/base16
+
+```css
 pre > code {
   /* Based on Dracula Theme: https://github.com/dracula/dracula-theme */
   --hl-base00: #282A36;
@@ -101,3 +138,4 @@ pre > code {
     text-decoration: underline;
   }
 }
+```

@@ -1,59 +1,6 @@
-## Jay proccesses all the files in a project directory to build a site.
+## This module contains the main functions you need to build a site with Jay.
 ##
-## For example, below on the left are the files of a simple blog.
-## On the right are the pages Jay will create for these files.
-##
-## ```
-## index.md           => /index.html
-## blog.md            => /blog.html
-## posts/
-##   a-great-day.md   => /posts/a-great-day.html
-## static/
-##   image.jpg        => /static/image.jpg
-##   style.css        => /static/style.css
-## README.md
-## build.roc
-## ```
-##
-## The `build.roc` file describes the processing Jay needs to perform for every
-## source file in the project. The following `build.roc` would produce the
-## example blog above:
-##
-## ```
-## #!/usr/bin/env roc
-## app [main] { pf: platform "github.com/jwoudenberg/roc-static-site" }
-##
-## main = Pages.collect [
-##     files ["*.md", "posts/*.md"] |> from_markdown,
-##     files ["static/*"],
-##     ignore ["README.md"],
-## ]
-## ```
-##
-## Output files always have the same relative path as the source files they
-## were created from. A markdown source file `posts/2024/trying-jay.md` will
-## always produce an output path `/posts/2024/trying-jay.html`. Jay offers no
-## way to override this.
-##
-## Jay can generate an initial `build.roc` file for you. Find the details in
-## the documentation for the `bootstrap` function below.
-##
-## Once you have a `build.roc` file you can run it as a script:
-##
-## ```
-## ./build.roc --linker=legacy
-## ```
-##
-## This will start Jay in development mode. It will serve a preview of your
-## site and automatically rebuild it when you make changes to source files.
-##
-## To publish the site you can run a production build:
-##
-## ```
-## ./build.roc --linker=legacy prod output/
-## ```
-##
-## This command will generate site files in the `output/` directory, then exit.
+## If you're new to Jay, [the guide](/guide) is the best place to get started!
 ##
 module [
     # page creation

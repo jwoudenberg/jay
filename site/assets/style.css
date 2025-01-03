@@ -1,8 +1,10 @@
 body {
   --max-width: 600px;
   --header-color: #cdf7e4;
+  --header-height: 3rem;
   margin: 0;
   font-family: 'IBM Plex Sans', sans-serif;
+  line-height: 1.6;
 }
 
 .header {
@@ -11,7 +13,7 @@ body {
   justify-content: space-between;
   align-items: stretch;
   background: var(--header-color);
-  height: 3rem;
+  height: var(--header-height);
   padding: 0 calc(max(0.6em, (100vw - var(--max-width)) / 2));
 
   & a {
@@ -40,13 +42,11 @@ body {
   }
 }
 
-.home, .guide {
+.home {
   max-width: var(--max-width);
   margin: auto;
   padding: 0.6em;
-}
 
-.home {
   & h1 {
     text-align: center;
     font-size: 6em;
@@ -73,7 +73,6 @@ body {
   & li {
     max-width: 60%;
     margin-bottom: 2em;
-    line-height: 1.5em;
     text-decoration: underline;
     text-decoration-thickness: 3px;
     text-decoration-color: #64e8ae;
@@ -81,6 +80,84 @@ body {
     &:nth-child(even) {
       align-self: end;
       text-align: right;
+    }
+  }
+}
+
+.guide {
+  --nav-width: 15rem;
+  --content-width: 35rem;
+  --extra-width: calc(100vw - var(--nav-width) - var(--content-width));
+  --page-margin: calc(0.5 * var(--extra-width));
+
+  position: absolute;
+  top: var(--header-height);
+  height: calc(100vh - var(--header-height));
+  width: 100vw;
+  overflow: hidden;
+
+  & nav {
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: calc(var(--nav-width) + var(--page-margin));
+    padding-left: var(--page-margin);
+    padding-top: 2em;
+    padding-bottom: 2em;
+    box-sizing: border-box;
+    overflow-y: scroll;
+
+    & ul {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+
+    & .section-links {
+      margin-top: 1em;
+    }
+
+    & li {
+      padding: 0.2em;
+
+      &.active {
+        color: #168250;
+      }
+
+      &:first-child {
+        font-weight: bold;
+      }
+    }
+
+    & a {
+      color: inherit;
+      text-decoration: none;
+    }
+  }
+
+  & main {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    width: calc(var(--content-width) + var(--page-margin));
+    padding-right: var(--page-margin);
+    padding-top: 0.4em;
+    padding-bottom: 2rem;
+    box-sizing: border-box;
+    overflow-y: scroll;
+
+    & h2 {
+      font-size: 2em;
+      font-weight: bold;
+      margin-bottom: 1.5em;
+      margin-top: 1.5em;
+    }
+
+    & a {
+      color: #168250;
+      text-decoration: none;
     }
   }
 }

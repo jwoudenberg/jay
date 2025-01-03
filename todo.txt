@@ -1,4 +1,10 @@
 +fix don't crash on error.MismatchedCloseAndOpenTags
++fix don't crash on bootstrap example
++fix don't generate camel-cased variable names in bootstrap
++fix don't crash on 'I ran into an error attempting to decode the following metadata:'
++fix metadata parsing of pages without pinned metadata type
+
++mvp syntax highlighting for css, html, sh/bash, markdown, yaml
 
 +html support data attributes
 +html fix shadowed attributes
