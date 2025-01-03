@@ -669,6 +669,20 @@ test "add a source file the current user cannot read => jay shows an error" {
     try expectFile(site.output_root, "file.html", "<html/>\n");
 }
 
+test "add a file that depends on itself => jay is okay with it" {
+    var test_run_loop = try TestRunLoop.init(.{ .markdown_patterns = &.{"*.md"} });
+    defer test_run_loop.deinit();
+    const site = test_run_loop.test_site.site;
+
+    try site.source_root.writeFile(.{ .sub_path = "file.md", .data = "{ hi: 4 }<dep pattern=\"*\"/>" });
+    try test_run_loop.loopOnce();
+    try expectFile(site.output_root, "file.html", "{ hi: 4 }\n");
+
+    try site.source_root.writeFile(.{ .sub_path = "file.md", .data = "{ hi: 5 }<dep pattern=\"*\"/>" });
+    try test_run_loop.loopOnce();
+    try expectFile(site.output_root, "file.html", "{ hi: 5 }\n");
+}
+
 // -- test helpers --
 
 fn expectFile(dir: std.fs.Dir, path: []const u8, expected: []const u8) !void {

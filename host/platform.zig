@@ -85,8 +85,6 @@ fn getPagesMatchingPattern(roc_pattern: *RocStr) !RocList {
     var results = std.ArrayList(Page).init(state.arena);
     var pages = try state.site.pagesMatchingPattern(state.active_source_path, pattern);
     while (pages.next()) |page| {
-        page.mutex.lock();
-        defer page.mutex.unlock();
         const scanned = page.scanned orelse return error.UnexpectedUnscannedPage;
         try results.append(Page{
             .meta = RocList.fromSlice(u8, scanned.frontmatter orelse "{}", false),

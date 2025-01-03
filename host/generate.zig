@@ -13,7 +13,7 @@ pub fn generate(
     page: *Site.Page,
 ) !void {
     const arena = site.tmp_arena_state.allocator();
-    const scanned = page.scanned orelse return error.CantGenerateForUnscannedPage;
+    const scanned = page.scanned orelse return;
     switch (page.processing) {
         .none => {
             // I'd like to use the below, but get the following error when I do:

@@ -98,8 +98,7 @@ pub const Site = struct {
         const page = self.pages.at(page_index);
         page.mutex.lock();
         defer page.mutex.unlock();
-        const scanned = page.scanned orelse return null;
-        return if (scanned.deleted) null else page;
+        return if (page.scanned == null) null else page;
     }
 
     // Notify Site of the existence or changes to a source path.
@@ -188,7 +187,6 @@ pub const Site = struct {
         try std.testing.expectEqual(site.rules[0].replace_tags, md_page.replace_tags);
         try std.testing.expectEqual(null, md_page.generated);
         try std.testing.expect(site.pages_to_generate.isSet(md_page.source_path.index()));
-        try std.testing.expect(!md_page.scanned.?.deleted);
         try std.testing.expectEqualStrings("{}", md_page.scanned.?.frontmatter.?);
         try std.testing.expectEqualStrings("text/html", @tagName(md_page.scanned.?.mime_type));
 
@@ -207,7 +205,6 @@ pub const Site = struct {
         try std.testing.expectEqual(site.rules[1].replace_tags, css_page.replace_tags);
         try std.testing.expectEqual(null, css_page.generated);
         try std.testing.expect(site.pages_to_generate.isSet(css_page.source_path.index()));
-        try std.testing.expect(!css_page.scanned.?.deleted);
         try std.testing.expectEqualStrings("{}", css_page.scanned.?.frontmatter.?);
         try std.testing.expectEqualStrings("text/css", @tagName(css_page.scanned.?.mime_type));
 
@@ -216,7 +213,6 @@ pub const Site = struct {
         try site.source_root.writeFile(.{ .sub_path = "file.md", .data = "{ hi: 4 }\x09" });
         try site.touchPath(file_md, false);
         try std.testing.expect(site.pages_to_generate.isSet(md_page.source_path.index()));
-        try std.testing.expect(!md_page.scanned.?.deleted);
         try std.testing.expectEqualStrings("{ hi: 4 }", md_page.scanned.?.frontmatter.?);
 
         // Delete markdown file
@@ -224,7 +220,7 @@ pub const Site = struct {
         try site.source_root.deleteFile("file.md");
         try site.touchPath(file_md, false);
         try std.testing.expect(!site.pages_to_generate.isSet(md_page.source_path.index()));
-        try std.testing.expect(md_page.scanned.?.deleted);
+        try std.testing.expect(md_page.scanned == null);
         try std.testing.expectEqual(null, site.getPage(file_md));
         try std.testing.expectEqual(Str.init_index, (try site.strs.intern("file.html")).index());
         try std.testing.expectEqual(Str.init_index, (try site.strs.intern("file")).index());
@@ -234,7 +230,6 @@ pub const Site = struct {
         try site.source_root.writeFile(.{ .sub_path = "file.md", .data = "{}\x02" });
         try site.touchPath(file_md, false);
         try std.testing.expect(site.pages_to_generate.isSet(md_page.source_path.index()));
-        try std.testing.expect(!md_page.scanned.?.deleted);
         try std.testing.expectEqual(null, md_page.generated);
         try std.testing.expectEqualStrings("{}", md_page.scanned.?.frontmatter.?);
         try std.testing.expectEqualStrings("text/html", @tagName(md_page.scanned.?.mime_type));
@@ -306,7 +301,6 @@ pub const Site = struct {
         const page = self.pages.at(source_path.index());
         var scanned = &(page.scanned orelse return);
 
-        scanned.deleted = true;
         self.output_root.deleteFile(scanned.output_path.bytes()) catch |err| {
             if (err != error.FileNotFound) return err;
         };
@@ -319,6 +313,8 @@ pub const Site = struct {
         if (scanned.web_path != page.source_path) {
             _ = scanned.web_path.replaceIndex(Str.init_index);
         }
+
+        page.scanned = null;
 
         // Update dependents that might include content from or a link to
         // the deleted page.
@@ -430,7 +426,6 @@ pub const Site = struct {
             .web_path = web_path,
             .mime_type = mime.extension_map.get(extension) orelse .@"application/octet-stream",
             .frontmatter = frontmatter,
-            .deleted = false,
         };
 
         _ = output_path.replaceIndex(page_index);
@@ -484,7 +479,6 @@ pub const Site = struct {
             web_path: Str,
             mime_type: mime.Type,
             frontmatter: ?[]const u8,
-            deleted: bool,
         },
 
         generated: ?struct {
@@ -567,10 +561,7 @@ pub const Site = struct {
                 const matches = self.site.patterns_matched_by_page.at(page_index);
                 if (matches.isSet(pattern_index)) {
                     const page = self.site.pages.at(page_index);
-                    page.mutex.lock();
-                    defer page.mutex.unlock();
-                    const scanned = page.scanned orelse continue;
-                    return if (scanned.deleted) continue else page;
+                    return if (page.scanned == null) continue else page;
                 }
             }
             return null;
