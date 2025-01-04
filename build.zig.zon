@@ -11,6 +11,38 @@
             .url = "https://github.com/andrewrk/mime/archive/refs/tags/2.0.1.tar.gz",
             .hash = "12209083b0c43d0f68a26a48a7b26ad9f93b22c9cff710c78ddfebb47b89cfb9c7a4",
         },
+        .@"tree-sitter-elm" = .{
+            .url = "https://github.com/elm-tooling/tree-sitter-elm/archive/refs/tags/v5.7.0.tar.gz",
+            .hash = "1220e936835b3f5295904b11eff15821fa5395a1b2896d184f724d1d595ecdbf50fb",
+        },
+        .@"tree-sitter-haskell" = .{
+            .url = "https://github.com/tree-sitter/tree-sitter-haskell/archive/refs/tags/v0.23.1.tar.gz",
+            .hash = "1220ee7971cb01202477f14a395d92fec3b935e7ab3c311bf4231f1d355f010aa24a",
+        },
+        .@"tree-sitter-json" = .{
+            .url = "https://github.com/tree-sitter/tree-sitter-json/archive/refs/tags/v0.24.8.tar.gz",
+            .hash = "12203fb7e37c9eb2b6d0e98a88eb70dd185a0420275f0408890f200c2e56eddb38aa",
+        },
+        .@"tree-sitter-nix" = .{
+            .url = "https://github.com/nix-community/tree-sitter-nix/archive/21897cc3dcd15325303e46b85295b743742af6ab.tar.gz",
+            .hash = "1220e28c16fe706df83b7e8e065ea54a27aec08bd9d5401944a7e8a8d1440c238621",
+        },
+        .@"tree-sitter-roc" = .{
+            .url = "https://github.com/faldor20/tree-sitter-roc/archive/7d29fc24b36119494b4dc3f3d967075e261706c1.tar.gz",
+            .hash = "12209585afa367965d4d90675c742e972ac1c7816207b6d07a921452e253b22cc048",
+        },
+        .@"tree-sitter-ruby" = .{
+            .url = "https://github.com/tree-sitter/tree-sitter-ruby/archive/refs/tags/v0.23.1.tar.gz",
+            .hash = "12209200323c06ffa0a5f985e9c0ecf56a588236ae03a4caa694ed13876d542bda4f",
+        },
+        .@"tree-sitter-rust" = .{
+            .url = "https://github.com/tree-sitter/tree-sitter-rust/archive/refs/tags/v0.23.2.tar.gz",
+            .hash = "12200bb1b394dcbc9168ca7db41ee0775ebe1496e8e540de81f2882a7e8cde09034d",
+        },
+        .@"tree-sitter-zig" = .{
+            .url = "https://github.com/tree-sitter-grammars/tree-sitter-zig/archive/refs/tags/v1.1.2.tar.gz",
+            .hash = "122099c4b527a9ee3adb43ff16a1eb118f0f1d3035f9594e9f8c97d3426f9a60fb1f",
+        },
     },
     .paths = .{
         "build.zig",

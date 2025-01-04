@@ -2,12 +2,12 @@
 // code blocks.
 
 const std = @import("std");
-const c = @import("c.zig");
-const zig_build_options = @import("zig_build_options");
+const Grammar = @import("generated_grammars");
 const native_endian = @import("builtin").target.cpu.arch.endian();
 const Str = @import("str.zig").Str;
+const c = Grammar.c;
 
-const file_types = std.StaticStringMap(Lang).initComptime(.{
+const file_types = std.StaticStringMap(Grammar.Lang).initComptime(.{
     .{ "elm", .elm },
     .{ "haskell", .haskell },
     .{ "hs", .haskell },
@@ -80,9 +80,9 @@ pub const Highlighter = struct {
     // tree-sitter-highlight for our own code would allow us to improve this.
     fn getGrammar(
         self: *Highlighter,
-        lang: Lang,
+        lang: Grammar.Lang,
     ) !Grammar {
-        var grammar: Grammar = grammars[@intFromEnum(lang)];
+        var grammar: Grammar = Grammar.all[@intFromEnum(lang)];
         if (grammar.ts_highlighter != null) return grammar;
 
         const highlights_query = std.mem.span(grammar.highlights_query);
@@ -231,15 +231,6 @@ test Highlighter {
     );
 }
 
-const Grammar = struct {
-    name: [:0]const u8,
-    highlights_query: [*:0]const u8,
-    injections_query: [*:0]const u8 = "",
-    locals_query: [*:0]const u8 = "",
-    ts_highlighter: ?*c.TSHighlighter = null,
-    ts_language: *const fn () callconv(.C) ?*const c.TSLanguage,
-};
-
 pub const CStringContext = struct {
     pub fn hash(self: @This(), s: [*:0]const u8) u32 {
         _ = self;
@@ -250,76 +241,4 @@ pub const CStringContext = struct {
         _ = b_index;
         return std.array_hash_map.eqlString(std.mem.span(a), std.mem.span(b));
     }
-};
-
-// Create an enum for all the supported languages from the `grammars` array.
-// The generated enum type is equivalent to the following hand-written one:
-//
-//     const Lang = enum { roc, zig, ... }
-//
-const Lang = blk: {
-    var lang_enum_fields: [grammars.len]std.builtin.Type.EnumField = undefined;
-    for (grammars, 0..) |lang, index| {
-        lang_enum_fields[index] = .{
-            .name = lang.name,
-            .value = index,
-        };
-    }
-    break :blk @Type(.{
-        .Enum = .{
-            .tag_type = u16,
-            .is_exhaustive = true,
-            .decls = &.{},
-            .fields = &lang_enum_fields,
-        },
-    });
-};
-
-const grammars: []const Grammar = blk: {
-    var output: [100]Grammar = undefined;
-    var index = 0;
-
-    // Decoding the data on grammars passed in from build.zig. See that file
-    // for documentation on the format and kind of data passed in.
-    var offset: usize = 0;
-    const input = zig_build_options.grammars;
-    const slices = zig_build_options.slices;
-    while (offset < input.len) {
-        const name_start = input[offset];
-        const name: [:0]const u8 = std.mem.span(@as([*:0]const u8, @ptrCast(slices[name_start..])));
-        offset += 1;
-
-        const highlights_start = input[offset];
-        const highlights_query: [*:0]const u8 = @ptrCast(slices[highlights_start..]);
-        offset += 1;
-
-        const injections_start = input[offset];
-        const injections_query: [*:0]const u8 = @ptrCast(slices[injections_start..]);
-        offset += 1;
-
-        const locals_start = input[offset];
-        const locals_query: [*:0]const u8 = @ptrCast(slices[locals_start..]);
-        offset += 1;
-
-        const ts_language_fn_name = std.fmt.comptimePrint(
-            "tree_sitter_{s}",
-            .{name},
-        );
-        const ts_language = @field(c, ts_language_fn_name);
-
-        const grammar = Grammar{
-            .name = name,
-            .highlights_query = highlights_query,
-            .injections_query = injections_query,
-            .locals_query = locals_query,
-            .ts_language = &ts_language,
-        };
-        output[index] = grammar;
-        index += 1;
-    }
-
-    // Copy to const required because of how comptime works:
-    // https://ziggit.dev/t/comptime-mutable-memory-changes/3702
-    const result = output;
-    break :blk result[0..index];
 };

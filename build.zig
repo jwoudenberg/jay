@@ -4,7 +4,7 @@ const native_endian = @import("builtin").target.cpu.arch.endian();
 pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
     const target = b.standardTargetOptions(.{});
-    const deps = try Deps.init(b, optimize, target);
+    const deps = Deps.init(b, optimize, target);
 
     // Collect all .roc files, to make them dependencies for other commands.
     var platform_dir = try std.fs.cwd().openDir("platform", .{ .iterate = true });
@@ -115,9 +115,6 @@ fn buildLegacy(
     const combined_archive = combine_archive.addOutputFileArg(makeTempFilePath(b, "combined.a"));
     combine_archive.addFileArg(deps.libcmark_gfm.artifact("cmark-gfm").getEmittedBin());
     combine_archive.addFileArg(deps.libcmark_gfm.artifact("cmark-gfm-extensions").getEmittedBin());
-    for (deps.tree_sitter_grammars) |grammar| {
-        combine_archive.addFileArg(grammar.getEmittedBin());
-    }
     combine_archive.addFileArg(libhost.getEmittedBin());
 
     b.getInstallStep().dependOn(&b.addInstallFile(combined_archive, "platform/linux-x64.a").step);
@@ -212,131 +209,217 @@ fn makeTempFilePath(b: *std.Build, filename: []const u8) []const u8 {
     return b.pathJoin(&[_][]const u8{ b.makeTempPath(), filename });
 }
 
+const Grammar = struct {
+    name: []const u8,
+    c_source_files: []const []const u8,
+
+    fn lang_name(self: *const Grammar) []const u8 {
+        const prefix = "tree-sitter-";
+        std.debug.assert(std.mem.startsWith(u8, self.name, prefix));
+        return self.name[prefix.len..];
+    }
+};
+
+const grammars = [_]Grammar{
+    .{ .name = "tree-sitter-elm", .c_source_files = &.{ "parser.c", "scanner.c" } },
+    .{ .name = "tree-sitter-haskell", .c_source_files = &.{ "parser.c", "scanner.c" } },
+    .{ .name = "tree-sitter-json", .c_source_files = &.{"parser.c"} },
+    .{ .name = "tree-sitter-nix", .c_source_files = &.{ "parser.c", "scanner.c" } },
+    .{ .name = "tree-sitter-roc", .c_source_files = &.{ "parser.c", "scanner.c" } },
+    .{ .name = "tree-sitter-ruby", .c_source_files = &.{ "parser.c", "scanner.c" } },
+    .{ .name = "tree-sitter-rust", .c_source_files = &.{ "parser.c", "scanner.c" } },
+    .{ .name = "tree-sitter-zig", .c_source_files = &.{"parser.c"} },
+};
+
+// This is a custom step that sets up the tree-sitter portion of the build
+// graph, including grammars.
+// Part of the work involves pulling highlighting queries out of the `queries/`
+// sub-directories of the different grammars, and generating a zig module
+// containing their contents. This portion of the work requires a custom build
+// step. Once that custom step existed, it attracted the remainder of the
+// tree-sitter build.
+const GenerateGrammars = struct {
+    step: std.Build.Step,
+    query_dirs: [grammars.len]std.Build.LazyPath,
+    generated_file: std.Build.GeneratedFile,
+    module: *std.Build.Module,
+    output_path: []const u8,
+
+    pub fn create(
+        b: *std.Build,
+        optimize: std.builtin.OptimizeMode,
+        target: std.Build.ResolvedTarget,
+    ) *GenerateGrammars {
+        const tree_sitter = pathFromEnvVar(b, "TREE_SITTER_PATH");
+        const highlight = pathFromEnvVar(b, "HIGHLIGHT_PATH");
+        const generate_grammars = b.allocator.create(GenerateGrammars) catch @panic("OOM");
+        generate_grammars.* = .{
+            .step = std.Build.Step.init(.{
+                .id = .custom,
+                .name = "GenerateGrammars",
+                .owner = b,
+                .makeFn = make,
+            }),
+            .query_dirs = undefined,
+            .generated_file = .{ .step = &generate_grammars.step },
+            .module = b.createModule(.{
+                .root_source_file = .{
+                    .generated = .{
+                        .file = &generate_grammars.generated_file,
+                    },
+                },
+            }),
+            .output_path = std.fs.path.join(
+                b.allocator,
+                &.{ b.makeTempPath(), "generated_grammars.zig" },
+            ) catch @panic("OOM"),
+        };
+
+        var module = generate_grammars.module;
+        for (grammars, 0..) |grammar, index| {
+            // Build grammar
+            const dep = b.dependency(grammar.name, .{
+                .target = target,
+                .optimize = optimize,
+            });
+            var lib = b.addObject(.{
+                .name = grammar.name,
+                .target = target,
+                .optimize = optimize,
+            });
+            lib.root_module.addCSourceFiles(.{
+                .root = dep.path("src"),
+                .files = grammar.c_source_files,
+            });
+            lib.linkLibC();
+            lib.root_module.addIncludePath(tree_sitter.path(b, "include"));
+            lib.root_module.addIncludePath(dep.path("src"));
+
+            module.addObject(lib);
+            generate_grammars.query_dirs[index] = dep.path("queries");
+        }
+
+        module.addIncludePath(highlight.path(b, "include"));
+        module.addObjectFile(highlight.path(b, "lib/libtree_sitter_highlight.a"));
+        module.addIncludePath(tree_sitter.path(b, "include"));
+        module.addObjectFile(tree_sitter.path(b, "lib/libtree-sitter.a"));
+
+        return generate_grammars;
+    }
+
+    pub fn make(step: *std.Build.Step, prog_node: std.Progress.Node) anyerror!void {
+        _ = prog_node;
+        const self: *GenerateGrammars = @fieldParentPtr("step", step);
+        self.writeModule() catch |err| {
+            return step.fail("Unable to write {s}: {s}", .{
+                self.output_path, @errorName(err),
+            });
+        };
+        self.generated_file.path = self.output_path;
+    }
+
+    fn writeModule(self: *GenerateGrammars) !void {
+        const b = self.step.owner;
+        const file = try std.fs.createFileAbsolute(self.output_path, .{});
+        defer file.close();
+        var writer = file.writer();
+        try writer.writeAll(
+            \\const std = @import("std");
+            \\const Grammar = @This();
+            \\
+            \\pub const c = @cImport({
+            \\    @cInclude("tree_sitter/api.h");
+            \\    @cInclude("tree_sitter/highlight.h");
+            \\});
+            \\
+        );
+        for (grammars) |grammar| {
+            try writer.print(
+                "extern fn tree_sitter_{s}() callconv(.C) ?*const c.TSLanguage;\n",
+                .{grammar.lang_name()},
+            );
+        }
+        try writer.writeAll(
+            \\
+            \\name: [:0]const u8,
+            \\highlights_query: [*:0]const u8,
+            \\injections_query: [*:0]const u8 = "",
+            \\locals_query: [*:0]const u8 = "",
+            \\ts_highlighter: ?*c.TSHighlighter = null,
+            \\ts_language: *const fn () callconv(.C) ?*const c.TSLanguage,
+            \\
+            \\pub const Lang = enum {
+            \\
+        );
+        for (grammars) |grammar| {
+            try writer.print("    {s},\n", .{grammar.lang_name()});
+        }
+        try writer.writeAll(
+            \\};
+            \\
+            \\pub const all: []const Grammar = &.{
+            \\
+        );
+        for (grammars, self.query_dirs) |grammar, query_dir_path| {
+            const query_dir = try std.fs.openDirAbsolute(query_dir_path.getPath(b), .{});
+            try writer.print(
+                \\    Grammar{{
+                \\        .name = "{s}",
+                \\        .ts_language = &tree_sitter_{s},
+                \\
+            , .{
+                grammar.lang_name(),
+                grammar.lang_name(),
+            });
+            for ([_][]const u8{ "highlights.scm", "injections.scm", "locals.scm" }) |query| {
+                var query_file = query_dir.openFile(query, .{}) catch |err| {
+                    if (err == error.FileNotFound) continue else return err;
+                };
+                defer query_file.close();
+                var reader = query_file.reader();
+                try writer.print("        .{s}_query = \n", .{query[0 .. query.len - 4]});
+                try copyLinesAddingPrefix(&reader, writer, "            \\\\");
+                try writer.writeAll("        ,\n");
+            }
+            try writer.writeAll(
+                \\    },
+                \\
+            );
+        }
+        try writer.writeAll(
+            \\};
+            \\
+        );
+    }
+};
+
+fn copyLinesAddingPrefix(reader: anytype, writer: anytype, prefix: []const u8) !void {
+    while (true) {
+        try writer.writeAll(prefix);
+        reader.streamUntilDelimiter(writer, '\n', null) catch |err| {
+            if (err == error.EndOfStream) {
+                return writer.writeByte('\n');
+            } else {
+                return err;
+            }
+        };
+        try writer.writeByte('\n');
+    }
+}
+
 const Deps = struct {
     b: *std.Build,
-    options: *std.Build.Step.Options,
-    highlight: std.Build.LazyPath,
-    tree_sitter: std.Build.LazyPath,
     mime: *std.Build.Dependency,
     libcmark_gfm: *std.Build.Dependency,
-    tree_sitter_grammars: []*std.Build.Step.Compile,
+    tree_sitter_grammars: *GenerateGrammars,
 
     fn init(
         b: *std.Build,
         optimize: std.builtin.OptimizeMode,
         target: std.Build.ResolvedTarget,
-    ) !Deps {
-        const tree_sitter = try pathFromEnvVar(b, "TREE_SITTER_PATH");
-
-        // We're passing information about available grammers into the Zig
-        // build as a couple of build options.
-        //
-        // The 'slices' build option contains one long slice containing
-        // null-terminated slices.
-        //
-        // The 'grammars' option contains u32 indexes into the slices array.
-        // Each grammar is represented by the following series of u32s.
-        // Ideally this would be a struct, but the current version of Zig has
-        // some code-generation troubles when attempting to pass complicated
-        // types as a build option.
-        //
-        //     [name][highlights][injections][locals]
-        //
-        //       name: The name of the language the grammar is for.
-        // highlights: The contents of queries/highlights.scm.
-        // injections: The contents of queries/injections.scm.
-        //     locals: The contents of queries/locals.scm.
-        //
-        var grammars_option = std.ArrayList(u32).init(b.allocator);
-
-        var slices_option = std.ArrayList(u8).init(b.allocator);
-        var slices_option_writer_state = std.io.countingWriter(slices_option.writer());
-        var slices_option_writer = slices_option_writer_state.writer();
-
-        const grammar_paths_env = try std.process.getEnvVarOwned(b.allocator, "TREE_SITTER_GRAMMAR_PATHS");
-        var grammar_paths_iter = std.mem.splitScalar(u8, grammar_paths_env, ':');
-        var grammar_steps = std.ArrayList(*std.Build.Step.Compile).init(b.allocator);
-
-        while (grammar_paths_iter.next()) |grammar_path_slice| {
-            const basename = std.fs.path.basename(grammar_path_slice);
-            const grammar_path: std.Build.LazyPath = .{ .cwd_relative = grammar_path_slice };
-            const name_start = 1 + std.mem.indexOfScalar(u8, basename, '-').?;
-            const grammar_name = basename[name_start..];
-            const prefix = "tree-sitter-";
-            std.debug.assert(std.mem.startsWith(u8, grammar_name, prefix));
-            const grammar = b.addStaticLibrary(.{
-                .name = grammar_name,
-                .target = target,
-                .optimize = optimize,
-            });
-            grammar.root_module.addCSourceFile(.{ .file = grammar_path.path(b, "src/parser.c") });
-            if (try fileExists(grammar_path_slice, "src/scanner.c")) {
-                grammar.root_module.addCSourceFile(.{ .file = grammar_path.path(b, "src/scanner.c") });
-            }
-            grammar.linkLibC();
-            grammar.root_module.addIncludePath(tree_sitter.path(b, "include"));
-            grammar.root_module.addIncludePath(grammar_path.path(b, "src"));
-            const source_path = try std.fmt.allocPrint(b.allocator, "include/{s}.h", .{grammar_name});
-            const dest_path = try std.fmt.allocPrint(b.allocator, "{s}.h", .{grammar_name});
-            grammar.installHeader(grammar_path.path(b, source_path), dest_path);
-            try grammar_steps.append(grammar);
-
-            const lang_name = grammar_name[prefix.len..];
-            const grammar_dir = try std.fs.cwd().openDir(grammar_path_slice, .{});
-            const highlights_query = try grammar_dir.readFileAlloc(
-                b.allocator,
-                "queries/highlights.scm",
-                1024 * 1024,
-            );
-            defer b.allocator.free(highlights_query);
-            const injections_query = grammar_dir.readFileAlloc(
-                b.allocator,
-                "queries/injections.scm",
-                1024 * 1024,
-            ) catch |err| blk: {
-                if (err == error.FileNotFound) break :blk "" else return err;
-            };
-            defer b.allocator.free(injections_query);
-            const locals_query = grammar_dir.readFileAlloc(
-                b.allocator,
-                "queries/locals.scm",
-                1024 * 1024,
-            ) catch |err| blk: {
-                if (err == error.FileNotFound) break :blk "" else return err;
-            };
-            defer b.allocator.free(locals_query);
-
-            // Write name
-            try grammars_option.append(@intCast(slices_option_writer_state.bytes_written));
-            try slices_option_writer.writeAll(lang_name);
-            try slices_option_writer.writeByte(0);
-
-            // Write queries/highlights.scm
-            try grammars_option.append(@intCast(slices_option_writer_state.bytes_written));
-            try slices_option_writer.writeAll(highlights_query);
-            try slices_option_writer.writeByte(0);
-
-            // Write queries/injections.scm
-            try grammars_option.append(@intCast(slices_option_writer_state.bytes_written));
-            try slices_option_writer.writeAll(injections_query);
-            try slices_option_writer.writeByte(0);
-
-            // Write queries/locals.scm
-            try grammars_option.append(@intCast(slices_option_writer_state.bytes_written));
-            try slices_option_writer.writeAll(locals_query);
-            try slices_option_writer.writeByte(0);
-        }
-
-        var options = b.addOptions();
-        options.addOption([]const u32, "grammars", try grammars_option.toOwnedSlice());
-        options.addOption([]const u8, "slices", try slices_option.toOwnedSlice());
-
+    ) Deps {
         return .{
             .b = b,
-            .options = options,
-            .highlight = try pathFromEnvVar(b, "HIGHLIGHT_PATH"),
-            .tree_sitter = tree_sitter,
-            .tree_sitter_grammars = grammar_steps.items,
             .mime = b.dependency("mime", .{
                 .target = target,
                 .optimize = optimize,
@@ -345,6 +428,11 @@ const Deps = struct {
                 .target = target,
                 .optimize = optimize,
             }),
+            .tree_sitter_grammars = GenerateGrammars.create(
+                b,
+                optimize,
+                target,
+            ),
         };
     }
 
@@ -352,31 +440,17 @@ const Deps = struct {
         step.linkLibrary(self.libcmark_gfm.artifact("cmark-gfm"));
         step.linkLibrary(self.libcmark_gfm.artifact("cmark-gfm-extensions"));
         step.root_module.addImport("mime", self.mime.module("mime"));
-
-        step.addIncludePath(self.highlight.path(self.b, "include"));
-        step.addObjectFile(self.highlight.path(self.b, "lib/libtree_sitter_highlight.a"));
-
-        step.addIncludePath(self.tree_sitter.path(self.b, "include"));
-        step.addObjectFile(self.tree_sitter.path(self.b, "lib/libtree-sitter.a"));
-
-        step.root_module.addOptions("zig_build_options", self.options);
-
-        for (self.tree_sitter_grammars) |grammar| {
-            step.linkLibrary(grammar);
+        // Adding an import does not appear to copy over the imported module's
+        // include_dirs to the root module, so I'm doing this by hand.
+        // This likely means I'm missing the better way to do this.
+        step.root_module.addImport("generated_grammars", self.tree_sitter_grammars.module);
+        for (self.tree_sitter_grammars.module.include_dirs.items) |include_dir| {
+            step.root_module.include_dirs.append(self.b.allocator, include_dir) catch @panic("OOM");
         }
     }
 };
 
-fn pathFromEnvVar(b: *std.Build, key: []const u8) !std.Build.LazyPath {
-    const path: []const u8 = try std.process.getEnvVarOwned(b.allocator, key);
+fn pathFromEnvVar(b: *std.Build, key: []const u8) std.Build.LazyPath {
+    const path: []const u8 = std.process.getEnvVarOwned(b.allocator, key) catch @panic("OOM");
     return .{ .cwd_relative = path };
-}
-
-fn fileExists(dir_path: []const u8, sub_path: []const u8) !bool {
-    var dir = try std.fs.cwd().openDir(dir_path, .{});
-    defer dir.close();
-    dir.access(sub_path, .{}) catch |err| {
-        return if (err == error.FileNotFound) false else err;
-    };
-    return true;
 }
