@@ -13,7 +13,7 @@ const glob = @import("glob.zig");
 // When we call out to the platform, it in turn might run effects calling back
 // into the host, specifically this code. Those incoming calls will lack the
 // stack variables of the outgoing ones, so we store that on this variable.
-threadlocal var pipelineState: ?PipelineState = null;
+threadlocal var pipeline_state: ?PipelineState = null;
 const PipelineState = struct {
     site: *Site,
     arena: std.mem.Allocator,
@@ -80,7 +80,7 @@ export fn roc_fx_list(pattern: *RocStr) callconv(.C) RocList {
 }
 
 fn getPagesMatchingPattern(roc_pattern: *RocStr) !RocList {
-    const state = pipelineState orelse return error.PipelineStateNotSet;
+    const state = pipeline_state orelse return error.PipelineStateNotSet;
     const pattern = roc_pattern.asSlice();
     var results = std.ArrayList(Page).init(state.arena);
     var pages = try state.site.pagesMatchingPattern(state.active_source_path, pattern);
@@ -201,14 +201,14 @@ const Platform = struct {
         };
         var contents = RocList.empty();
 
-        pipelineState = .{
+        pipeline_state = .{
             .site = site,
             .arena = arena,
             .active_source_path = page.source_path,
         };
-        errdefer pipelineState = null;
+        errdefer pipeline_state = null;
         roc__run_pipeline_for_host_1_exposed_generic(&contents, &roc_page);
-        pipelineState = null;
+        pipeline_state = null;
 
         var roc_xml_iterator = RocListIterator(Slice).init(contents);
         while (roc_xml_iterator.next()) |roc_slice| {
@@ -312,23 +312,34 @@ export fn roc_panic(roc_msg: *RocStr, tag_id: u32) callconv(.C) void {
 
     const code = msg[panic_prefix.len];
     const details = msg[panic_prefix.len + 2 ..];
+    const state = pipeline_state orelse @panic("pipeline state not set");
     switch (code) {
         '0' => {
             fail.prettily(
-                \\I ran into an error attempting to decode the following metadata:
+                \\I ran into an error decoding metadata for this file:
                 \\
                 \\{s}
                 \\
-            , .{details}) catch {};
+                \\The metadata:
+                \\
+                \\{s}
+                \\
+            , .{ state.active_source_path.bytes(), details }) catch {};
             std.process.exit(1);
         },
         '1' => {
             fail.prettily(
-                \\I ran into an error attempting to decode the following attributes:
+                \\I ran into an error generating output for this file:
                 \\
                 \\{s}
                 \\
-            , .{details}) catch {};
+                \\I was parsing the attributes of an HTML element that is the
+                \\target of a `Page.replace_html` call, but the attributes
+                \\appear to be invalid:
+                \\
+                \\{s}
+                \\
+            , .{ state.active_source_path.bytes(), details }) catch {};
             std.process.exit(1);
         },
         else => {
