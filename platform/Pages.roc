@@ -408,51 +408,51 @@ replace_tag_helper = \content, tag ->
                     { acc & before: List.append acc.before slice }
 
             FromSource { start, end } ->
-                if tag.outerEnd <= start then
+                if tag.outer_end <= start then
                     # <tag /> [ slice ]
                     { acc & after: List.append acc.after slice }
-                else if tag.outerStart >= end then
+                else if tag.outer_start >= end then
                     # [ slice ] <tag />
                     { acc & before: List.append acc.before slice }
-                else if tag.outerStart <= start && tag.outerEnd >= end then
+                else if tag.outer_start <= start && tag.outer_end >= end then
                     # <tag [ slice ] />
                     { acc &
                         nested: List.append
                             acc.nested
                             (
                                 FromSource {
-                                    start: clamp tag.innerStart start tag.innerEnd,
-                                    end: clamp tag.innerStart end tag.innerEnd,
+                                    start: clamp tag.inner_start start tag.inner_end,
+                                    end: clamp tag.inner_start end tag.inner_end,
                                 }
                             ),
                     }
-                else if tag.outerStart < start && tag.outerEnd < end then
+                else if tag.outer_start < start && tag.outer_end < end then
                     # <tag [ /> slice ]
                     { acc &
                         nested: List.append
                             acc.nested
                             (
                                 FromSource {
-                                    start: clamp tag.innerStart start tag.innerEnd,
-                                    end: tag.innerEnd,
+                                    start: clamp tag.inner_start start tag.inner_end,
+                                    end: tag.inner_end,
                                 }
                             ),
                         after: List.append
                             acc.after
-                            (FromSource { start: tag.outerEnd, end }),
+                            (FromSource { start: tag.outer_end, end }),
                     }
-                else if tag.outerStart > start && tag.outerEnd > end then
+                else if tag.outer_start > start && tag.outer_end > end then
                     # [ slice <tag ] />
                     { acc &
                         before: List.append
                             acc.before
-                            (FromSource { start, end: tag.outerStart }),
+                            (FromSource { start, end: tag.outer_start }),
                         nested: List.append
                             acc.nested
                             (
                                 FromSource {
-                                    start: tag.innerStart,
-                                    end: clamp tag.innerStart end tag.innerEnd,
+                                    start: tag.inner_start,
+                                    end: clamp tag.inner_start end tag.inner_end,
                                 }
                             ),
                     }
@@ -461,13 +461,13 @@ replace_tag_helper = \content, tag ->
                     { acc &
                         before: List.append
                             acc.before
-                            (FromSource { start, end: tag.outerStart }),
+                            (FromSource { start, end: tag.outer_start }),
                         nested: List.append
                             acc.nested
-                            (FromSource { start: tag.innerStart, end: tag.innerEnd }),
+                            (FromSource { start: tag.inner_start, end: tag.inner_end }),
                         after: List.append
                             acc.after
-                            (FromSource { start: tag.outerEnd, end }),
+                            (FromSource { start: tag.outer_end, end }),
                     }
 
 # A pure version of replace_tag! that shares almost all the logic, for testing.
@@ -488,10 +488,10 @@ parse_tag_for_test = \bytes ->
 
     {
         index: 0,
-        outerStart: List.findFirstIndex bytes (\b -> b == '<') |> ok,
-        outerEnd: 1 + (List.findLastIndex bytes (\b -> b == '>') |> ok),
-        innerStart: 1 + (List.findFirstIndex bytes (\b -> b == '>') |> ok),
-        innerEnd: List.findLastIndex bytes (\b -> b == '<') |> ok,
+        outer_start: List.findFirstIndex bytes (\b -> b == '<') |> ok,
+        outer_end: 1 + (List.findLastIndex bytes (\b -> b == '>') |> ok),
+        inner_start: 1 + (List.findFirstIndex bytes (\b -> b == '>') |> ok),
+        inner_end: List.findLastIndex bytes (\b -> b == '<') |> ok,
         attributes: [],
     }
 

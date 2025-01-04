@@ -21,7 +21,7 @@ PageRule : {
 
 HostPage : {
     # The index of the rule for this page in `main`
-    ruleIndex : U32,
+    rule_index : U32,
     # The destination path an output file will be placed at.
     path : Str,
     # Bytes containing a markdown's page frontmatter.
@@ -34,10 +34,10 @@ HostPage : {
 
 HostTag : {
     index : U32,
-    outerStart : U32,
-    outerEnd : U32,
-    innerStart : U32,
-    innerEnd : U32,
+    outer_start : U32,
+    outer_end : U32,
+    inner_start : U32,
+    inner_end : U32,
     attributes : List U8,
 }
 

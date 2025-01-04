@@ -31,7 +31,7 @@ const Page = extern struct {
     path: RocStr,
     tags: RocList,
     len: u32,
-    ruleIndex: u32,
+    rule_index: u32,
 };
 
 const Processing = enum(u8) {
@@ -45,10 +45,10 @@ const Processing = enum(u8) {
 const Tag = extern struct {
     attributes: RocList,
     index: u32,
-    innerEnd: u32,
-    innerStart: u32,
-    outerEnd: u32,
-    outerStart: u32,
+    inner_end: u32,
+    inner_start: u32,
+    outer_end: u32,
+    outer_start: u32,
 };
 
 const Slice = extern struct {
@@ -91,7 +91,7 @@ fn getPagesMatchingPattern(roc_pattern: *RocStr) !RocList {
             .path = try formatWebPath(state.arena, scanned.web_path),
             .tags = RocList.empty(),
             .len = 0,
-            .ruleIndex = @as(u32, @intCast(page.rule_index)),
+            .rule_index = @as(u32, @intCast(page.rule_index)),
         });
     }
     return RocList.fromSlice(Page, try results.toOwnedSlice(), true);
@@ -185,17 +185,17 @@ const Platform = struct {
         for (tags) |tag| {
             try roc_tags.append(Tag{
                 .attributes = RocList.fromSlice(u8, tag.attributes, false),
-                .outerStart = @as(u32, @intCast(tag.outer_start)),
-                .outerEnd = @as(u32, @intCast(tag.outer_end)),
-                .innerStart = @as(u32, @intCast(tag.inner_start)),
-                .innerEnd = @as(u32, @intCast(tag.inner_end)),
+                .outer_start = @as(u32, @intCast(tag.outer_start)),
+                .outer_end = @as(u32, @intCast(tag.outer_end)),
+                .inner_start = @as(u32, @intCast(tag.inner_start)),
+                .inner_end = @as(u32, @intCast(tag.inner_end)),
                 .index = @as(u32, @intCast(tag.index)),
             });
         }
         const roc_page = Page{
             .meta = RocList.fromSlice(u8, scanned.frontmatter orelse "{}", false),
             .path = try formatWebPath(arena, scanned.web_path),
-            .ruleIndex = @as(u32, @intCast(page.rule_index)),
+            .rule_index = @as(u32, @intCast(page.rule_index)),
             .tags = RocList.fromSlice(Tag, try roc_tags.toOwnedSlice(), true),
             .len = @as(u32, @intCast(source.len)),
         };

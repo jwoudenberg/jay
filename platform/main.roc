@@ -27,7 +27,7 @@ get_metadata_length_for_host = \bytes ->
 run_pipeline_for_host! : Pages.Internal.HostPage => Pages.Internal.Xml
 run_pipeline_for_host! = \host_page ->
     page =
-        when List.get (Pages.Internal.unwrap main) (Num.intCast host_page.ruleIndex) is
+        when List.get (Pages.Internal.unwrap main) (Num.intCast host_page.rule_index) is
             Ok x -> x
             Err OutOfBounds -> crash "unexpected out of bounds page rule"
 
