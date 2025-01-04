@@ -88,7 +88,7 @@ fn getPagesMatchingPattern(roc_pattern: *RocStr) !RocList {
         const scanned = page.scanned orelse return error.UnexpectedUnscannedPage;
         try results.append(Page{
             .meta = RocList.fromSlice(u8, scanned.frontmatter orelse "{}", false),
-            .path = RocStr.fromSlice(scanned.web_path.bytes()),
+            .path = try formatWebPath(state.arena, scanned.web_path),
             .tags = RocList.empty(),
             .len = 0,
             .ruleIndex = @as(u32, @intCast(page.rule_index)),
@@ -194,7 +194,7 @@ const Platform = struct {
         }
         const roc_page = Page{
             .meta = RocList.fromSlice(u8, scanned.frontmatter orelse "{}", false),
-            .path = RocStr.fromSlice(scanned.web_path.bytes()),
+            .path = try formatWebPath(arena, scanned.web_path),
             .ruleIndex = @as(u32, @intCast(page.rule_index)),
             .tags = RocList.fromSlice(Tag, try roc_tags.toOwnedSlice(), true),
             .len = @as(u32, @intCast(source.len)),
@@ -441,4 +441,9 @@ fn fromRocStr(strs: Str.Registry, roc_pattern: RocStr) !Str {
 fn getPagesMatchingPatternTest(roc_pattern: *RocStr) anyerror!RocList {
     _ = roc_pattern;
     return RocList.empty();
+}
+
+fn formatWebPath(arena: std.mem.Allocator, path: Str) !RocStr {
+    const abs_path = try std.fmt.allocPrint(arena, "/{s}", .{path.bytes()});
+    return RocStr.fromSlice(abs_path);
 }
