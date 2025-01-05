@@ -192,7 +192,6 @@ pre > code {
   & .hl-embedded {
   }
   & .hl-function {
-    color: var(--hl-accent);
   }
   & .hl-function.builtin {
     color: var(--hl-accent);

@@ -55,11 +55,26 @@ pub fn highlight(
     cursor.exec(query, node);
 
     var offset: u32 = 0;
-    while (cursor.nextMatch()) |match| {
+    var next_match = cursor.nextMatch();
+    while (next_match) |match| {
         std.debug.assert(match.captures.len > 0);
-        const capture = match.captures[0].node;
-        const range = capture.range();
-        const name = query.captureNameForId(match.captures[0].index) orelse return error.HighlightUnknownPatternIndex;
+        var capture = match.captures[0];
+        // If multiple patterns in the highlights.scm query file match, the
+        // last one should win. See these tree-sitter release notes:
+        // https://github.com/tree-sitter/tree-sitter/releases/tag/v0.21.0
+        while (true) {
+            next_match = cursor.nextMatch();
+            const range = capture.node.range();
+            const next_capture = (next_match orelse break).captures[0];
+            const next_range = next_capture.node.range();
+            if (next_range.start_byte == range.start_byte and
+                next_range.end_byte == range.end_byte)
+            {
+                capture = next_capture;
+            } else break;
+        }
+        const range = capture.node.range();
+        const name = query.captureNameForId(capture.index) orelse return error.HighlightUnknownPatternIndex;
         if (range.start_byte < offset) continue;
         try writer.writeAll(input[offset..range.start_byte]);
         try writer.writeAll("<span class=\"");
@@ -96,48 +111,48 @@ test highlight {
     stream.reset();
     try std.testing.expect(try highlight("haskell", "sum = 1 + 1", &writer));
     try std.testing.expectEqualStrings(
-        \\<span class="hl-function">sum</span> <span class="hl-operator">=</span> <span class="hl-number">1</span> <span class="hl-operator">+</span> <span class="hl-number">1</span>
+        \\<span class="hl-keyword hl-debug">sum</span> <span class="hl-operator">=</span> <span class="hl-number">1</span> <span class="hl-operator">+</span> <span class="hl-number">1</span>
     , stream.getWritten());
 
     // Json
     stream.reset();
     try std.testing.expect(try highlight("json", "{ \"hi\": 4 }", &writer));
     try std.testing.expectEqualStrings(
-        \\{ <span class="hl-string hl-special hl-key">"hi"</span>: <span class="hl-number">4</span> }
+        \\{ <span class="hl-string">"hi"</span>: <span class="hl-number">4</span> }
     , stream.getWritten());
 
     // Nix
     stream.reset();
     try std.testing.expect(try highlight("nix", "sum = 1 + 1", &writer));
     try std.testing.expectEqualStrings(
-        \\<span class="hl-function">sum</span> <span class="hl-punctuation hl-delimiter">=</span> <span class="hl-number">1</span> <span class="hl-operator">+</span> <span class="hl-number">1</span>
+        \\<span class="hl-variable">sum</span> <span class="hl-punctuation hl-delimiter">=</span> <span class="hl-number">1</span> <span class="hl-operator">+</span> <span class="hl-number">1</span>
     , stream.getWritten());
 
     // Roc
     stream.reset();
     try std.testing.expect(try highlight("roc", "sum = 1 + 1", &writer));
     try std.testing.expectEqualStrings(
-        \\<span class="hl-parameter hl-definition">sum</span> = <span class="hl-constant hl-numeric hl-integer">1</span> <span class="hl-operator">+</span> <span class="hl-constant hl-numeric hl-integer">1</span>
+        \\<span class="hl-variable">sum</span> = <span class="hl-constant hl-numeric hl-integer">1</span> <span class="hl-operator">+</span> <span class="hl-constant hl-numeric hl-integer">1</span>
     , stream.getWritten());
 
     // Ruby
     stream.reset();
     try std.testing.expect(try highlight("ruby", "sum = 1 + 1", &writer));
     try std.testing.expectEqualStrings(
-        \\<span class="hl-variable">sum</span> <span class="hl-operator">=</span> <span class="hl-number">1</span> + <span class="hl-number">1</span>
+        \\<span class="hl-constant hl-builtin">sum</span> <span class="hl-operator">=</span> <span class="hl-number">1</span> + <span class="hl-number">1</span>
     , stream.getWritten());
 
     // Rust
     stream.reset();
     try std.testing.expect(try highlight("rust", "const sum: u32 = 1 + 1", &writer));
     try std.testing.expectEqualStrings(
-        \\<span class="hl-keyword">const</span> <span class="hl-constant">sum</span><span class="hl-punctuation hl-delimiter">:</span> <span class="hl-type hl-builtin">u32</span> = <span class="hl-constant hl-builtin">1</span> + <span class="hl-constant hl-builtin">1</span>
+        \\<span class="hl-keyword">const</span> <span class="hl-constructor">sum</span><span class="hl-punctuation hl-delimiter">:</span> <span class="hl-type hl-builtin">u32</span> = <span class="hl-constant hl-builtin">1</span> + <span class="hl-constant hl-builtin">1</span>
     , stream.getWritten());
 
     // Zig
     stream.reset();
     try std.testing.expect(try highlight("zig", "const sum = 1 + 1", &writer));
     try std.testing.expectEqualStrings(
-        \\<span class="hl-keyword">const</span> <span class="hl-variable">sum</span> <span class="hl-operator">=</span> <span class="hl-number">1</span> <span class="hl-operator">+</span> <span class="hl-number">1</span><span class="hl-punctuation hl-delimiter"></span>
+        \\<span class="hl-keyword">const</span> <span class="hl-variable hl-builtin">sum</span> <span class="hl-operator">=</span> <span class="hl-number">1</span> <span class="hl-operator">+</span> <span class="hl-number">1</span><span class="hl-punctuation hl-delimiter"></span>
     , stream.getWritten());
 }
