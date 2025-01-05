@@ -105,20 +105,9 @@ fn buildLegacy(
     libhost.bundle_compiler_rt = true;
     libhost.linkLibC(); // provides malloc/free/.. used in main.zig
     deps.install(libhost);
-
-    // We need the host's object files along with any C dependencies to be
-    // bundled in a single archive for the legacy linker. The below build
-    // step combines archives using a small bash script included in this repo.
-    const combine_archive = b.addSystemCommand(&.{"build/combine-archives.sh"});
-    const combined_archive = combine_archive.addOutputFileArg(makeTempFilePath(b, "combined.a"));
-    combine_archive.addFileArg(deps.libcmark_gfm.artifact("cmark-gfm").getEmittedBin());
-    combine_archive.addFileArg(deps.libcmark_gfm.artifact("cmark-gfm-extensions").getEmittedBin());
-    combine_archive.addFileArg(deps.tree_sitter_core.artifact("tree-sitter").getEmittedBin());
-    combine_archive.addFileArg(libhost.getEmittedBin());
-
-    b.getInstallStep().dependOn(&b.addInstallFile(combined_archive, "platform/linux-x64.a").step);
-
-    return &combine_archive.step;
+    const install = b.addInstallFile(libhost.getEmittedBin(), "platform/linux-x64.a");
+    b.getInstallStep().dependOn(&install.step);
+    return &install.step;
 }
 
 fn buildGlue(b: *std.Build) void {
@@ -227,6 +216,98 @@ const grammars = [_]Grammar{
     .{ .name = "tree-sitter-ruby", .c_source_files = &.{ "parser.c", "scanner.c" } },
     .{ .name = "tree-sitter-rust", .c_source_files = &.{ "parser.c", "scanner.c" } },
     .{ .name = "tree-sitter-zig", .c_source_files = &.{"parser.c"} },
+};
+
+// When linking a build step against a static library, the build system by
+// default produces separate .a files for the compiled library and the
+// dependency. Roc requires a single .a file per-platform, with a preset name.
+//
+// This custom step is like `std.Build.Module.addObject`, but instead takes an
+// .a archive, unpacks the object files within, and adds them to another
+// module.
+//
+// Some prior art here: https://ziggit.dev/t/build-zig-addobject-static-library/3368
+const AddObjectArchive = struct {
+    const Self = @This();
+
+    step: std.Build.Step,
+    destination: *std.Build.Step.Compile,
+    source: *std.Build.Step.Compile,
+    extracted_objs: std.Build.LazyPath,
+
+    pub fn create(
+        destination: *std.Build.Step.Compile,
+        source: *std.Build.Step.Compile,
+    ) *Self {
+        const b = source.step.owner;
+        const self = b.allocator.create(Self) catch @panic("OOM");
+
+        const ar = b.addSystemCommand(&.{"zig"});
+        ar.addArgs(&.{ "ar", "x" });
+        ar.addFileArg(source.getEmittedBin());
+        ar.addArg("--output");
+        const extracted_objs = ar.addOutputFileArg(makeTempFilePath(b, "extracted"));
+
+        self.* = .{
+            .step = std.Build.Step.init(.{
+                .id = .custom,
+                .name = "AddObjectArchive",
+                .owner = b,
+                .makeFn = make,
+            }),
+            .source = source,
+            .destination = destination,
+            .extracted_objs = extracted_objs,
+        };
+
+        self.step.dependOn(&ar.step);
+        destination.step.dependOn(&self.step);
+        destination.step.dependOn(&source.step);
+
+        // Perform the steps in std.Build.Module.linkLibraryOrObject, _except_
+        // the bit where we add link objects, because that part we replace in
+        // this custom step.
+        //
+        // If we omit this, then the Zig code in this project will not be able
+        // to find headers in @cImport blocks.
+        //
+        // If we call `linkLibrary` instead of this code, then the build will
+        // fail with a linker failure complaining we have duplicate symbols.
+        for (destination.root_module.depending_steps.keys()) |compile| {
+            compile.step.dependOn(&source.step);
+        }
+        destination.root_module.include_dirs.append(b.allocator, .{ .other_step = source }) catch @panic("OOM");
+        for (destination.root_module.depending_steps.keys()) |compile| {
+            source.getEmittedIncludeTree().addStepDependencies(&compile.step);
+        }
+
+        return self;
+    }
+
+    pub fn make(step: *std.Build.Step, prog_node: std.Progress.Node) anyerror!void {
+        _ = prog_node;
+        const self: *Self = @fieldParentPtr("step", step);
+        self.addObjects() catch |err| {
+            return step.fail("Unable to add objects from {s}: {s}", .{
+                self.extracted_objs.getPath(self.step.owner), @errorName(err),
+            });
+        };
+    }
+
+    fn addObjects(self: *Self) !void {
+        const b = self.step.owner;
+        const extracted_objs = self.extracted_objs.getPath(b);
+        var dir = try std.fs.openDirAbsolute(extracted_objs, .{ .iterate = true });
+        defer dir.close();
+        var iterator = dir.iterate();
+        while (try iterator.next()) |entry| {
+            std.debug.assert(std.mem.endsWith(u8, entry.name, ".o"));
+            const path = try std.fs.path.join(b.allocator, &.{ extracted_objs, entry.name });
+            const generated = try b.allocator.create(std.Build.GeneratedFile);
+            generated.* = .{ .step = &self.step, .path = path };
+            self.destination.addObjectFile(.{ .generated = .{ .file = generated } });
+        }
+    }
 };
 
 // This is a custom step that sets up the tree-sitter portion of the build
@@ -445,8 +526,13 @@ const Deps = struct {
     }
 
     fn install(self: Deps, step: *std.Build.Step.Compile) void {
-        step.linkLibrary(self.libcmark_gfm.artifact("cmark-gfm"));
-        step.linkLibrary(self.libcmark_gfm.artifact("cmark-gfm-extensions"));
+        // step.linkLibrary(self.libcmark_gfm.artifact("cmark-gfm"));
+        _ = AddObjectArchive.create(step, self.libcmark_gfm.artifact("cmark-gfm"));
+
+        // step.linkLibrary(self.libcmark_gfm.artifact("cmark-gfm-extensions"));
+        _ = AddObjectArchive.create(step, self.libcmark_gfm.artifact("cmark-gfm-extensions"));
+
+        _ = AddObjectArchive.create(step, self.tree_sitter_core.artifact("tree-sitter"));
         step.root_module.addImport("mime", self.mime.module("mime"));
         self.tree_sitter_grammars.link(&step.root_module);
     }
