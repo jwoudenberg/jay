@@ -69,7 +69,7 @@ pub fn generate(
             else
                 raw_source;
             var html = try std.ArrayList(u8).initCapacity(arena, 1024 * 1024);
-            try markdown.toHtml(&site.highlighter, html.writer(), markdown_bytes);
+            try markdown.toHtml(html.writer(), markdown_bytes);
             const source = html.items;
             var replace_tags = try arena.alloc([]const u8, page.replace_tags.len);
             for (page.replace_tags, 0..) |tag, index| replace_tags[index] = tag.bytes();

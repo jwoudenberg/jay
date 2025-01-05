@@ -4,8 +4,9 @@
 const std = @import("std");
 const Grammar = @import("generated_grammars");
 const native_endian = @import("builtin").target.cpu.arch.endian();
+const ts = @import("tree_sitter");
 const Str = @import("str.zig").Str;
-const c = Grammar.c;
+const xml = @import("xml.zig");
 
 const file_types = std.StaticStringMap(Grammar.Lang).initComptime(.{
     .{ "elm", .elm },
@@ -22,223 +23,121 @@ const file_types = std.StaticStringMap(Grammar.Lang).initComptime(.{
     .{ "zig", .zig },
 });
 
-// This is a wrapper around tree-sitter-highlight, the companion object bundled
-// with tree-sitter for syntax highlighting.
-//
-// I started with tree-sitter-highlight because it seems precisely what we
-// need, but it's not a huge project and there's a couple of downsides to
-// pulling it in: highlight is a rust project and requires libcpp. In a future
-// version we might want to write our own highlighting straigt on top of
-// tree-sitter.
-pub const Highlighter = struct {
-    allocator: std.mem.Allocator,
-    ts_highlight_buffer: *c.TSHighlightBuffer,
-    strs: Str.Registry,
+pub fn highlight(
+    file_type: []const u8,
+    input: []const u8,
+    writer: anytype,
+) !bool {
+    const lang = file_types.get(file_type) orelse return false;
+    const grammar = Grammar.all[@intFromEnum(lang)];
+    const ts_lang = grammar.ts_language();
+    defer ts_lang.destroy();
 
-    pub fn init(gpa: std.mem.Allocator) !Highlighter {
-        return Highlighter{
-            .allocator = gpa,
-            .ts_highlight_buffer = c.ts_highlight_buffer_new() orelse return error.FailedToCreateHighlightBuffer,
-            .strs = try Str.Registry.init(gpa),
-        };
-    }
+    const parser = ts.Parser.create();
+    defer parser.destroy();
+    try parser.setLanguage(ts_lang);
 
-    pub fn deinit(self: *Highlighter) void {
-        c.ts_highlight_buffer_delete(self.ts_highlight_buffer);
-        self.strs.deinit();
-    }
+    // TODO: switch to parser.parseInput to take input in a streaming fashion.
+    const tree = try parser.parseBuffer(input, null, null);
+    defer tree.destroy();
 
-    pub fn highlight(
-        self: *Highlighter,
-        file_type: []const u8,
-        input: []const u8,
-    ) !?[]const u8 {
-        const lang = file_types.get(file_type) orelse return null;
-        const grammar = try self.getGrammar(lang);
+    const node = tree.rootNode();
+    var error_offset: u32 = 0;
+    const query = try ts.Query.create(
+        ts_lang,
+        std.mem.span(grammar.highlights_query),
+        &error_offset,
+    );
+    defer query.destroy();
 
-        const highlight_err = c.ts_highlighter_highlight(
-            grammar.ts_highlighter,
-            grammar.name,
-            @ptrCast(input),
-            @intCast(input.len),
-            self.ts_highlight_buffer,
-            null,
-        );
-        if (highlight_err != 0) {
-            std.debug.print("failed to run highlighting: {}\n", .{highlight_err});
-            return error.FailedToRunHighlighting;
+    const cursor = ts.QueryCursor.create();
+    defer cursor.destroy();
+    cursor.exec(query, node);
+
+    var offset: u32 = 0;
+    while (cursor.nextMatch()) |match| {
+        std.debug.assert(match.captures.len > 0);
+        const capture = match.captures[0].node;
+        const range = capture.range();
+        const name = query.captureNameForId(match.captures[0].index) orelse return error.HighlightUnknownPatternIndex;
+        if (range.start_byte < offset) continue;
+        try writer.writeAll(input[offset..range.start_byte]);
+        try writer.writeAll("<span class=\"");
+        var name_iter = std.mem.split(u8, name, ".");
+        if (name_iter.next()) |name_part| {
+            try writer.print("hl-{s}", .{name_part});
         }
-
-        const output_len = c.ts_highlight_buffer_len(self.ts_highlight_buffer);
-        const output_bytes = c.ts_highlight_buffer_content(self.ts_highlight_buffer);
-        return output_bytes[0..output_len];
-    }
-
-    // Initialize a highligher for a language. Ideally we'd do this in comptime,
-    // but because the the initialization is performed by extern C code that's not
-    // possible, so instead we perform it at runtime. Dropping the dependency on
-    // tree-sitter-highlight for our own code would allow us to improve this.
-    fn getGrammar(
-        self: *Highlighter,
-        lang: Grammar.Lang,
-    ) !Grammar {
-        var grammar: Grammar = Grammar.all[@intFromEnum(lang)];
-        if (grammar.ts_highlighter != null) return grammar;
-
-        const highlights_query = std.mem.span(grammar.highlights_query);
-        const injections_query = std.mem.span(grammar.injections_query);
-        const locals_query = std.mem.span(grammar.locals_query);
-
-        var names = std.ArrayHashMapUnmanaged(
-            [*:0]const u8,
-            [*:0]const u8,
-            CStringContext,
-            true,
-        ){};
-        try names.ensureTotalCapacity(self.allocator, 1000);
-        defer names.deinit(self.allocator);
-
-        var offset: usize = 0;
-        var buffer = try std.BoundedArray(u8, 1000).init(0);
-        var buf_writer = buffer.writer();
-        while (std.mem.indexOfScalarPos(u8, highlights_query, offset, '@')) |start| {
-            const end = std.mem.indexOfAnyPos(u8, highlights_query, start, " \t\n()") orelse highlights_query.len;
-            offset = end;
-
-            // For a name:
-            //
-            //     variable.parameter
-            //
-            // Generate an attribute:
-            //
-            //     class="hl-variable hl-parameter"
-            //
-            const name = try self.strs.intern(highlights_query[1 + start .. end]);
-            const name_bytes = name.bytes();
-            const getOrPut = names.getOrPutAssumeCapacity(name_bytes);
-            if (getOrPut.found_existing) continue;
-            getOrPut.key_ptr.* = name_bytes;
-
-            buffer.len = 0;
-            var name_offset: usize = 0;
-            try buf_writer.writeAll("class=\"");
-            while (std.mem.indexOfScalarPos(u8, name_bytes, name_offset, '.')) |chunk_end| {
-                try buf_writer.print("hl-{s} ", .{name_bytes[name_offset..chunk_end]});
-                name_offset = chunk_end + 1;
-            }
-            try buf_writer.print("hl-{s}\"", .{name_bytes[name_offset..]});
-            const attr_interned = try self.strs.intern(buffer.constSlice());
-            const attr = attr_interned.bytes();
-            getOrPut.value_ptr.* = attr;
+        while (name_iter.next()) |name_part| {
+            try writer.print(" hl-{s}", .{name_part});
         }
-
-        grammar.ts_highlighter = c.ts_highlighter_new(
-            @ptrCast(names.keys()),
-            @ptrCast(names.values()),
-            @intCast(names.count()),
-        ) orelse return error.FailedToCreateHighlighter;
-
-        const ts_language = grammar.ts_language() orelse return error.FailedToGetLanguage;
-
-        const add_lang_err = c.ts_highlighter_add_language(
-            grammar.ts_highlighter,
-            grammar.name,
-            grammar.name,
-            null,
-            ts_language,
-            highlights_query,
-            injections_query,
-            locals_query,
-            @intCast(highlights_query.len),
-            @intCast(injections_query.len),
-            @intCast(locals_query.len),
-        );
-        if (add_lang_err != 0) {
-            std.debug.print("failed to add highlight language: {}\n", .{add_lang_err});
-            return error.FailedToAddHighlightLanguage;
-        }
-
-        return grammar;
+        try writer.writeAll("\">");
+        try xml.writeEscaped(writer, input[range.start_byte..range.end_byte]);
+        try writer.writeAll("</span>");
+        offset = range.end_byte;
     }
-};
+    try writer.writeAll(input[offset..]);
 
-test Highlighter {
-    var highlighter = try Highlighter.init(std.testing.allocator);
-    defer highlighter.deinit();
-
-    // Elm
-    try std.testing.expectEqualStrings(
-        \\<span class="hl-function hl-elm">sum</span> <span class="hl-keyword hl-operator hl-assignment hl-elm">=</span> <span class="hl-constant hl-numeric hl-elm">1</span> <span class="hl-keyword hl-operator hl-elm">+</span> <span class="hl-constant hl-numeric hl-elm">1</span>
-        \\
-    ,
-        (try highlighter.highlight("elm", "sum = 1 + 1")).?,
-    );
-
-    // Haskell
-    try std.testing.expectEqualStrings(
-        \\<span class="hl-type">sum</span> <span class="hl-operator">=</span> <span class="hl-number">1</span> <span class="hl-operator">+</span> <span class="hl-number">1</span>
-        \\
-    ,
-        (try highlighter.highlight("haskell", "sum = 1 + 1")).?,
-    );
-
-    // Json
-    try std.testing.expectEqualStrings(
-        \\{ <span class="hl-string">&quot;hi&quot;</span>: <span class="hl-number">4</span> }
-        \\
-    ,
-        (try highlighter.highlight("json", "{ \"hi\": 4 }")).?,
-    );
-
-    // Nix
-    try std.testing.expectEqualStrings(
-        \\<span class="hl-function"><span class="hl-variable">sum</span></span> <span class="hl-punctuation hl-delimiter">=</span> <span class="hl-number">1</span> <span class="hl-operator">+</span> <span class="hl-number">1</span>
-        \\
-    ,
-        (try highlighter.highlight("nix", "sum = 1 + 1")).?,
-    );
-
-    // Roc
-    try std.testing.expectEqualStrings(
-        \\<span class="hl-variable">sum</span> = <span class="hl-constant hl-numeric hl-integer">1</span> <span class="hl-operator">+</span> <span class="hl-constant hl-numeric hl-integer">1</span>
-        \\
-    ,
-        (try highlighter.highlight("roc", "sum = 1 + 1")).?,
-    );
-
-    // Ruby
-    try std.testing.expectEqualStrings(
-        \\<span class="hl-variable">sum</span> <span class="hl-operator">=</span> <span class="hl-number">1</span> + <span class="hl-number">1</span>
-        \\
-    ,
-        (try highlighter.highlight("ruby", "sum = 1 + 1")).?,
-    );
-
-    // Rust
-    try std.testing.expectEqualStrings(
-        \\<span class="hl-keyword">const</span> sum<span class="hl-punctuation hl-delimiter">:</span> <span class="hl-type hl-builtin">u32</span> = <span class="hl-constant hl-builtin">1</span> + <span class="hl-constant hl-builtin">1</span>
-        \\
-    ,
-        (try highlighter.highlight("rust", "const sum: u32 = 1 + 1")).?,
-    );
-
-    // Zig
-    try std.testing.expectEqualStrings(
-        \\<span class="hl-keyword">const</span> <span class="hl-constant">sum</span> <span class="hl-operator">=</span> <span class="hl-number">1</span> <span class="hl-operator">+</span> <span class="hl-number">1</span><span class="hl-punctuation hl-delimiter"></span>
-        \\
-    ,
-        (try highlighter.highlight("zig", "const sum = 1 + 1")).?,
-    );
+    return true;
 }
 
-pub const CStringContext = struct {
-    pub fn hash(self: @This(), s: [*:0]const u8) u32 {
-        _ = self;
-        return std.array_hash_map.hashString(std.mem.span(s));
-    }
-    pub fn eql(self: @This(), a: [*:0]const u8, b: [*:0]const u8, b_index: usize) bool {
-        _ = self;
-        _ = b_index;
-        return std.array_hash_map.eqlString(std.mem.span(a), std.mem.span(b));
-    }
-};
+test highlight {
+    var buf: [1024]u8 = undefined;
+    var stream = std.io.FixedBufferStream([]u8){ .buffer = &buf, .pos = 0 };
+    var writer = stream.writer();
+
+    // Elm
+    stream.reset();
+    try std.testing.expect(try highlight("elm", "sum = 1 + 1", &writer));
+    try std.testing.expectEqualStrings(
+        \\<span class="hl-function hl-elm">sum</span> <span class="hl-keyword hl-operator hl-assignment hl-elm">=</span> <span class="hl-constant hl-numeric hl-elm">1</span> <span class="hl-keyword hl-operator hl-elm">+</span> <span class="hl-constant hl-numeric hl-elm">1</span>
+    , stream.getWritten());
+
+    // Haskell
+    stream.reset();
+    try std.testing.expect(try highlight("haskell", "sum = 1 + 1", &writer));
+    try std.testing.expectEqualStrings(
+        \\<span class="hl-function">sum</span> <span class="hl-operator">=</span> <span class="hl-number">1</span> <span class="hl-operator">+</span> <span class="hl-number">1</span>
+    , stream.getWritten());
+
+    // Json
+    stream.reset();
+    try std.testing.expect(try highlight("json", "{ \"hi\": 4 }", &writer));
+    try std.testing.expectEqualStrings(
+        \\{ <span class="hl-string hl-special hl-key">"hi"</span>: <span class="hl-number">4</span> }
+    , stream.getWritten());
+
+    // Nix
+    stream.reset();
+    try std.testing.expect(try highlight("nix", "sum = 1 + 1", &writer));
+    try std.testing.expectEqualStrings(
+        \\<span class="hl-function">sum</span> <span class="hl-punctuation hl-delimiter">=</span> <span class="hl-number">1</span> <span class="hl-operator">+</span> <span class="hl-number">1</span>
+    , stream.getWritten());
+
+    // Roc
+    stream.reset();
+    try std.testing.expect(try highlight("roc", "sum = 1 + 1", &writer));
+    try std.testing.expectEqualStrings(
+        \\<span class="hl-parameter hl-definition">sum</span> = <span class="hl-constant hl-numeric hl-integer">1</span> <span class="hl-operator">+</span> <span class="hl-constant hl-numeric hl-integer">1</span>
+    , stream.getWritten());
+
+    // Ruby
+    stream.reset();
+    try std.testing.expect(try highlight("ruby", "sum = 1 + 1", &writer));
+    try std.testing.expectEqualStrings(
+        \\<span class="hl-variable">sum</span> <span class="hl-operator">=</span> <span class="hl-number">1</span> + <span class="hl-number">1</span>
+    , stream.getWritten());
+
+    // Rust
+    stream.reset();
+    try std.testing.expect(try highlight("rust", "const sum: u32 = 1 + 1", &writer));
+    try std.testing.expectEqualStrings(
+        \\<span class="hl-keyword">const</span> <span class="hl-constant">sum</span><span class="hl-punctuation hl-delimiter">:</span> <span class="hl-type hl-builtin">u32</span> = <span class="hl-constant hl-builtin">1</span> + <span class="hl-constant hl-builtin">1</span>
+    , stream.getWritten());
+
+    // Zig
+    stream.reset();
+    try std.testing.expect(try highlight("zig", "const sum = 1 + 1", &writer));
+    try std.testing.expectEqualStrings(
+        \\<span class="hl-keyword">const</span> <span class="hl-variable">sum</span> <span class="hl-operator">=</span> <span class="hl-number">1</span> <span class="hl-operator">+</span> <span class="hl-number">1</span><span class="hl-punctuation hl-delimiter"></span>
+    , stream.getWritten());
+}

@@ -3,10 +3,9 @@
 const std = @import("std");
 const xml = @import("xml.zig");
 const c = @import("c.zig");
-const Highlighter = @import("highlight.zig").Highlighter;
+const highlight = @import("highlight.zig").highlight;
 
 pub fn toHtml(
-    highlighter: *Highlighter,
     writer: anytype,
     markdown: []const u8,
 ) !void {
@@ -25,11 +24,11 @@ pub fn toHtml(
             c.CMARK_EVENT_DONE => break,
             c.CMARK_EVENT_ENTER => {
                 const node = c.cmark_iter_get_node(iter) orelse return error.CmarkNodeMissing;
-                try writeNode(highlighter, writer, true, node);
+                try writeNode(writer, true, node);
             },
             c.CMARK_EVENT_EXIT => {
                 const node = c.cmark_iter_get_node(iter) orelse return error.CmarkNodeMissing;
-                try writeNode(highlighter, writer, false, node);
+                try writeNode(writer, false, node);
             },
             else => |ev_type| {
                 std.debug.print("unexpected cmark event: {}\n", .{ev_type});
@@ -43,53 +42,51 @@ test toHtml {
     var buf: [1024]u8 = undefined;
     var stream = std.io.FixedBufferStream([]u8){ .buffer = &buf, .pos = 0 };
     var writer = stream.writer();
-    var highlighter = try Highlighter.init(std.testing.allocator);
-    defer highlighter.deinit();
 
     stream.reset();
-    try toHtml(&highlighter, &writer, "# header");
+    try toHtml(&writer, "# header");
     try std.testing.expectEqualStrings(
         "<h1>header</h1>",
         stream.getWritten(),
     );
 
     stream.reset();
-    try toHtml(&highlighter, &writer, "text & escaped");
+    try toHtml(&writer, "text & escaped");
     try std.testing.expectEqualStrings(
         "<p>text &amp; escaped</p>",
         stream.getWritten(),
     );
 
     stream.reset();
-    try toHtml(&highlighter, &writer, "**bold** and *cursed*");
+    try toHtml(&writer, "**bold** and *cursed*");
     try std.testing.expectEqualStrings(
         "<p><strong>bold</strong> and <em>cursed</em></p>",
         stream.getWritten(),
     );
 
     stream.reset();
-    try toHtml(&highlighter, &writer, "learn [Roc](roc-lang.org)!");
+    try toHtml(&writer, "learn [Roc](roc-lang.org)!");
     try std.testing.expectEqualStrings(
         "<p>learn <a href=\"roc-lang.org\">Roc</a>!</p>",
         stream.getWritten(),
     );
 
     stream.reset();
-    try toHtml(&highlighter, &writer, "look! ![eyes](eyes.png)");
+    try toHtml(&writer, "look! ![eyes](eyes.png)");
     try std.testing.expectEqualStrings(
         "<p>look! <img src=\"eyes.png\" alt=\"eyes\" /></p>",
         stream.getWritten(),
     );
 
     stream.reset();
-    try toHtml(&highlighter, &writer, "look! ![eyes](eyes.png \"stare\")");
+    try toHtml(&writer, "look! ![eyes](eyes.png \"stare\")");
     try std.testing.expectEqualStrings(
         "<p>look! <img src=\"eyes.png\" alt=\"eyes\" title=\"stare\" /></p>",
         stream.getWritten(),
     );
 
     stream.reset();
-    try toHtml(&highlighter, &writer,
+    try toHtml(&writer,
         \\Groceries:
         \\- Broccoli
         \\- Cashews
@@ -100,7 +97,7 @@ test toHtml {
     );
 
     stream.reset();
-    try toHtml(&highlighter, &writer,
+    try toHtml(&writer,
         \\Steps:
         \\1. Look
         \\1. Cross
@@ -111,7 +108,7 @@ test toHtml {
     );
 
     stream.reset();
-    try toHtml(&highlighter, &writer,
+    try toHtml(&writer,
         \\Steps:
         \\
         \\2. Look
@@ -123,7 +120,7 @@ test toHtml {
     );
 
     stream.reset();
-    try toHtml(&highlighter, &writer,
+    try toHtml(&writer,
         \\Groceries:
         \\
         \\- multiple
@@ -136,7 +133,7 @@ test toHtml {
     );
 
     stream.reset();
-    try toHtml(&highlighter, &writer,
+    try toHtml(&writer,
         \\Before
         \\
         \\---
@@ -149,14 +146,14 @@ test toHtml {
     );
 
     stream.reset();
-    try toHtml(&highlighter, &writer, "Example: `1 + 1`");
+    try toHtml(&writer, "Example: `1 + 1`");
     try std.testing.expectEqualStrings(
         "<p>Example: <code>1 + 1</code></p>",
         stream.getWritten(),
     );
 
     stream.reset();
-    try toHtml(&highlighter, &writer,
+    try toHtml(&writer,
         \\Example:
         \\
         \\```
@@ -169,7 +166,7 @@ test toHtml {
     );
 
     stream.reset();
-    try toHtml(&highlighter, &writer,
+    try toHtml(&writer,
         \\Example:
         \\
         \\```roc
@@ -184,7 +181,7 @@ test toHtml {
     );
 
     stream.reset();
-    try toHtml(&highlighter, &writer,
+    try toHtml(&writer,
         \\Example:
         \\
         \\```madeuplang
@@ -197,7 +194,7 @@ test toHtml {
     );
 
     stream.reset();
-    try toHtml(&highlighter, &writer,
+    try toHtml(&writer,
         \\Widget:
         \\
         \\<my-greeter>**hi**</my-greeter>
@@ -208,7 +205,7 @@ test toHtml {
     );
 
     stream.reset();
-    try toHtml(&highlighter, &writer,
+    try toHtml(&writer,
         \\Html:
         \\
         \\<section><h2>Header!</h2></section>
@@ -228,7 +225,6 @@ fn writeCloseTag(writer: anytype, tag: []const u8) !void {
 }
 
 fn writeNode(
-    highlighter: *Highlighter,
     writer: anytype,
     comptime open: bool,
     node: *c.cmark_node,
@@ -277,9 +273,7 @@ fn writeNode(
                 try writer.print("<pre><code data-hl-lang=\"{s}\">", .{lang});
             }
 
-            if (try highlighter.highlight(lang, code)) |highlighted| {
-                try writer.writeAll(highlighted);
-            } else {
+            if (!try highlight(lang, code, writer)) {
                 try xml.writeEscaped(writer, code);
             }
             try writer.writeAll("</code></pre>");

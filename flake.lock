@@ -34,24 +34,6 @@
         "type": "github"
       }
     },
-    "naersk": {
-      "inputs": {
-        "nixpkgs": "nixpkgs"
-      },
-      "locked": {
-        "lastModified": 1733346208,
-        "narHash": "sha256-a4WZp1xQkrnA4BbnKrzJNr+dYoQr5Xneh2syJoddFyE=",
-        "owner": "nix-community",
-        "repo": "naersk",
-        "rev": "378614f37a6bee5a3f2ef4f825a73d948d3ae921",
-        "type": "github"
-      },
-      "original": {
-        "owner": "nix-community",
-        "repo": "naersk",
-        "type": "github"
-      }
-    },
     "nixgl": {
       "inputs": {
         "flake-utils": [
@@ -79,19 +61,6 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1733808091,
-        "narHash": "sha256-KWwINTQelKOoQgrXftxoqxmKFZb9pLVfnRvK270nkVk=",
-        "path": "/nix/store/va0p2i72cm2ljwm084a0g6ji41s5qnyz-source",
-        "rev": "a0f3e10d94359665dba45b71b4227b0aeb851f8e",
-        "type": "path"
-      },
-      "original": {
-        "id": "nixpkgs",
-        "type": "indirect"
-      }
-    },
-    "nixpkgs_2": {
-      "locked": {
         "lastModified": 1734119587,
         "narHash": "sha256-AKU6qqskl0yf2+JdRdD0cfxX4b9x3KKV5RqA6wijmPM=",
         "owner": "NixOS",
@@ -106,7 +75,7 @@
         "type": "github"
       }
     },
-    "nixpkgs_3": {
+    "nixpkgs_2": {
       "locked": {
         "lastModified": 1722403750,
         "narHash": "sha256-tRmn6UiFAPX0m9G1AVcEPjWEOc9BtGsxGcs7Bz3MpsM=",
@@ -127,7 +96,7 @@
         "flake-compat": "flake-compat",
         "flake-utils": "flake-utils",
         "nixgl": "nixgl",
-        "nixpkgs": "nixpkgs_3",
+        "nixpkgs": "nixpkgs_2",
         "rust-overlay": "rust-overlay"
       },
       "locked": {
@@ -146,10 +115,8 @@
     },
     "root": {
       "inputs": {
-        "naersk": "naersk",
-        "nixpkgs": "nixpkgs_2",
-        "roc": "roc",
-        "tree-sitter": "tree-sitter"
+        "nixpkgs": "nixpkgs",
+        "roc": "roc"
       }
     },
     "rust-overlay": {
@@ -185,23 +152,6 @@
       "original": {
         "owner": "nix-systems",
         "repo": "default",
-        "type": "github"
-      }
-    },
-    "tree-sitter": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1733899039,
-        "narHash": "sha256-Up3ZGCr+PZxyrXiyeMKHS5M5DGS5U5qKImA5ouJ/BBo=",
-        "owner": "tree-sitter",
-        "repo": "tree-sitter",
-        "rev": "1a983b7e2c45d9b9f45b2133a4e3a829f7e961be",
-        "type": "github"
-      },
-      "original": {
-        "owner": "tree-sitter",
-        "ref": "v0.24.5",
-        "repo": "tree-sitter",
         "type": "github"
       }
     }

@@ -65,7 +65,6 @@ fn buildDynhost(
     dynhost.bundle_compiler_rt = true;
     dynhost.root_module.stack_check = false;
     dynhost.linkLibC();
-    dynhost.linkLibCpp(); // used by tree-sitter-highlight
     dynhost.addObjectFile(libapp_so);
     deps.install(dynhost);
 
@@ -105,7 +104,6 @@ fn buildLegacy(
     libhost.rdynamic = true;
     libhost.bundle_compiler_rt = true;
     libhost.linkLibC(); // provides malloc/free/.. used in main.zig
-    libhost.linkLibCpp(); // used by tree-sitter-highlight
     deps.install(libhost);
 
     // We need the host's object files along with any C dependencies to be
@@ -115,6 +113,7 @@ fn buildLegacy(
     const combined_archive = combine_archive.addOutputFileArg(makeTempFilePath(b, "combined.a"));
     combine_archive.addFileArg(deps.libcmark_gfm.artifact("cmark-gfm").getEmittedBin());
     combine_archive.addFileArg(deps.libcmark_gfm.artifact("cmark-gfm-extensions").getEmittedBin());
+    combine_archive.addFileArg(deps.tree_sitter_core.artifact("tree-sitter").getEmittedBin());
     combine_archive.addFileArg(libhost.getEmittedBin());
 
     b.getInstallStep().dependOn(&b.addInstallFile(combined_archive, "platform/linux-x64.a").step);
@@ -193,7 +192,6 @@ fn runTests(
         .optimize = optimize,
     });
     exe_unit_tests.linkLibC(); // provides malloc/free/.. used in main.zig
-    exe_unit_tests.linkLibCpp(); // used by tree-sitter-highlight
     deps.install(exe_unit_tests);
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
@@ -241,8 +239,10 @@ const grammars = [_]Grammar{
 const GenerateGrammars = struct {
     step: std.Build.Step,
     query_dirs: [grammars.len]std.Build.LazyPath,
+    grammar_objects: [grammars.len]*std.Build.Step.Compile,
     generated_file: std.Build.GeneratedFile,
     module: *std.Build.Module,
+    tree_sitter: *std.Build.Dependency,
     output_path: []const u8,
 
     pub fn create(
@@ -250,8 +250,6 @@ const GenerateGrammars = struct {
         optimize: std.builtin.OptimizeMode,
         target: std.Build.ResolvedTarget,
     ) *GenerateGrammars {
-        const tree_sitter = pathFromEnvVar(b, "TREE_SITTER_PATH");
-        const highlight = pathFromEnvVar(b, "HIGHLIGHT_PATH");
         const generate_grammars = b.allocator.create(GenerateGrammars) catch @panic("OOM");
         generate_grammars.* = .{
             .step = std.Build.Step.init(.{
@@ -261,6 +259,7 @@ const GenerateGrammars = struct {
                 .makeFn = make,
             }),
             .query_dirs = undefined,
+            .grammar_objects = undefined,
             .generated_file = .{ .step = &generate_grammars.step },
             .module = b.createModule(.{
                 .root_source_file = .{
@@ -269,42 +268,53 @@ const GenerateGrammars = struct {
                     },
                 },
             }),
+            .tree_sitter = b.dependency("tree_sitter", .{
+                .target = target,
+                .optimize = optimize,
+            }),
             .output_path = std.fs.path.join(
                 b.allocator,
                 &.{ b.makeTempPath(), "generated_grammars.zig" },
             ) catch @panic("OOM"),
         };
 
-        var module = generate_grammars.module;
+        generate_grammars.module.addImport(
+            "tree_sitter",
+            generate_grammars.tree_sitter.module("tree_sitter"),
+        );
+
         for (grammars, 0..) |grammar, index| {
             // Build grammar
             const dep = b.dependency(grammar.name, .{
                 .target = target,
                 .optimize = optimize,
             });
-            var lib = b.addObject(.{
+            var object = b.addObject(.{
                 .name = grammar.name,
                 .target = target,
                 .optimize = optimize,
             });
-            lib.root_module.addCSourceFiles(.{
+            object.root_module.addCSourceFiles(.{
                 .root = dep.path("src"),
                 .files = grammar.c_source_files,
             });
-            lib.linkLibC();
-            lib.root_module.addIncludePath(tree_sitter.path(b, "include"));
-            lib.root_module.addIncludePath(dep.path("src"));
+            object.linkLibC();
+            object.root_module.addIncludePath(dep.path("src"));
 
-            module.addObject(lib);
             generate_grammars.query_dirs[index] = dep.path("queries");
+            generate_grammars.grammar_objects[index] = object;
         }
 
-        module.addIncludePath(highlight.path(b, "include"));
-        module.addObjectFile(highlight.path(b, "lib/libtree_sitter_highlight.a"));
-        module.addIncludePath(tree_sitter.path(b, "include"));
-        module.addObjectFile(tree_sitter.path(b, "lib/libtree-sitter.a"));
-
         return generate_grammars;
+    }
+
+    pub fn link(self: *GenerateGrammars, root_module: *std.Build.Module) void {
+        for (self.grammar_objects) |object| {
+            root_module.addObject(object);
+        }
+
+        root_module.addImport("tree_sitter", self.tree_sitter.module("tree_sitter"));
+        root_module.addImport("generated_grammars", self.module);
     }
 
     pub fn make(step: *std.Build.Step, prog_node: std.Progress.Node) anyerror!void {
@@ -325,17 +335,13 @@ const GenerateGrammars = struct {
         var writer = file.writer();
         try writer.writeAll(
             \\const std = @import("std");
+            \\const ts = @import("tree_sitter");
             \\const Grammar = @This();
-            \\
-            \\pub const c = @cImport({
-            \\    @cInclude("tree_sitter/api.h");
-            \\    @cInclude("tree_sitter/highlight.h");
-            \\});
             \\
         );
         for (grammars) |grammar| {
             try writer.print(
-                "extern fn tree_sitter_{s}() callconv(.C) ?*const c.TSLanguage;\n",
+                "extern fn tree_sitter_{s}() callconv(.C) *ts.Language;\n",
                 .{grammar.lang_name()},
             );
         }
@@ -345,8 +351,7 @@ const GenerateGrammars = struct {
             \\highlights_query: [*:0]const u8,
             \\injections_query: [*:0]const u8 = "",
             \\locals_query: [*:0]const u8 = "",
-            \\ts_highlighter: ?*c.TSHighlighter = null,
-            \\ts_language: *const fn () callconv(.C) ?*const c.TSLanguage,
+            \\ts_language: *const fn () callconv(.C) *ts.Language,
             \\
             \\pub const Lang = enum {
             \\
@@ -408,10 +413,10 @@ fn copyLinesAddingPrefix(reader: anytype, writer: anytype, prefix: []const u8) !
 }
 
 const Deps = struct {
-    b: *std.Build,
     mime: *std.Build.Dependency,
     libcmark_gfm: *std.Build.Dependency,
     tree_sitter_grammars: *GenerateGrammars,
+    tree_sitter_core: *std.Build.Dependency,
 
     fn init(
         b: *std.Build,
@@ -419,7 +424,6 @@ const Deps = struct {
         target: std.Build.ResolvedTarget,
     ) Deps {
         return .{
-            .b = b,
             .mime = b.dependency("mime", .{
                 .target = target,
                 .optimize = optimize,
@@ -433,6 +437,10 @@ const Deps = struct {
                 optimize,
                 target,
             ),
+            .tree_sitter_core = b.dependency("tree_sitter_core", .{
+                .target = target,
+                .optimize = optimize,
+            }),
         };
     }
 
@@ -440,17 +448,6 @@ const Deps = struct {
         step.linkLibrary(self.libcmark_gfm.artifact("cmark-gfm"));
         step.linkLibrary(self.libcmark_gfm.artifact("cmark-gfm-extensions"));
         step.root_module.addImport("mime", self.mime.module("mime"));
-        // Adding an import does not appear to copy over the imported module's
-        // include_dirs to the root module, so I'm doing this by hand.
-        // This likely means I'm missing the better way to do this.
-        step.root_module.addImport("generated_grammars", self.tree_sitter_grammars.module);
-        for (self.tree_sitter_grammars.module.include_dirs.items) |include_dir| {
-            step.root_module.include_dirs.append(self.b.allocator, include_dir) catch @panic("OOM");
-        }
+        self.tree_sitter_grammars.link(&step.root_module);
     }
 };
-
-fn pathFromEnvVar(b: *std.Build, key: []const u8) std.Build.LazyPath {
-    const path: []const u8 = std.process.getEnvVarOwned(b.allocator, key) catch @panic("OOM");
-    return .{ .cwd_relative = path };
-}
