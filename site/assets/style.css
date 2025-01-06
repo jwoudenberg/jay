@@ -3,8 +3,9 @@ body {
   --header-color: #cdf7e4;
   --header-height: 3rem;
   margin: 0;
-  font-family: 'IBM Plex Sans', sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, avenir next, avenir, segoe ui, helvetica neue, helvetica, Cantarell, Ubuntu, roboto, noto, arial, sans-serif;
   line-height: 1.6;
+  font-size: 1.1rem;
 }
 
 .header {
@@ -169,9 +170,11 @@ pre > code {
 
   display: block;
   color: var(--hl-base);
-  font-size: 1.2em;
   overflow: hidden;
   text-overflow: ellipsis;
+  font-family: Menlo, Consolas, Monaco, Liberation Mono, Lucida Console, monospace;
+  padding: 0.6em;
+  box-sizing: border-box;
 
   & .hl-attribute {
     font-style: italic;
