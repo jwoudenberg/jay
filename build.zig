@@ -2,10 +2,6 @@ const std = @import("std");
 const native_endian = @import("builtin").target.cpu.arch.endian();
 
 pub fn build(b: *std.Build) !void {
-    const optimize = b.standardOptimizeOption(.{});
-    const target = b.standardTargetOptions(.{});
-    const deps = Deps.init(b, optimize, target);
-
     // Collect all .roc files, to make them dependencies for other commands.
     var platform_dir = try std.fs.cwd().openDir("platform", .{ .iterate = true });
     defer platform_dir.close();
@@ -19,19 +15,109 @@ pub fn build(b: *std.Build) !void {
         try roc_paths.append(roc_path);
     }
 
-    buildDynhost(b, deps, optimize, target, roc_paths.items);
-    const legacy = buildLegacy(b, deps, optimize, target);
+    const build_type = b.option(
+        enum { dev, release, site },
+        "type",
+        "the type of build to perform",
+    ) orelse .dev;
+    switch (build_type) {
+        .dev => buildDev(b, roc_paths.items),
+        .site => buildSite(b, roc_paths.items),
+        .release => buildRelease(b),
+    }
+}
+
+fn buildRelease(b: *std.Build) void {
+    const optimize = b.standardOptimizeOption(.{});
+    const targets = [_]std.Build.ResolvedTarget{
+        std.Build.resolveTargetQuery(b, .{
+            .cpu_arch = .x86_64,
+            .os_tag = .linux,
+        }),
+        std.Build.resolveTargetQuery(b, .{
+            .cpu_arch = .x86_64,
+            .os_tag = .macos,
+        }),
+        std.Build.resolveTargetQuery(b, .{
+            .cpu_arch = .aarch64,
+            .os_tag = .macos,
+        }),
+    };
+    const platform_bundle = std.Build.Step.WriteFile.create(b);
+    for (targets) |target| {
+        const deps = Deps.init(b, optimize, target);
+        buildLegacy(b, deps, optimize, target, platform_bundle);
+    }
+
+    const bundle = b.addSystemCommand(&.{"roc"});
+    bundle.addArgs(&.{ "build", "--bundle", ".tar.br" });
+    bundle.addFileArg(platform_bundle.getDirectory().path(b, "main.roc"));
+    bundle.step.dependOn(&platform_bundle.step);
+
+    // The generated bundle filename contains a hash so we don't know exactly
+    // what it will be. We abuse `addInstallDirectory` to find it by extension.
+    const install_bundle = b.addInstallDirectory(.{
+        .source_dir = platform_bundle.getDirectory(),
+        .install_dir = .prefix,
+        .install_subdir = "./",
+        .include_extensions = &.{"tar.br"},
+    });
+    install_bundle.step.dependOn(&bundle.step);
+    b.getInstallStep().dependOn(&install_bundle.step);
+}
+
+fn buildSite(b: *std.Build, roc_paths: []std.Build.LazyPath) void {
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+    const deps = Deps.init(b, optimize, target);
+
+    const platform_bundle = std.Build.Step.WriteFile.create(b);
+    buildLegacy(b, deps, optimize, target, platform_bundle);
+    const install_platform_bundle = b.addInstallDirectory(.{
+        .source_dir = platform_bundle.getDirectory(),
+        .install_dir = .prefix,
+        .install_subdir = "platform",
+    });
+
+    const docs = buildDocs(b, roc_paths);
+
+    const site = b.addSystemCommand(&.{"./site/build.roc"});
+    site.addArgs(&.{ "--linker=legacy", "prod" });
+    site.step.dependOn(docs);
+    site.step.dependOn(&install_platform_bundle.step);
+    const site_dir = site.addOutputDirectoryArg(b.makeTempPath());
+
+    b.installDirectory(.{
+        .source_dir = site_dir,
+        .install_dir = .prefix,
+        .install_subdir = "site",
+    });
+}
+
+fn buildDev(b: *std.Build, roc_paths: []std.Build.LazyPath) void {
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+    const deps = Deps.init(b, optimize, target);
+
+    buildDynhost(b, deps, optimize, target, roc_paths);
+
+    const platform_bundle = std.Build.Step.WriteFile.create(b);
+    buildLegacy(b, deps, optimize, target, platform_bundle);
+    b.installDirectory(.{
+        .source_dir = platform_bundle.getDirectory(),
+        .install_dir = .prefix,
+        .install_subdir = "platform",
+    });
+
     buildGlue(b);
-    const docs = buildDocs(b, roc_paths.items);
-    buildSite(b, docs, legacy);
     runTests(b, deps, optimize, target);
 
-    b.getInstallStep().dependOn(&b.addInstallDirectory(.{
+    b.installDirectory(.{
         .source_dir = b.path("platform"),
-        .install_dir = .{ .prefix = {} },
+        .install_dir = .prefix,
         .install_subdir = "platform",
         .include_extensions = &.{"roc"},
-    }).step);
+    });
 }
 
 fn buildDynhost(
@@ -46,7 +132,7 @@ fn buildDynhost(
     // implementation of the fake app will later be replaced with whatever real
     // Roc application we compile.
     const libapp = b.addSystemCommand(&.{"roc"});
-    libapp.addArgs(&.{ "build", "--lib" });
+    libapp.addArgs(&.{ "build", "--lib", "--target", formatTargetForRoc(b, target) });
     libapp.addFileArg(b.path("platform/libapp.roc"));
     libapp.addArg("--output");
     const libapp_so = libapp.addOutputFileArg(makeTempFilePath(b, "libapp.so"));
@@ -70,7 +156,7 @@ fn buildDynhost(
 
     // Run the Roc surgical linker to tie together our Roc platform and host
     // into something that can be packed up and used as a platform by others.
-    const host = b.addSystemCommand(&.{"roc"});
+    const host = b.addSystemCommand(&.{ "roc", "--target", formatTargetForRoc(b, target) });
     host.addArg("preprocess-host");
     host.addFileArg(dynhost.getEmittedBin());
     host.addFileArg(b.path("platform/main.roc"));
@@ -92,7 +178,8 @@ fn buildLegacy(
     deps: Deps,
     optimize: std.builtin.OptimizeMode,
     target: std.Build.ResolvedTarget,
-) *std.Build.Step {
+    platform_bundle: *std.Build.Step.WriteFile,
+) void {
     // Build the host again, this time as a library for static linking.
     const libhost = b.addStaticLibrary(.{
         .name = "jay",
@@ -105,9 +192,17 @@ fn buildLegacy(
     libhost.bundle_compiler_rt = true;
     libhost.linkLibC(); // provides malloc/free/.. used in main.zig
     deps.install(libhost);
-    const install = b.addInstallFile(libhost.getEmittedBin(), "platform/linux-x64.a");
-    b.getInstallStep().dependOn(&install.step);
-    return &install.step;
+    const install_path = std.fmt.allocPrint(
+        b.allocator,
+        "{s}.a",
+        .{formatTargetForRoc(b, target)},
+    ) catch @panic("OOM");
+    _ = platform_bundle.addCopyDirectory(
+        b.path("platform"),
+        "./",
+        .{ .include_extensions = &.{"roc"} },
+    );
+    _ = platform_bundle.addCopyFile(libhost.getEmittedBin(), install_path);
 }
 
 fn buildGlue(b: *std.Build) void {
@@ -120,11 +215,11 @@ fn buildGlue(b: *std.Build) void {
     const glue_dir = glue.addOutputDirectoryArg(b.makeTempPath());
     glue.addFileArg(b.path("platform/main-glue.roc"));
 
-    b.getInstallStep().dependOn(&b.addInstallDirectory(.{
+    b.installDirectory(.{
         .source_dir = glue_dir,
-        .install_dir = .{ .prefix = {} },
+        .install_dir = .prefix,
         .install_subdir = "glue",
-    }).step);
+    });
 }
 
 fn buildDocs(
@@ -142,31 +237,13 @@ fn buildDocs(
     // way zig will know to rerun the roc commands when .roc files change.
     for (roc_paths) |roc_path| docs.addFileInput(roc_path);
 
-    b.getInstallStep().dependOn(&b.addInstallDirectory(.{
+    b.installDirectory(.{
         .source_dir = docs_dir,
-        .install_dir = .{ .prefix = {} },
+        .install_dir = .prefix,
         .install_subdir = "docs",
-    }).step);
+    });
 
     return &docs.step;
-}
-
-fn buildSite(
-    b: *std.Build,
-    docs: *std.Build.Step,
-    legacy: *std.Build.Step,
-) void {
-    const site = b.addSystemCommand(&.{"./site/build.roc"});
-    site.addArgs(&.{ "--linker=legacy", "prod" });
-    site.step.dependOn(docs);
-    site.step.dependOn(legacy);
-    const site_dir = site.addOutputDirectoryArg(b.makeTempPath());
-
-    b.getInstallStep().dependOn(&b.addInstallDirectory(.{
-        .source_dir = site_dir,
-        .install_dir = .{ .prefix = {} },
-        .install_subdir = "site",
-    }).step);
 }
 
 fn runTests(
@@ -237,13 +314,14 @@ const AddObjectArchive = struct {
 
     pub fn create(
         destination: *std.Build.Step.Compile,
+        target: std.Build.ResolvedTarget,
         source: *std.Build.Step.Compile,
     ) *Self {
         const b = source.step.owner;
         const self = b.allocator.create(Self) catch @panic("OOM");
 
         const ar = b.addSystemCommand(&.{"zig"});
-        ar.addArgs(&.{ "ar", "x" });
+        ar.addArgs(&.{ "ar", "x", formatTargetForAr(b, target) });
         ar.addFileArg(source.getEmittedBin());
         ar.addArg("--output");
         const extracted_objs = ar.addOutputFileArg(makeTempFilePath(b, "extracted"));
@@ -303,6 +381,11 @@ const AddObjectArchive = struct {
         while (try iterator.next()) |entry| {
             std.debug.assert(std.mem.endsWith(u8, entry.name, ".o"));
             const path = try std.fs.path.join(b.allocator, &.{ extracted_objs, entry.name });
+            // When running the release build on Linux the unpacked .a files
+            // for macos targets have no permission bits set. Zig build then
+            // fails with an AccessDenied error. Adding read permissions for
+            // these files appears to fix the problem.
+            try std.posix.fchmodat(std.fs.cwd().fd, path, std.os.linux.S.IRUSR, 0);
             const generated = try b.allocator.create(std.Build.GeneratedFile);
             generated.* = .{ .step = &self.step, .path = path };
             self.destination.addObjectFile(.{ .generated = .{ .file = generated } });
@@ -494,6 +577,7 @@ fn copyLinesAddingPrefix(reader: anytype, writer: anytype, prefix: []const u8) !
 }
 
 const Deps = struct {
+    target: std.Build.ResolvedTarget,
     mime: *std.Build.Dependency,
     libcmark_gfm: *std.Build.Dependency,
     tree_sitter_grammars: *GenerateGrammars,
@@ -505,6 +589,7 @@ const Deps = struct {
         target: std.Build.ResolvedTarget,
     ) Deps {
         return .{
+            .target = target,
             .mime = b.dependency("mime", .{
                 .target = target,
                 .optimize = optimize,
@@ -527,13 +612,45 @@ const Deps = struct {
 
     fn install(self: Deps, step: *std.Build.Step.Compile) void {
         // step.linkLibrary(self.libcmark_gfm.artifact("cmark-gfm"));
-        _ = AddObjectArchive.create(step, self.libcmark_gfm.artifact("cmark-gfm"));
+        _ = AddObjectArchive.create(step, self.target, self.libcmark_gfm.artifact("cmark-gfm"));
 
         // step.linkLibrary(self.libcmark_gfm.artifact("cmark-gfm-extensions"));
-        _ = AddObjectArchive.create(step, self.libcmark_gfm.artifact("cmark-gfm-extensions"));
+        _ = AddObjectArchive.create(step, self.target, self.libcmark_gfm.artifact("cmark-gfm-extensions"));
 
-        _ = AddObjectArchive.create(step, self.tree_sitter_core.artifact("tree-sitter"));
+        _ = AddObjectArchive.create(step, self.target, self.tree_sitter_core.artifact("tree-sitter"));
         step.root_module.addImport("mime", self.mime.module("mime"));
         self.tree_sitter_grammars.link(&step.root_module);
     }
 };
+
+// Run `roc build --help` to see the target strings Roc supports.
+fn formatTargetForRoc(b: *std.Build, target: std.Build.ResolvedTarget) []const u8 {
+    const tag = target.result.os.tag;
+    const arch = target.result.cpu.arch;
+    return if (tag == .linux and arch == .x86_64)
+        "linux-x64"
+    else if (tag == .macos and arch == .x86_64)
+        "macos-x64"
+    else if (tag == .macos and arch == .aarch64)
+        "macos-arm64"
+    else {
+        const triple = target.result.linuxTriple(b.allocator) catch @panic("OOM");
+        std.debug.print("target: {s}\n", .{triple});
+        @panic("unsupported target");
+    };
+}
+
+// Run `zig ar --help` to see the archive formats ar supports.
+fn formatTargetForAr(b: *std.Build, target: std.Build.ResolvedTarget) []const u8 {
+    return if (target.result.isGnu())
+        "--format=gnu"
+    else if (target.result.isMusl())
+        "--format=gnu" // This seems wrong, but nobody complained so :shrug:.
+    else if (target.result.isDarwin())
+        "--format=darwin"
+    else {
+        const triple = target.result.linuxTriple(b.allocator) catch @panic("OOM");
+        std.debug.print("target: {s}\n", .{triple});
+        @panic("unsupported target");
+    };
+}

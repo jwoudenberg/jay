@@ -22,15 +22,15 @@ jobs:
         run: nix develop --command echo done!
 
       - name: build host
-        run: nix develop --command zig build
+        run: nix develop --command zig build -Dtype=release
 
-      - name: create host bundle
-        run: nix develop --command roc build --bundle .tar.br zig-out/platform/main.roc
+      - name: build site
+        run: nix develop --command zig build -Dtype=site
 
       - name: Upload binaries to release
         uses: svenstaro/upload-release-action@v2
         with:
-          file: 'zig-out/platform/*.tar.br'
+          file: 'zig-out/*.tar.br'
           tag: ${{ github.ref }}
           file_glob: true
 

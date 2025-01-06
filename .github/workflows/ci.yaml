@@ -25,7 +25,10 @@ jobs:
         run: nix develop --command echo done!
 
       - name: build host
-        run: nix develop --command zig build
+        run: nix develop --command zig build -Dtype=release
+
+      - name: build site
+        run: nix develop --command zig build -Dtype=site
 
       - name: run host tests
         run: nix develop --command zig build test
