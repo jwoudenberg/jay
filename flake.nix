@@ -6,18 +6,26 @@
     roc.url = "github:roc-lang/roc";
   };
 
-  outputs = inputs: {
-    devShell."x86_64-linux" =
-      let
-        pkgs = inputs.nixpkgs.legacyPackages."x86_64-linux";
-      in
-      pkgs.mkShell {
-        packages = [
-          inputs.roc.packages."x86_64-linux".cli
-          pkgs.entr # for watch.sh
-          pkgs.zig
-          pkgs.zls
-        ];
-      };
-  };
+  outputs =
+    inputs:
+    let
+      mkShell =
+        target:
+        let
+          pkgs = inputs.nixpkgs.legacyPackages."${target}";
+        in
+        pkgs.mkShell {
+          packages = [
+            inputs.roc.packages."${target}".cli
+            pkgs.entr # for watch.sh
+            pkgs.zig
+            pkgs.zls
+          ];
+        };
+    in
+    {
+      devShell."x86_64-linux" = mkShell "x86_64-linux";
+      devShell."x86_64-darwin" = mkShell "x86_64-darwin";
+      devShell."aarch64-darwin" = mkShell "aarch64-darwin";
+    };
 }

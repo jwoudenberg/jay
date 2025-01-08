@@ -14,8 +14,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ci-cd:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, macos-13, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v3
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: prepare nix environment
+        run: nix develop --command echo done!
+
+      - name: run host tests
+        run: nix develop --command zig build test
+
+  build-and-release:
     runs-on: [ubuntu-24.04]
+    needs: test
     permissions:
       contents: write # Used to reate release and upload library
     steps:
@@ -31,9 +48,6 @@ jobs:
 
       - name: build site
         run: nix develop --command zig build -Dtype=site
-
-      - name: run host tests
-        run: nix develop --command zig build test
 
       - name: type-check platform code
         run: nix develop --command roc check platform/main.roc
@@ -62,12 +76,12 @@ jobs:
         with:
           path: zig-out/site/jay-output
 
-  deploy:
+  deploy-site:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-24.04
-    needs: ci-cd
+    needs: build-and-release
     permissions:
       pages: write
       id-token: write
