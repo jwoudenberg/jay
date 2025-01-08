@@ -175,6 +175,7 @@ pre > code {
   font-family: Menlo, Consolas, Monaco, Liberation Mono, Lucida Console, monospace;
   padding: 0.6em;
   box-sizing: border-box;
+  font-size: 1rem;
 
   & .hl-attribute {
     font-style: italic;
