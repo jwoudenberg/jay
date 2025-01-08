@@ -25,6 +25,7 @@ comptime {
     _ = @import("serve.zig");
     _ = @import("site.zig");
     _ = @import("watch.zig");
+    _ = @import("watch-linux.zig");
     _ = @import("xml.zig");
 }
 
