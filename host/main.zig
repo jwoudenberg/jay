@@ -154,9 +154,9 @@ fn run_dev(gpa: std.mem.Allocator, argv0: []const u8) !void {
 
     const should_bootstrap = try platform.getRules(gpa, &site);
 
-    var watcher = try Watcher.init(gpa, source_root_path);
+    const watcher = try Watcher.init(gpa, source_root_path);
     defer watcher.deinit();
-    var runLoop = try RunLoop.init(gpa, &site, &watcher, should_bootstrap);
+    var runLoop = try RunLoop.init(gpa, &site, watcher, should_bootstrap);
 
     try spawnServer(&site);
 
@@ -192,7 +192,7 @@ pub const RunLoop = struct {
     }
 
     pub fn loopOnce(self: *RunLoop, writer: anytype) !void {
-        while (try self.watcher.next_wait(50)) |change| {
+        while (try self.watcher.nextWait(50)) |change| {
             try handleChange(self.gpa, self.site, self.watcher, change);
         }
         // No new events in the last watch period, so filesystem changes

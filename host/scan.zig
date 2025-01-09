@@ -53,7 +53,7 @@ test scanRecursively {
     // tmpdir, to avoid use of `realpath`.
     const source_root_path = try site.source_root.realpathAlloc(std.testing.allocator, "./");
     defer std.testing.allocator.free(source_root_path);
-    var watcher = try Watcher.init(std.testing.allocator, source_root_path);
+    const watcher = try Watcher.init(std.testing.allocator, source_root_path);
     defer watcher.deinit();
 
     try site.source_root.makeDir("dir");
@@ -64,7 +64,7 @@ test scanRecursively {
     try scanRecursively(
         std.testing.allocator,
         site,
-        &watcher,
+        watcher,
         "",
     );
 

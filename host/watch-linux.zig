@@ -32,7 +32,7 @@ pub const Watcher = struct {
     pub fn init(
         gpa: std.mem.Allocator,
         root_path: []const u8,
-    ) !Self {
+    ) !*Self {
         const fan_fd = try fanotify.fanotify_init(.{
             .CLASS = .NOTIF,
             .CLOEXEC = true,
@@ -50,10 +50,11 @@ pub const Watcher = struct {
             .REPORT_TARGET_FID = true,
         }, 0);
 
-        const root_dir = try std.fs.cwd().openDir(root_path, .{});
+        var root_dir = try std.fs.cwd().openDir(root_path, .{});
         errdefer root_dir.close();
 
-        return Self{
+        const self = try gpa.create(Self);
+        self.* = Self{
             .root_dir = root_dir,
             .poll_fds = .{
                 .{
@@ -68,6 +69,7 @@ pub const Watcher = struct {
             .len = 0,
             .offset = 0,
         };
+        return self;
     }
 
     pub fn deinit(self: *Self) void {
@@ -75,6 +77,7 @@ pub const Watcher = struct {
         self.dirs.deinit(self.gpa);
         std.posix.close(self.poll_fds[0].fd);
         self.root_dir.close();
+        self.gpa.destroy(self);
     }
 
     pub fn watchDir(self: *Self, dir: Str) !void {
@@ -151,7 +154,7 @@ pub const Watcher = struct {
         return .{ .path_changed = .{ .dir = dir, .file_name = file_name } };
     }
 
-    pub fn next_wait(self: *Self, max_wait_ms: i32) !?Change {
+    pub fn nextWait(self: *Self, max_wait_ms: i32) !?Change {
         if (try self.next()) |change| return change;
         const count = try std.posix.poll(&self.poll_fds, max_wait_ms);
         if (count > 0) return self.next();
@@ -187,7 +190,8 @@ test "watching the same directory multiple times does not leak memory" {
 
     const source_root_path = try tmpdir.dir.realpathAlloc(std.testing.allocator, "./");
     defer std.testing.allocator.free(source_root_path);
-    var watcher = try Watcher.init(std.testing.allocator, source_root_path);
+
+    const watcher = try Watcher.init(std.testing.allocator, source_root_path);
     defer watcher.deinit();
 
     try watcher.watchDir(try strs.intern(&tmpdir.sub_path));
@@ -208,14 +212,14 @@ test "file watching produces expected events" {
 
     const root_path = try root.realpathAlloc(std.testing.allocator, "./");
     defer std.testing.allocator.free(root_path);
-    var watcher = try Watcher.init(std.testing.allocator, root_path);
+    const watcher = try Watcher.init(std.testing.allocator, root_path);
     defer watcher.deinit();
 
     try watcher.watchDir(try strs.intern(""));
 
     // Create a file triggers a change.
     try root.writeFile(.{ .sub_path = "test.txt", .data = "content" });
-    try expectChange(&watcher, .{ .path_changed = .{
+    try expectChange(watcher, .{ .path_changed = .{
         .dir = try strs.intern(""),
         .file_name = "test.txt",
     } });
@@ -228,50 +232,50 @@ test "file watching produces expected events" {
 
     file = try root.openFile("test.txt", .{ .mode = .write_only });
     try file.writeAll("more content");
-    try std.testing.expectEqual(null, try watcher.next_wait(10));
+    try std.testing.expectEqual(null, try watcher.nextWait(10));
 
     // Closing a file opened for writing triggers a change.
     file.close();
-    try expectChange(&watcher, .{ .path_changed = .{
+    try expectChange(watcher, .{ .path_changed = .{
         .dir = try strs.intern(""),
         .file_name = "test.txt",
     } });
 
     // Moving a file out of the directory triggers a change.
     try std.fs.rename(root, "test.txt", unwatched, "backup.txt");
-    try expectChange(&watcher, .{ .path_changed = .{
+    try expectChange(watcher, .{ .path_changed = .{
         .dir = try strs.intern(""),
         .file_name = "test.txt",
     } });
 
     // Moving a file into the watched directory triggers a change.
     try std.fs.rename(unwatched, "backup.txt", root, "test2.txt");
-    try expectChange(&watcher, .{ .path_changed = .{
+    try expectChange(watcher, .{ .path_changed = .{
         .dir = try strs.intern(""),
         .file_name = "test2.txt",
     } });
 
     // Renaming a file triggers two changes for the old and new name.
     try root.rename("test2.txt", "test3.txt");
-    try expectChange(&watcher, .{ .path_changed = .{
+    try expectChange(watcher, .{ .path_changed = .{
         .dir = try strs.intern(""),
         .file_name = "test2.txt",
     } });
-    try expectChange(&watcher, .{ .path_changed = .{
+    try expectChange(watcher, .{ .path_changed = .{
         .dir = try strs.intern(""),
         .file_name = "test3.txt",
     } });
 
     // Deleting a file triggers a change.
     try root.deleteFile("test3.txt");
-    try expectChange(&watcher, .{ .path_changed = .{
+    try expectChange(watcher, .{ .path_changed = .{
         .dir = try strs.intern(""),
         .file_name = "test3.txt",
     } });
 
     // Creating a subdirectory triggers a change.
     try root.makeDir("mid");
-    try expectChange(&watcher, .{ .path_changed = .{
+    try expectChange(watcher, .{ .path_changed = .{
         .dir = try strs.intern(""),
         .file_name = "mid",
     } });
@@ -286,18 +290,18 @@ test "file watching produces expected events" {
 
     // Creating a file in a nested directry triggers a change.
     try mid.writeFile(.{ .sub_path = "test.txt", .data = "content" });
-    try expectChange(&watcher, .{ .path_changed = .{
+    try expectChange(watcher, .{ .path_changed = .{
         .dir = try strs.intern("mid"),
         .file_name = "test.txt",
     } });
 
     // Moving a file between watched dirs triggers two changes.
     try std.fs.rename(mid, "test.txt", low, "test.txt");
-    try expectChange(&watcher, .{ .path_changed = .{
+    try expectChange(watcher, .{ .path_changed = .{
         .dir = try strs.intern("mid"),
         .file_name = "test.txt",
     } });
-    try expectChange(&watcher, .{ .path_changed = .{
+    try expectChange(watcher, .{ .path_changed = .{
         .dir = try strs.intern("mid/low"),
         .file_name = "test.txt",
     } });
@@ -307,25 +311,25 @@ test "file watching produces expected events" {
     const abs_path = try mid.realpath("low", &path_buf);
     try watcher.unwatchDir(try strs.intern(abs_path));
     try low.deleteFile("test.txt");
-    try std.testing.expectEqual(null, try watcher.next_wait(10));
+    try std.testing.expectEqual(null, try watcher.nextWait(10));
 
     // Moving a directory out of the project triggers a change.
     try std.fs.rename(mid, "low", unwatched, "low");
-    try expectChange(&watcher, .{ .path_changed = .{
+    try expectChange(watcher, .{ .path_changed = .{
         .dir = try strs.intern("mid"),
         .file_name = "low",
     } });
 
     // Moving a directory into the project triggers a change.
     try std.fs.rename(unwatched, "low", mid, "low2");
-    try expectChange(&watcher, .{ .path_changed = .{
+    try expectChange(watcher, .{ .path_changed = .{
         .dir = try strs.intern("mid"),
         .file_name = "low2",
     } });
 
     // Deleting a directory triggers a change for the directory.
     try mid.deleteDir("low2");
-    try expectChange(&watcher, .{ .path_changed = .{
+    try expectChange(watcher, .{ .path_changed = .{
         .dir = try strs.intern("mid"),
         .file_name = "low2",
     } });
@@ -339,7 +343,7 @@ fn expectChange(
     watcher: *Watcher,
     expected: Watcher.Change,
 ) !void {
-    const actual = try watcher.next_wait(10) orelse return error.ExpectedEvent;
+    const actual = try watcher.nextWait(10) orelse return error.ExpectedEvent;
     try std.testing.expectEqualStrings(
         @tagName(std.meta.activeTag(expected)),
         @tagName(std.meta.activeTag(actual)),

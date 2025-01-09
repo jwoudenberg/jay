@@ -1,6 +1,7 @@
 // Run tests on this module to ensure they run on all the modules below.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Watcher = @import("watch.zig").Watcher;
 const scanRecursively = @import("scan.zig").scanRecursively;
 const Str = @import("str.zig").Str;
@@ -25,8 +26,6 @@ comptime {
     _ = @import("serve.zig");
     _ = @import("site.zig");
     _ = @import("watch.zig");
-    _ = @import("watch-linux.zig");
-    _ = @import("watch-macos.zig");
     _ = @import("xml.zig");
 }
 
@@ -79,7 +78,7 @@ test "delete a source file before a page is generated => jay does not create an 
     try site.source_root.writeFile(.{ .sub_path = "file.md", .data = "{}<html/>" });
     try site.source_root.writeFile(.{ .sub_path = "static.css", .data = "" });
     try site.source_root.writeFile(.{ .sub_path = "static.html", .data = "" });
-    while (try run_loop.watcher.next_wait(50)) |change| {
+    while (try run_loop.watcher.nextWait(50)) |change| {
         try handleChange(std.testing.allocator, site, run_loop.watcher, change);
     }
     try expectNoFile(site.output_root, "file");
@@ -217,6 +216,7 @@ test "add multiple files with a problem => jay will show multiple error" {
     const site = test_run_loop.test_site.site;
 
     try site.source_root.writeFile(.{ .sub_path = "file1.md", .data = "{}<html/>" });
+    try test_run_loop.loopOnce();
     try site.source_root.writeFile(.{ .sub_path = "file2.md", .data = "{}<html/>" });
     try test_run_loop.loopOnce();
     try std.testing.expectEqualStrings(
@@ -316,6 +316,7 @@ test "add two files that output the same web path => jay shows an error" {
     const site = test_run_loop.test_site.site;
 
     try site.source_root.writeFile(.{ .sub_path = "file.md", .data = "{}<html/>" });
+    try test_run_loop.loopOnce();
     try site.source_root.writeFile(.{ .sub_path = "file.html", .data = "<span/>" });
     try test_run_loop.loopOnce();
     try expectFile(site.output_root, "file.html", "<html/>\n");
@@ -481,6 +482,9 @@ test "markdown file contains invalid metadata => jay shows an error" {
 }
 
 test "add an untypical file type => jay shows an error" {
+    // TODO: support a version of this test on MacOS.
+    if (builtin.target.os.tag != .linux) return;
+
     var test_run_loop = try TestRunLoop.init(.{ .markdown_patterns = &.{"*"} });
     defer test_run_loop.deinit();
     var site = test_run_loop.test_site.site;
@@ -533,6 +537,9 @@ test "add an untypical file type => jay shows an error" {
 }
 
 test "add a symlink to a directory => jay treats it as a regular directory" {
+    // TODO: support a version of this test on MacOS.
+    if (builtin.target.os.tag != .linux) return;
+
     var tmpdir = std.testing.tmpDir(.{});
     defer tmpdir.cleanup();
     try tmpdir.dir.writeFile(.{ .sub_path = "file.md", .data = "{}<html/>" });
@@ -714,11 +721,10 @@ const TestRunLoop = struct {
         const allocator = std.testing.allocator;
         const test_site = try allocator.create(TestSite);
         test_site.* = try TestSite.init(config);
-        const watcher = try allocator.create(Watcher);
         const source_root = try test_site.site.openSourceRoot(.{});
         const source_root_path = try source_root.realpathAlloc(std.testing.allocator, "./");
         defer std.testing.allocator.free(source_root_path);
-        watcher.* = try Watcher.init(allocator, source_root_path);
+        const watcher = try Watcher.init(allocator, source_root_path);
         const run_loop = try allocator.create(RunLoop);
         run_loop.* = try RunLoop.init(allocator, test_site.site, watcher, false);
         return .{
@@ -735,7 +741,6 @@ const TestRunLoop = struct {
         self.watcher.deinit();
         self.test_site.deinit();
         self.source_root.close();
-        self.allocator.destroy(self.watcher);
         self.allocator.destroy(self.run_loop);
         self.allocator.destroy(self.test_site);
     }

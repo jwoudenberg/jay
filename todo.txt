@@ -1,3 +1,6 @@
++macos test uncommon file types
++macos figure out what to do with symlink dirs
+
 +fix don't crash on error.MismatchedCloseAndOpenTags
 +fix don't crash on bootstrap example
 +fix don't generate camel-cased variable names in bootstrap
@@ -6,6 +9,7 @@
 
 +mvp syntax highlighting for css, html, sh/bash, markdown, yaml
 
++html support html comment parsing
 +html support data attributes
 +html fix shadowed attributes
 +html add doctype
@@ -37,7 +41,6 @@
 +feature pagination
 +feature minification
 +feature search
-+feature macos support
 +feature windows support
 +feature auto-replace source-paths in href attrs with output paths
 +feature 'break' in a markdown post (snippet of post for index page)
@@ -50,5 +53,6 @@
 +dev changelog
 +dev use arena-allocator for roc runs
 +dev find better solution than std.debug.print for error output
++dev detect stale platform URLs in docs and examples
 
 +thinking supporting site hosted on subpath, do rss feeds require jay to know the domain?
