@@ -6,7 +6,7 @@ const RocList = @import("roc/list.zig").RocList;
 const Str = @import("str.zig").Str;
 const fail = @import("fail.zig");
 const Site = @import("site.zig").Site;
-const Watcher = @import("watch.zig").Watcher(Str, Str.bytes);
+const Watcher = @import("watch.zig").Watcher;
 const spawnServer = @import("serve.zig").spawnServer;
 const platform = @import("platform.zig").platform;
 const bootstrap = @import("bootstrap.zig").bootstrap;
@@ -139,13 +139,13 @@ fn run_dev(gpa: std.mem.Allocator, argv0: []const u8) !void {
     var envMap = try EnvMap.init(gpa);
     defer envMap.deinit();
 
-    var cache_dir = cache_dir: {
-        var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
-        const cwd_path = try std.posix.getcwd(&buf);
-        const roc_main_abs = try std.fs.path.resolve(gpa, &.{ cwd_path, argv0 });
-        defer gpa.free(roc_main_abs);
-        break :cache_dir try cacheDir(std.fs.cwd(), roc_main_abs, envMap);
-    };
+    var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+    const cwd_path = try std.posix.getcwd(&buf);
+    const roc_main_abs = try std.fs.path.resolve(gpa, &.{ cwd_path, argv0 });
+    defer gpa.free(roc_main_abs);
+    const source_root_path = std.fs.path.dirname(roc_main_abs) orelse "/";
+
+    var cache_dir = try cacheDir(std.fs.cwd(), roc_main_abs, envMap);
     defer cache_dir.close();
     var site = try createSite(gpa, argv0, cache_dir, strs);
     defer site.source_root.close();
@@ -154,9 +154,7 @@ fn run_dev(gpa: std.mem.Allocator, argv0: []const u8) !void {
 
     const should_bootstrap = try platform.getRules(gpa, &site);
 
-    var source_root = try site.openSourceRoot(.{});
-    defer source_root.close();
-    var watcher = try Watcher.init(gpa, source_root);
+    var watcher = try Watcher.init(gpa, source_root_path);
     defer watcher.deinit();
     var runLoop = try RunLoop.init(gpa, &site, &watcher, should_bootstrap);
 

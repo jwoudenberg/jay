@@ -7,7 +7,7 @@ const Site = @import("site.zig").Site;
 const TestSite = @import("site.zig").TestSite;
 const fail = @import("fail.zig");
 const Scanner = @import("scan.zig").Scanner;
-const Watcher = @import("watch.zig").Watcher(Str, Str.bytes);
+const Watcher = @import("watch.zig").Watcher;
 const Str = @import("str.zig").Str;
 const glob = @import("glob.zig");
 

@@ -7,7 +7,7 @@ const fail = @import("fail.zig");
 const Site = @import("site.zig").Site;
 const TestSite = @import("site.zig").TestSite;
 const Str = @import("str.zig").Str;
-const Watcher = @import("watch.zig").Watcher(Str, Str.bytes);
+const Watcher = @import("watch.zig").Watcher;
 
 pub fn scanRecursively(
     gpa: std.mem.Allocator,
@@ -49,7 +49,11 @@ test scanRecursively {
     });
     defer test_site.deinit();
     var site = test_site.site;
-    var watcher = try Watcher.init(std.testing.allocator, site.source_root);
+    // TODO: Use custom tmpdir implementation that gives relative path to
+    // tmpdir, to avoid use of `realpath`.
+    const source_root_path = try site.source_root.realpathAlloc(std.testing.allocator, "./");
+    defer std.testing.allocator.free(source_root_path);
+    var watcher = try Watcher.init(std.testing.allocator, source_root_path);
     defer watcher.deinit();
 
     try site.source_root.makeDir("dir");

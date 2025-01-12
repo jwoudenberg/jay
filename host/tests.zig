@@ -1,7 +1,7 @@
 // Run tests on this module to ensure they run on all the modules below.
 
 const std = @import("std");
-const Watcher = @import("watch.zig").Watcher(Str, Str.bytes);
+const Watcher = @import("watch.zig").Watcher;
 const scanRecursively = @import("scan.zig").scanRecursively;
 const Str = @import("str.zig").Str;
 const RunLoop = @import("main.zig").RunLoop;
@@ -26,6 +26,7 @@ comptime {
     _ = @import("site.zig");
     _ = @import("watch.zig");
     _ = @import("watch-linux.zig");
+    _ = @import("watch-macos.zig");
     _ = @import("xml.zig");
 }
 
@@ -715,7 +716,9 @@ const TestRunLoop = struct {
         test_site.* = try TestSite.init(config);
         const watcher = try allocator.create(Watcher);
         const source_root = try test_site.site.openSourceRoot(.{});
-        watcher.* = try Watcher.init(allocator, source_root);
+        const source_root_path = try source_root.realpathAlloc(std.testing.allocator, "./");
+        defer std.testing.allocator.free(source_root_path);
+        watcher.* = try Watcher.init(allocator, source_root_path);
         const run_loop = try allocator.create(RunLoop);
         run_loop.* = try RunLoop.init(allocator, test_site.site, watcher, false);
         return .{
