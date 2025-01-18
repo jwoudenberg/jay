@@ -167,7 +167,7 @@ ignore = \patterns ->
 ## currently implemented.
 ##
 ## [1]: https://github.com/jwoudenberg/rvn
-## [2]: https://github.com/jwoudenberg/jay/blob/main/example/static/style.css
+## [2]: https://github.com/jwoudenberg/jay/blob/main/examples/blog/static/style.css
 from_markdown : Pages [Markdown] -> Pages [Html]
 from_markdown = \pages ->
     unwrap pages
