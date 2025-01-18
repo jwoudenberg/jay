@@ -16,12 +16,13 @@ pub fn build(b: *std.Build) !void {
     }
 
     const build_type = b.option(
-        enum { dev, release, site },
+        enum { dev, host, release, site },
         "type",
         "the type of build to perform",
     ) orelse .dev;
     switch (build_type) {
         .dev => buildDev(b, roc_paths.items),
+        .host => buildHost(b),
         .site => buildSite(b, roc_paths.items),
         .release => buildRelease(b),
     }
@@ -94,6 +95,20 @@ fn buildSite(b: *std.Build, roc_paths: []std.Build.LazyPath) void {
     });
 }
 
+fn buildHost(b: *std.Build) void {
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+    const deps = Deps.init(b, optimize, target);
+
+    const platform_bundle = std.Build.Step.WriteFile.create(b);
+    buildLegacy(b, deps, optimize, target, platform_bundle);
+    b.installDirectory(.{
+        .source_dir = platform_bundle.getDirectory(),
+        .install_dir = .prefix,
+        .install_subdir = "platform",
+    });
+}
+
 fn buildDev(b: *std.Build, roc_paths: []std.Build.LazyPath) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -110,13 +125,7 @@ fn buildDev(b: *std.Build, roc_paths: []std.Build.LazyPath) void {
     });
 
     runTests(b, deps, optimize, target);
-
-    b.installDirectory(.{
-        .source_dir = b.path("platform"),
-        .install_dir = .prefix,
-        .install_subdir = "platform",
-        .include_extensions = &.{"roc"},
-    });
+    runIntegrationTests(b, deps, optimize, target);
 }
 
 fn buildDynhost(
@@ -145,8 +154,6 @@ fn buildDynhost(
         .target = target,
         .optimize = optimize,
     });
-    dynhost.pie = true;
-    dynhost.rdynamic = true;
     dynhost.bundle_compiler_rt = true;
     dynhost.root_module.stack_check = false;
     dynhost.linkLibC();
@@ -186,8 +193,6 @@ fn buildLegacy(
         .target = target,
         .optimize = optimize,
     });
-    libhost.pie = true;
-    libhost.rdynamic = true;
     libhost.bundle_compiler_rt = true;
     libhost.linkLibC(); // provides malloc/free/.. used in main.zig
     deps.install(libhost);
@@ -251,6 +256,37 @@ fn runTests(
     test_step.dependOn(&run_exe_unit_tests.step);
 }
 
+fn runIntegrationTests(
+    b: *std.Build,
+    deps: Deps,
+    optimize: std.builtin.OptimizeMode,
+    target: std.Build.ResolvedTarget,
+) void {
+    var dir = std.fs.cwd().openDir("examples", .{ .iterate = true }) catch @panic("can't open dir");
+    defer dir.close();
+    var iterator = dir.iterate();
+
+    const platform_bundle = std.Build.Step.WriteFile.create(b);
+    buildLegacy(b, deps, optimize, target, platform_bundle);
+    const install_platform_bundle = b.addInstallDirectory(.{
+        .source_dir = platform_bundle.getDirectory(),
+        .install_dir = .prefix,
+        .install_subdir = "platform",
+    });
+
+    const integration_test_step = b.step("integration-test", "Run integration tests");
+    while (iterator.next() catch @panic("can't iterate examples")) |entry| {
+        const path = std.fmt.allocPrint(
+            b.allocator,
+            "examples/{s}",
+            .{entry.name},
+        ) catch @panic("OOM");
+        const single_test = RunIntegrationTest.create(b, path);
+        single_test.step.dependOn(&install_platform_bundle.step);
+        integration_test_step.dependOn(&single_test.step);
+    }
+}
+
 fn makeTempFilePath(b: *std.Build, filename: []const u8) []const u8 {
     return b.pathJoin(&[_][]const u8{ b.makeTempPath(), filename });
 }
@@ -275,6 +311,100 @@ const grammars = [_]Grammar{
     .{ .name = "tree-sitter-ruby", .c_source_files = &.{ "parser.c", "scanner.c" } },
     .{ .name = "tree-sitter-rust", .c_source_files = &.{ "parser.c", "scanner.c" } },
     .{ .name = "tree-sitter-zig", .c_source_files = &.{"parser.c"} },
+};
+
+const RunIntegrationTest = struct {
+    const Self = @This();
+
+    step: std.Build.Step,
+    example_dir_path: []const u8,
+    output_dir_path: std.Build.LazyPath,
+
+    pub fn create(b: *std.Build, example_dir_path: []const u8) *std.Build.Step.Run {
+        const self = b.allocator.create(Self) catch @panic("OOM");
+        self.* = .{
+            .step = std.Build.Step.init(.{
+                .id = .custom,
+                .name = "RunIntegrationTest",
+                .owner = b,
+                .makeFn = make,
+            }),
+            .example_dir_path = example_dir_path,
+            .output_dir_path = undefined,
+        };
+        const cmd = std.fmt.allocPrint(b.allocator, "./{s}/build.roc", .{example_dir_path}) catch @panic("OOM");
+        const build_example = b.addSystemCommand(&.{cmd});
+        build_example.addArg("--linker=legacy");
+        build_example.addArg("prod");
+        self.output_dir_path = build_example.addOutputDirectoryArg(b.makeTempPath());
+        self.step.dependOn(&build_example.step);
+        return build_example;
+    }
+
+    pub fn make(step: *std.Build.Step, prog_node: std.Progress.Node) anyerror!void {
+        _ = prog_node;
+        const self: *Self = @fieldParentPtr("step", step);
+        const b = self.step.owner;
+
+        var example_dir = try std.fs.cwd().openDir(self.example_dir_path, .{ .iterate = false });
+        defer example_dir.close();
+        var expected_output = try example_dir.openDir("jay-output", .{ .iterate = true });
+        defer expected_output.close();
+        var expected_output_walker = try expected_output.walk(b.allocator);
+        defer expected_output_walker.deinit();
+        var expected_path_sets = std.BufSet.init(b.allocator);
+        defer expected_path_sets.deinit();
+        while (try expected_output_walker.next()) |entry| {
+            if (entry.kind != .file) continue;
+            try expected_path_sets.insert(entry.path);
+        }
+
+        var output_dir = try std.fs.cwd().openDir(
+            self.output_dir_path.getPath(b),
+            .{ .iterate = false },
+        );
+        defer output_dir.close();
+        var actual_output = try output_dir.openDir("jay-output", .{ .iterate = true });
+        defer actual_output.close();
+        var actual_output_walker = try actual_output.walk(b.allocator);
+        defer actual_output_walker.deinit();
+        while (try actual_output_walker.next()) |entry| {
+            if (entry.kind != .file) continue;
+            if (expected_path_sets.contains(entry.path)) {
+                expected_path_sets.remove(entry.path);
+                const expected_contents = try expected_output.readFileAlloc(b.allocator, entry.path, 1000_000);
+                const actual_contents = try actual_output.readFileAlloc(b.allocator, entry.path, 1000_000);
+                if (!std.mem.eql(u8, expected_contents, actual_contents)) {
+                    std.debug.print(
+                        \\----- Failing integration test: {s}
+                        \\Generated file has contents other than expected:
+                        \\    {s}
+                        \\
+                    , .{ self.example_dir_path, entry.path });
+                    try std.testing.expectEqualStrings(expected_contents, actual_contents);
+                }
+            } else {
+                std.debug.print(
+                    \\----- Failing integration test: {s}
+                    \\Generated the following unexpected path:
+                    \\    {s}
+                    \\
+                , .{ self.example_dir_path, entry.path });
+                return error.FailingTest;
+            }
+        }
+
+        var expected_path_iter = expected_path_sets.iterator();
+        if (expected_path_iter.next()) |ungenerated_path| {
+            std.debug.print(
+                \\----- Failing integration test: {s}
+                \\Expected the following file that was not generated:
+                \\    {s}
+                \\
+            , .{ self.example_dir_path, ungenerated_path });
+            return error.FailingTest;
+        }
+    }
 };
 
 // When linking a build step against a static library, the build system by
@@ -593,12 +723,8 @@ const Deps = struct {
     }
 
     fn install(self: Deps, step: *std.Build.Step.Compile) void {
-        // step.linkLibrary(self.libcmark_gfm.artifact("cmark-gfm"));
         _ = AddObjectArchive.create(step, self.target, self.libcmark_gfm.artifact("cmark-gfm"));
-
-        // step.linkLibrary(self.libcmark_gfm.artifact("cmark-gfm-extensions"));
         _ = AddObjectArchive.create(step, self.target, self.libcmark_gfm.artifact("cmark-gfm-extensions"));
-
         _ = AddObjectArchive.create(step, self.target, self.tree_sitter_core.artifact("tree-sitter"));
         step.root_module.addImport("mime", self.mime.module("mime"));
         self.tree_sitter_grammars.link(&step.root_module);

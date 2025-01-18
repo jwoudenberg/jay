@@ -30,6 +30,9 @@ jobs:
       - name: run host tests
         run: nix develop --command zig build test
 
+      - name: run integration tests
+        run: nix develop --command zig build integration-test
+
   build-and-release:
     runs-on: [ubuntu-24.04]
     needs: test
