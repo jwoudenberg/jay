@@ -15,7 +15,7 @@ main = Pages.collect [
 ]
 
 guide_layout! : { content : Html.Html, path : Str, meta : { title : Str } } => Html.Html
-guide_layout! = \current_page ->
+guide_layout! = |current_page|
     Page : {
         title : Str,
         path : Str,
@@ -30,8 +30,8 @@ guide_layout! = \current_page ->
     }
 
     to_page : { path : Str, meta : { title : Str, order : U16 } } -> Page
-    to_page = \{ path, meta: { title, order } } ->
-        when Str.splitOn path "/" is
+    to_page = |{ path, meta: { title, order } }|
+        when Str.split_on path "/" is
             ["", "guide"] ->
                 {
                     title,
@@ -64,7 +64,7 @@ guide_layout! = \current_page ->
                     section: SectionSub section,
                 }
 
-            _ -> crash "Unexpected guide path '$(path)'"
+            _ -> crash "Unexpected guide path '${path}'"
 
     pages : List Page
     pages =
@@ -73,7 +73,7 @@ guide_layout! = \current_page ->
         |> List.map to_page
 
     empty_sections : Dict Str Section
-    empty_sections = List.walk pages (Dict.empty {}) \acc, page ->
+    empty_sections = List.walk pages (Dict.empty {}) |acc, page|
         when page.section is
             SectionRoot key ->
                 Dict.insert acc key {
@@ -85,32 +85,33 @@ guide_layout! = \current_page ->
             SectionSub _ -> acc
 
     sections : Dict Str Section
-    sections = List.walk pages empty_sections \acc, page ->
+    sections = List.walk pages empty_sections |acc, page|
         when page.section is
             SectionRoot _ -> acc
             SectionSub key ->
-                Dict.update acc key \result ->
+                Dict.update acc key |result|
                     when result is
-                        Err Missing -> crash "No root section for $(key)"
+                        Err Missing -> crash "No root section for ${key}"
                         Ok section ->
                             Ok
                                 { section &
                                     sub_pages: section.sub_pages
                                     |> List.append page
-                                    |> List.sortWith \a, b -> Num.compare a.order b.order,
+                                    |> List.sort_with |a, b| Num.compare a.order b.order,
                                 }
 
     link_sections =
         Dict.values sections
-        |> List.sortWith \a, b -> Num.compare a.root_page.order b.root_page.order
-        |> List.map \section ->
+        |> List.sort_with |a, b| Num.compare a.root_page.order b.root_page.order
+        |> List.map |section|
             links =
                 List.concat
                     [link section.root_page]
                     (List.map section.sub_pages link)
             Html.li {} [Html.ul { class: "section-links" } links]
 
-    link = \page -> Html.li
+    link = |page|
+        Html.li
             { class: if page.path == current_page.path then "active" else "" }
             [Html.a { href: page.path } [Html.text page.title]]
 
@@ -125,13 +126,13 @@ guide_layout! = \current_page ->
     layout content
 
 home_layout : { content : Html.Html, path : Str, meta : {} } -> Html.Html
-home_layout = \current_page ->
+home_layout = |current_page|
     content = Html.main { class: "home" } [current_page.content]
     layout content
 
 layout : Html.Html -> Html.Html
-layout = \content ->
-    link = \href, text -> Html.li {} [Html.a { href } [Html.text text]]
+layout = |content|
+    link = |href, text| Html.li {} [Html.a { href } [Html.text text]]
     Html.html {} [
         Html.head {} [
             Html.meta { charset: "utf-8" } [],

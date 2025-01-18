@@ -1,3 +1,4 @@
+improve license situation for tree-sitter grammar dependencies
 +macos test uncommon file types
 +macos figure out what to do with symlink dirs
 
