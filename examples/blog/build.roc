@@ -7,7 +7,7 @@ import pf.Html
 main = Pages.collect [
     markdown,
     Pages.files ["static/*.css"],
-    Pages.ignore ["README.md"],
+    Pages.ignore ["README.md", "jay-output"],
 ]
 
 markdown =
