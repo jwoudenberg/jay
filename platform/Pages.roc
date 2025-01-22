@@ -50,7 +50,7 @@ bootstrap = wrap [
         patterns: [],
         processing: Bootstrap,
         replace_tags: [],
-        pipeline!: \content, _ -> content,
+        pipeline!: |content, _| content,
     },
 ]
 
@@ -67,8 +67,8 @@ bootstrap = wrap [
 ##
 ## ```
 collect : List (Pages a) -> Pages a
-collect = \rules ->
-    List.walk rules [] (\acc, rule -> List.concat acc (unwrap rule))
+collect = |rules|
+    List.walk rules [] (|acc, rule| List.concat acc (unwrap rule))
     |> wrap
 
 ## Takes a list of patterns, and adds all the source files matching one of the
@@ -89,13 +89,13 @@ collect = \rules ->
 ## Patterns may contain multiple '*' globs matching part of a filename.
 ## '**' globs are not supported.
 files : List Str -> Pages type
-files = \patterns ->
+files = |patterns|
     wrap [
         {
             patterns,
             processing: None,
             replace_tags: [],
-            pipeline!: \content, _ -> content,
+            pipeline!: |content, _| content,
         },
     ]
 
@@ -109,13 +109,13 @@ files = \patterns ->
 ## ]
 ## ```
 ignore : List Str -> Pages [Ignored]
-ignore = \patterns ->
+ignore = |patterns|
     wrap [
         {
             patterns,
             processing: Ignore,
             replace_tags: [],
-            pipeline!: \content, _ -> content,
+            pipeline!: |content, _| content,
         },
     ]
 
@@ -169,9 +169,9 @@ ignore = \patterns ->
 ## [1]: https://github.com/jwoudenberg/rvn
 ## [2]: https://github.com/jwoudenberg/jay/blob/main/examples/blog/static/style.css
 from_markdown : Pages [Markdown] -> Pages [Html]
-from_markdown = \pages ->
+from_markdown = |pages|
     unwrap pages
-    |> List.map \page -> { page & processing: Markdown }
+    |> List.map |page| { page & processing: Markdown }
     |> wrap
 
 ## Wrap additional HTML around each of a set of HTML pages.
@@ -202,26 +202,26 @@ from_markdown = \pages ->
 ## - `meta`: The frontmatter of markdown source files that included one,
 ##    and `{}` for all other pages.
 wrap_html : Pages [Html], ({ content : Html, path : Str, meta : {}a } => Html) -> Pages [Html] where a implements Decoding
-wrap_html = \pages, user_wrapper! ->
+wrap_html = |pages, user_wrapper!|
     wrapper! : Xml, Pages.Internal.HostPage => Xml
-    wrapper! = \content, page ->
+    wrapper! = |content, page|
         meta =
-            when Decode.fromBytes page.meta Rvn.compact is
+            when Decode.from_bytes page.meta Rvn.compact is
                 Ok x -> x
                 Err _ ->
-                    when Str.fromUtf8 page.meta is
-                        Ok str -> crash "@$%^&.jayerror*0*$(str)"
+                    when Str.from_utf8 page.meta is
+                        Ok str -> crash "@$%^&.jayerror*0*${str}"
                         Err _ -> crash "frontmatter bytes not UTF8-encoded"
 
         user_wrapper! { content: Xml.Internal.wrap content, path: page.path, meta }
         |> Xml.Internal.unwrap
 
     unwrap pages
-    |> List.map \page -> {
+    |> List.map |page| {
         patterns: page.patterns,
         processing: if page.processing == None then Xml else page.processing,
         replace_tags: page.replace_tags,
-        pipeline!: \content, host_page ->
+        pipeline!: |content, host_page|
             page.pipeline! content host_page
             |> wrapper! host_page,
     }
@@ -233,15 +233,15 @@ wrap_html = \pages, user_wrapper! ->
 ##
 ## See the documentation of `wrap_html` for an example of how to use this.
 list! : Str => List { path : Str, meta : {}a }
-list! = \pattern ->
+list! = |pattern|
     Host.list! pattern
-    |> List.map \result ->
+    |> List.map |result|
         meta =
-            when Decode.fromBytes result.meta Rvn.compact is
+            when Decode.from_bytes result.meta Rvn.compact is
                 Ok x -> x
                 Err _ ->
-                    when Str.fromUtf8 result.meta is
-                        Ok str -> crash "@$%^&.jayerror*0*$(str)"
+                    when Str.from_utf8 result.meta is
+                        Ok str -> crash "@$%^&.jayerror*0*${str}"
                         Err _ -> crash "frontmatter bytes not UTF8-encoded"
         { path: result.path, meta }
 
@@ -292,28 +292,28 @@ replace_html :
     Str,
     ({ content : Html, attrs : {}attrs, path : Str, meta : {}a } => Html)
     -> Pages [Html]
-replace_html = \pages, name, user_replacer! ->
+replace_html = |pages, name, user_replacer!|
     replacer! : Xml, Pages.Internal.Page, Pages.Internal.HostPage => Xml
-    replacer! = \original, page, host_page ->
+    replacer! = |original, page, host_page|
         meta =
-            when Decode.fromBytes host_page.meta Rvn.compact is
+            when Decode.from_bytes host_page.meta Rvn.compact is
                 Ok x -> x
                 Err _ ->
-                    when Str.fromUtf8 host_page.meta is
-                        Ok str -> crash "@$%^&.jayerror*0*$(str)"
+                    when Str.from_utf8 host_page.meta is
+                        Ok str -> crash "@$%^&.jayerror*0*${str}"
                         Err _ -> crash "frontmatter bytes not UTF8-encoded"
 
-        walk! host_page.tags original \content, tag ->
-            if Num.intCast tag.index == List.len page.replace_tags then
+        walk! host_page.tags original |content, tag|
+            if Num.int_cast tag.index == List.len page.replace_tags then
                 attrs =
-                    when Decode.fromBytes tag.attributes Xml.Attributes.formatter is
+                    when Decode.from_bytes tag.attributes Xml.Attributes.formatter is
                         Ok x -> x
                         Err _ ->
-                            when Str.fromUtf8 tag.attributes is
-                                Ok str -> crash "@$%^&.jayerror*1*$(str)"
+                            when Str.from_utf8 tag.attributes is
+                                Ok str -> crash "@$%^&.jayerror*1*${str}"
                                 Err _ -> crash "attribute bytes not UTF8-encoded"
 
-                replace_tag! content tag \nested ->
+                replace_tag! content tag |nested|
                     user_replacer! {
                         content: Xml.Internal.wrap nested,
                         path: host_page.path,
@@ -325,31 +325,31 @@ replace_html = \pages, name, user_replacer! ->
                 original
 
     unwrap pages
-    |> List.map \page -> {
+    |> List.map |page| {
         patterns: page.patterns,
         processing: if page.processing == None then Xml else page.processing,
         replace_tags: List.append page.replace_tags name,
-        pipeline!: \content, host_page ->
+        pipeline!: |content, host_page|
             page.pipeline! content host_page
             |> replacer! page host_page,
     }
     |> wrap
 
 replace_tag! : Xml, Pages.Internal.HostTag, (Xml => Xml) => Xml
-replace_tag! = \content, tag, replace! ->
+replace_tag! = |content, tag, replace!|
     { before, nested, after } = replace_tag_helper content tag
     before
     |> List.concat (replace! nested)
     |> List.concat after
 
 replace_tag_helper : Xml, Pages.Internal.HostTag -> { before : Xml, nested : Xml, after : Xml }
-replace_tag_helper = \content, tag ->
-    List.walk content { before: [], nested: [], after: [] } \acc, slice ->
+replace_tag_helper = |content, tag|
+    List.walk content { before: [], nested: [], after: [] } |acc, slice|
         when slice is
             RocGenerated _ ->
-                if !(List.isEmpty acc.after) then
+                if !(List.is_empty acc.after) then
                     { acc & after: List.append acc.after slice }
-                else if !(List.isEmpty acc.nested) then
+                else if !(List.is_empty acc.nested) then
                     { acc & nested: List.append acc.nested slice }
                 else
                     { acc & before: List.append acc.before slice }
@@ -361,7 +361,7 @@ replace_tag_helper = \content, tag ->
                 else if tag.outer_start >= end then
                     # [ slice ] <tag />
                     { acc & before: List.append acc.before slice }
-                else if tag.outer_start <= start && tag.outer_end >= end then
+                else if tag.outer_start <= start and tag.outer_end >= end then
                     # <tag [ slice ] />
                     { acc &
                         nested: List.append
@@ -373,7 +373,7 @@ replace_tag_helper = \content, tag ->
                                 }
                             ),
                     }
-                else if tag.outer_start < start && tag.outer_end < end then
+                else if tag.outer_start < start and tag.outer_end < end then
                     # <tag [ /> slice ]
                     { acc &
                         nested: List.append
@@ -388,7 +388,7 @@ replace_tag_helper = \content, tag ->
                             acc.after
                             (FromSource { start: tag.outer_end, end }),
                     }
-                else if tag.outer_start > start && tag.outer_end > end then
+                else if tag.outer_start > start and tag.outer_end > end then
                     # [ slice <tag ] />
                     { acc &
                         before: List.append
@@ -419,39 +419,39 @@ replace_tag_helper = \content, tag ->
 
 # A pure version of replace_tag! that shares almost all the logic, for testing.
 replace_tag : Xml, Pages.Internal.HostTag, (Xml -> Xml) -> Xml
-replace_tag = \content, tag, replace ->
+replace_tag = |content, tag, replace|
     { before, nested, after } = replace_tag_helper content tag
     before
     |> List.concat (replace nested)
     |> List.concat after
 
 parse_tag_for_test : List U8 -> Pages.Internal.HostTag
-parse_tag_for_test = \bytes ->
+parse_tag_for_test = |bytes|
     ok : Result (Int a) err -> Int b
-    ok = \result ->
+    ok = |result|
         when result is
-            Ok x -> Num.intCast x
+            Ok x -> Num.int_cast x
             Err _ -> crash "oops"
 
     {
         index: 0,
-        outer_start: List.findFirstIndex bytes (\b -> b == '<') |> ok,
-        outer_end: 1 + (List.findLastIndex bytes (\b -> b == '>') |> ok),
-        inner_start: 1 + (List.findFirstIndex bytes (\b -> b == '>') |> ok),
-        inner_end: List.findLastIndex bytes (\b -> b == '<') |> ok,
+        outer_start: List.find_first_index bytes (|b| b == '<') |> ok,
+        outer_end: 1 + (List.find_last_index bytes (|b| b == '>') |> ok),
+        inner_start: 1 + (List.find_first_index bytes (|b| b == '>') |> ok),
+        inner_end: List.find_last_index bytes (|b| b == '<') |> ok,
         attributes: [],
     }
 
 # Mark some XML to make it recognizable in test output
 mark_for_test : Xml -> Xml
-mark_for_test = \xml ->
-    List.map xml \slice ->
+mark_for_test = |xml|
+    List.map xml |slice|
         when slice is
             FromSource { start, end } -> FromSource { start: 1000 + start, end: 1000 + end }
             RocGenerated bytes -> RocGenerated (['!'] |> List.concat bytes |> List.append '!')
 
 expect
-    content = Str.toUtf8 "    <tag>hi</tag>   "
+    content = Str.to_utf8 "    <tag>hi</tag>   "
     #              index:  123456789 123456789
     #              slice:  []
     tag = parse_tag_for_test content
@@ -462,7 +462,7 @@ expect
     == actual
 
 expect
-    content = Str.toUtf8 "    <tag>hi</tag>   "
+    content = Str.to_utf8 "    <tag>hi</tag>   "
     #              index:  123456789 123456789
     #              slice: [    ]
     tag = parse_tag_for_test content
@@ -476,7 +476,7 @@ expect
     == actual
 
 expect
-    content = Str.toUtf8 "    <tag>hi</tag>   "
+    content = Str.to_utf8 "    <tag>hi</tag>   "
     #              index:  123456789 123456789
     #              slice: [        ]
     tag = parse_tag_for_test content
@@ -490,7 +490,7 @@ expect
     == actual
 
 expect
-    content = Str.toUtf8 "    <tag>hi</tag>   "
+    content = Str.to_utf8 "    <tag>hi</tag>   "
     #              index:  123456789 123456789
     #              slice: [            ]
     tag = parse_tag_for_test content
@@ -504,7 +504,7 @@ expect
     == actual
 
 expect
-    content = Str.toUtf8 "    <tag>hi</tag>   "
+    content = Str.to_utf8 "    <tag>hi</tag>   "
     #              index:  123456789 123456789
     #              slice: [                  ]
     tag = parse_tag_for_test content
@@ -519,7 +519,7 @@ expect
     == actual
 
 expect
-    content = Str.toUtf8 "    <tag>hi</tag>   "
+    content = Str.to_utf8 "    <tag>hi</tag>   "
     #              index:  123456789 123456789
     #              slice:       [            ]
     tag = parse_tag_for_test content
@@ -533,7 +533,7 @@ expect
     == actual
 
 expect
-    content = Str.toUtf8 "    <tag>hi</tag>   "
+    content = Str.to_utf8 "    <tag>hi</tag>   "
     #              index:  123456789 123456789
     #              slice:           [        ]
     tag = parse_tag_for_test content
@@ -547,7 +547,7 @@ expect
     == actual
 
 expect
-    content = Str.toUtf8 "    <tag>hi</tag>   "
+    content = Str.to_utf8 "    <tag>hi</tag>   "
     #              index:  123456789 123456789
     #              slice:               [    ]
     tag = parse_tag_for_test content
@@ -561,7 +561,7 @@ expect
     == actual
 
 expect
-    content = Str.toUtf8 "    <tag>hi</tag>   "
+    content = Str.to_utf8 "    <tag>hi</tag>   "
     #              index:  123456789 123456789
     #              slice:                   []
     tag = parse_tag_for_test content
@@ -575,7 +575,7 @@ expect
 
 expect
     # Generated content before the tag is not included in replaced contents.
-    content = Str.toUtf8 "    <tag>hi</tag>   "
+    content = Str.to_utf8 "    <tag>hi</tag>   "
     #              index:  123456789 123456789
     #              slice: [ ]X
     tag = parse_tag_for_test content
@@ -590,7 +590,7 @@ expect
 
 expect
     # Generated content in the tag is included in replaced contents.
-    content = Str.toUtf8 "    <tag>hi</tag>   "
+    content = Str.to_utf8 "    <tag>hi</tag>   "
     #              index:  123456789 123456789
     #              slice: [        ]X
     tag = parse_tag_for_test content
@@ -606,7 +606,7 @@ expect
 
 expect
     # Generated content after the tag is not included in replaced contents.
-    content = Str.toUtf8 "    <tag>hi</tag>   "
+    content = Str.to_utf8 "    <tag>hi</tag>   "
     #              index:  123456789 123456789
     #              slice: [               ]X
     tag = parse_tag_for_test content
@@ -622,7 +622,7 @@ expect
     == actual
 
 clamp : Int a, Int a, Int a -> Int a
-clamp = \lower, number, upper ->
+clamp = |lower, number, upper|
     number
     |> Num.max lower
     |> Num.min upper
@@ -638,7 +638,7 @@ walk! :
     state,
     (state, elem => state)
     => state
-walk! = \elems, state, fn! ->
+walk! = |elems, state, fn!|
     when elems is
         [] -> state
         [head, .. as rest] -> walk! rest (fn! state head) fn!

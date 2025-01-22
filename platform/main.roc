@@ -10,24 +10,24 @@ import Pages
 import Pages.Internal
 
 main_for_host : {} -> List Pages.Internal.PageRule
-main_for_host = \{} ->
-    List.map (Pages.Internal.unwrap main) \page -> {
+main_for_host = |{}|
+    List.map (Pages.Internal.unwrap main) |page| {
         patterns: page.patterns,
         processing: page.processing,
         replace_tags: page.replace_tags,
     }
 
 get_metadata_length_for_host : List U8 -> U64
-get_metadata_length_for_host = \bytes ->
-    { result, rest } = Decode.fromBytesPartial bytes Rvn.compact
+get_metadata_length_for_host = |bytes|
+    { result, rest } = Decode.from_bytes_partial bytes Rvn.compact
     when result is
         Ok {} -> List.len bytes - List.len rest
         Err _ -> 0
 
 run_pipeline_for_host! : Pages.Internal.HostPage => Pages.Internal.Xml
-run_pipeline_for_host! = \host_page ->
+run_pipeline_for_host! = |host_page|
     page =
-        when List.get (Pages.Internal.unwrap main) (Num.intCast host_page.rule_index) is
+        when List.get (Pages.Internal.unwrap main) (Num.int_cast host_page.rule_index) is
             Ok x -> x
             Err OutOfBounds -> crash "unexpected out of bounds page rule"
 

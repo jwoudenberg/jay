@@ -109,7 +109,6 @@ fn buildDev(b: *std.Build, roc_paths: []std.Build.LazyPath) void {
         .install_subdir = "platform",
     });
 
-    buildGlue(b);
     runTests(b, deps, optimize, target);
 
     b.installDirectory(.{
@@ -203,23 +202,6 @@ fn buildLegacy(
         .{ .include_extensions = &.{"roc"} },
     );
     _ = platform_bundle.addCopyFile(libhost.getEmittedBin(), install_path);
-}
-
-fn buildGlue(b: *std.Build) void {
-    // Present description of roc types from running 'roc glue'. Glue does not
-    // currently generate types for Zig, so I only use the output from this
-    // command as documentation for hand-writing roc types in zig host code.
-    const glue = b.addSystemCommand(&.{"roc"});
-    glue.addArgs(&.{"glue"});
-    glue.addFileArg(b.path("build/glue.roc"));
-    const glue_dir = glue.addOutputDirectoryArg(b.makeTempPath());
-    glue.addFileArg(b.path("platform/main-glue.roc"));
-
-    b.installDirectory(.{
-        .source_dir = glue_dir,
-        .install_dir = .prefix,
-        .install_subdir = "glue",
-    });
 }
 
 fn buildDocs(

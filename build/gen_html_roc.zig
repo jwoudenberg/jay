@@ -320,13 +320,13 @@ pub fn print(writer: std.fs.File.Writer) !void {
     );
     for (tags) |tag| {
         try writer.print("{s} : {{ ", .{tag.name});
-        try printAttrs("{s} ? Str", ", {s} ? Str", writer, tag.attrs);
+        try printAttrs("{s} ?? Str", ", {s} ?? Str", writer, tag.attrs);
         try writer.print(
             \\}}, List Html -> Html
-            \\{s} = \{{
+            \\{s} = |{{
         , .{tag.name});
-        try printAttrs("{s} ? \"\"", ", {s} ? \"\"", writer, tag.attrs);
-        try writer.print(" }}, children -> Xml.Internal.node \"{s}\" {{ ", .{tag.name});
+        try printAttrs("{s} ?? \"\"", ", {s} ?? \"\"", writer, tag.attrs);
+        try writer.print(" }}, children| Xml.Internal.node \"{s}\" {{ ", .{tag.name});
         try printAttrs("{s}", ", {s}", writer, tag.attrs);
         try writer.writeAll(" } children\n\n");
     }

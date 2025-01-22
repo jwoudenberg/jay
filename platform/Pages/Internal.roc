@@ -9,9 +9,9 @@ Page : {
     pipeline! : Xml, HostPage => Xml,
 }
 
-wrap = \internal -> @Pages internal
+wrap = |internal| @Pages internal
 
-unwrap = \@Pages internal -> internal
+unwrap = |@Pages internal| internal
 
 PageRule : {
     patterns : List Str,
@@ -41,7 +41,8 @@ HostTag : {
     attributes : List U8,
 }
 
-Xml : List
+Xml :
+    List
         [
             FromSource SourceLoc,
             RocGenerated (List U8),
