@@ -86,29 +86,7 @@ body {
 }
 
 .guide {
-  --nav-width: 15rem;
-  --content-width: 35rem;
-  --extra-width: calc(100vw - var(--nav-width) - var(--content-width));
-  --page-margin: calc(0.5 * var(--extra-width));
-
-  position: absolute;
-  top: var(--header-height);
-  height: calc(100vh - var(--header-height));
-  width: 100vw;
-  overflow: hidden;
-
   & nav {
-    position: absolute;
-    top: 0;
-    left: 0;
-    bottom: 0;
-    width: calc(var(--nav-width) + var(--page-margin));
-    padding-left: var(--page-margin);
-    padding-top: 2em;
-    padding-bottom: 2em;
-    box-sizing: border-box;
-    overflow-y: scroll;
-
     & ul {
       list-style: none;
       margin: 0;
@@ -120,7 +98,7 @@ body {
     }
 
     & li {
-      padding: 0.2em;
+      padding: 0.2em 0;
 
       &.active {
         color: #168250;
@@ -138,17 +116,6 @@ body {
   }
 
   & main {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    right: 0;
-    width: calc(var(--content-width) + var(--page-margin));
-    padding-right: var(--page-margin);
-    padding-top: 0.4em;
-    padding-bottom: 2rem;
-    box-sizing: border-box;
-    overflow-y: scroll;
-
     & h2 {
       font-size: 2em;
       font-weight: bold;
@@ -170,10 +137,7 @@ pre > code {
 
   display: block;
   color: var(--hl-base);
-  overflow: hidden;
-  text-overflow: ellipsis;
   font-family: Menlo, Consolas, Monaco, Liberation Mono, Lucida Console, monospace;
-  padding: 0.8em;
   box-sizing: border-box;
   font-size: 1rem;
 
@@ -256,5 +220,64 @@ pre > code {
   & .hl-variable.hl-parameter {
     color: var(--hl-base);
     text-decoration: underline;
+  }
+}
+
+/* 50rem is the guide content+nav width */
+@media (max-width: 50rem) {
+  .guide {
+    padding: 0.5rem;
+
+    pre > code {
+      overflow-y: hidden;
+      padding-bottom: 0.5rem;
+    }
+  }
+}
+
+@media (min-width: 50rem) {
+  .guide {
+    --nav-width: 15rem;
+    --content-width: 35rem;
+    --extra-width: calc(100vw - var(--nav-width) - var(--content-width));
+    --page-margin: calc(0.5 * var(--extra-width));
+
+    position: absolute;
+    top: var(--header-height);
+    height: calc(100vh - var(--header-height));
+    width: 100vw;
+    overflow: hidden;
+
+    & nav {
+      position: absolute;
+      top: 0;
+      left: 0;
+      bottom: 0;
+      width: calc(var(--nav-width) + var(--page-margin) - 0.5rem);
+      padding-left: var(--page-margin);
+      padding-top: 2em;
+      padding-bottom: 2em;
+      box-sizing: border-box;
+      overflow-y: scroll;
+    }
+
+    & main {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      right: 0;
+      width: calc(var(--content-width) + var(--page-margin));
+      padding-right: var(--page-margin);
+      padding-top: 0.4em;
+      padding-bottom: 2rem;
+      box-sizing: border-box;
+      overflow-y: scroll;
+    }
+
+    pre > code {
+      overflow: hidden;
+      padding: 0.8em;
+      text-overflow: ellipsis;
+    }
   }
 }
