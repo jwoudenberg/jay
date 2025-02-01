@@ -726,7 +726,7 @@ const TestRunLoop = struct {
         defer std.testing.allocator.free(source_root_path);
         const watcher = try Watcher.init(allocator, source_root_path);
         const run_loop = try allocator.create(RunLoop);
-        run_loop.* = try RunLoop.init(allocator, test_site.site, watcher, false);
+        run_loop.* = try RunLoop.init(allocator, test_site.site, watcher);
         return .{
             .allocator = allocator,
             .source_root = source_root,

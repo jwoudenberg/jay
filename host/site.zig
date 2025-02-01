@@ -13,6 +13,8 @@ const Error = @import("error.zig").Error;
 const Platform = @import("platform.zig").Platform;
 const RocPlatform = @import("platform.zig").RocPlatform;
 const TestPlatform = @import("platform.zig").TestPlatform;
+const BootstrapPlatform = @import("platform.zig").BootstrapPlatform;
+const bootstrap = @import("bootstrap.zig").bootstrap;
 
 pub const Site = struct {
     arena_state: std.heap.ArenaAllocator,
@@ -57,7 +59,7 @@ pub const Site = struct {
         else
             try RocPlatform.init(gpa);
 
-        return Site{
+        var site = Site{
             .arena_state = arena_state,
             .tmp_arena_state = std.heap.ArenaAllocator.init(gpa),
             .source_root = source_root,
@@ -74,6 +76,19 @@ pub const Site = struct {
             .errors = Error.Index.init(gpa),
             .pages = .{},
         };
+
+        const should_bootstrap = try platform.getRules(gpa, &site);
+
+        if (should_bootstrap) {
+            try bootstrap(gpa, &site);
+            site.platform.deinit();
+            site.platform = if (builtin.is_test)
+                try TestPlatform.init()
+            else
+                try BootstrapPlatform.init(gpa);
+        }
+
+        return site;
     }
 
     const implicit_ignore_pattern_count = 2;

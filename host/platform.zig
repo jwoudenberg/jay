@@ -338,6 +338,66 @@ pub const RocPlatform = struct {
     }
 };
 
+pub const BootstrapPlatform = struct {
+    const Self = @This();
+
+    gpa: std.mem.Allocator,
+    platform: Platform,
+
+    pub fn init(gpa: std.mem.Allocator) !*Platform {
+        const self = try gpa.create(Self);
+        self.* = .{
+            .gpa = gpa,
+            .platform = Platform{
+                .get_rules = getRules,
+                .get_metadata_length = getMetadataLength,
+                .run_pipeline = runPipeline,
+                .deinit_ = deinit,
+            },
+        };
+        return &self.platform;
+    }
+
+    pub fn deinit(platform: *Platform) void {
+        const self: *Self = @fieldParentPtr("platform", platform);
+        self.gpa.destroy(self);
+    }
+
+    fn getRules(platform: *Platform, gpa: std.mem.Allocator, site: *Site) !bool {
+        _ = platform;
+        _ = gpa;
+        _ = site;
+        unreachable;
+    }
+
+    fn getMetadataLength(platform: *Platform, bytes: []const u8) u64 {
+        const self: *Self = @fieldParentPtr("platform", platform);
+        _ = self;
+        var meta_len: u64 = undefined;
+        const roc_bytes = RocList.fromSlice(u8, bytes, false);
+        roc__get_metadata_length_for_host_1_exposed_generic(&meta_len, &roc_bytes);
+        return meta_len;
+    }
+
+    fn runPipeline(
+        platform: *Platform,
+        arena: std.mem.Allocator,
+        site: *Site,
+        page: *Site.Page,
+        tags: []const xml.Tag,
+        source: []const u8,
+        writer: std.io.AnyWriter,
+    ) !void {
+        const self: *Self = @fieldParentPtr("platform", platform);
+        _ = self;
+        _ = arena;
+        _ = site;
+        _ = page;
+        _ = tags;
+        try writer.writeAll(source);
+    }
+};
+
 pub const TestPlatform = struct {
     const Self = @This();
 

@@ -288,8 +288,8 @@ fn generateCodeForRules(site: *const Site) !void {
                 }
                 try writer.writeAll(
                     \\]
-                    \\    |> Pages.fromMarkdown
-                    \\    |> Pages.wrapHtml layout
+                    \\    |> Pages.from_markdown
+                    \\    |> Pages.wrap_html layout
                     \\
                     \\layout = \{ content } ->
                     \\    Html.html {} [
@@ -349,8 +349,8 @@ test generateCodeForRules {
         \\
         \\markdown =
         \\    Pages.files ["posts/*.md", "*.md"]
-        \\    |> Pages.fromMarkdown
-        \\    |> Pages.wrapHtml layout
+        \\    |> Pages.from_markdown
+        \\    |> Pages.wrap_html layout
         \\
         \\layout = \{ content } ->
         \\    Html.html {} [
