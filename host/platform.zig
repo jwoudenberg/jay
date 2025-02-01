@@ -101,12 +101,118 @@ extern fn roc__main_for_host_1_exposed_generic(*RocList, *const void) callconv(.
 extern fn roc__get_metadata_length_for_host_1_exposed_generic(*u64, *const RocList) callconv(.C) void;
 extern fn roc__run_pipeline_for_host_1_exposed_generic(*RocList, *const Page) callconv(.C) void;
 
-pub const platform = if (builtin.is_test) TestPlatform else Platform;
+pub const Platform = struct {
+    deinit_: *const fn (
+        platform: *Platform,
+    ) void,
+    get_rules: *const fn (
+        platform: *Platform,
+        gpa: std.mem.Allocator,
+        site: *Site,
+    ) anyerror!bool,
+    get_metadata_length: *const fn (
+        platform: *Platform,
+        bytes: []const u8,
+    ) u64,
+    run_pipeline: *const fn (
+        platform: *Platform,
+        arena: std.mem.Allocator,
+        site: *Site,
+        page: *Site.Page,
+        tags: []const xml.Tag,
+        source: []const u8,
+        writer: std.io.AnyWriter,
+    ) anyerror!void,
 
-const Platform = struct {
-    pub fn getRules(gpa: std.mem.Allocator, site: *Site) !bool {
+    pub fn deinit(platform: *Platform) void {
+        return platform.deinit_(platform);
+    }
+
+    pub fn getRules(
+        platform: *Platform,
+        gpa: std.mem.Allocator,
+        site: *Site,
+    ) anyerror!bool {
+        return platform.get_rules(platform, gpa, site);
+    }
+
+    pub fn getMetadataLength(
+        platform: *Platform,
+        bytes: []const u8,
+    ) u64 {
+        return platform.get_metadata_length(platform, bytes);
+    }
+
+    pub fn runPipeline(
+        platform: *Platform,
+        arena: std.mem.Allocator,
+        site: *Site,
+        page: *Site.Page,
+        tags: []const xml.Tag,
+        source: []const u8,
+        writer: std.io.AnyWriter,
+    ) anyerror!void {
+        return platform.run_pipeline(
+            platform,
+            arena,
+            site,
+            page,
+            tags,
+            source,
+            writer,
+        );
+    }
+};
+
+pub const RocPlatform = struct {
+    const Self = @This();
+
+    gpa: std.mem.Allocator,
+    platform: Platform,
+    roc_main: *const fn (*RocList, *const void) callconv(.C) void,
+    roc_get_metadata_length: *const fn (*u64, *const RocList) callconv(.C) void,
+    roc_run_pipeline: *const fn (*RocList, *const Page) callconv(.C) void,
+
+    pub fn init(gpa: std.mem.Allocator) !*Platform {
+        return initHelper(
+            gpa,
+            &roc__main_for_host_1_exposed_generic,
+            &roc__get_metadata_length_for_host_1_exposed_generic,
+            &roc__run_pipeline_for_host_1_exposed_generic,
+        );
+    }
+
+    fn initHelper(
+        gpa: std.mem.Allocator,
+        roc_main: *const fn (*RocList, *const void) callconv(.C) void,
+        roc_get_metadata_length: *const fn (*u64, *const RocList) callconv(.C) void,
+        roc_run_pipeline: *const fn (*RocList, *const Page) callconv(.C) void,
+    ) !*Platform {
+        const self = try gpa.create(Self);
+        self.* = .{
+            .gpa = gpa,
+            .platform = Platform{
+                .get_rules = getRules,
+                .get_metadata_length = getMetadataLength,
+                .run_pipeline = runPipeline,
+                .deinit_ = deinit,
+            },
+            .roc_main = roc_main,
+            .roc_get_metadata_length = roc_get_metadata_length,
+            .roc_run_pipeline = roc_run_pipeline,
+        };
+        return &self.platform;
+    }
+
+    pub fn deinit(platform: *Platform) void {
+        const self: *Self = @fieldParentPtr("platform", platform);
+        self.gpa.destroy(self);
+    }
+
+    fn getRules(platform: *Platform, gpa: std.mem.Allocator, site: *Site) !bool {
+        const self: *Self = @fieldParentPtr("platform", platform);
         var roc_rules = RocList.empty();
-        roc__main_for_host_1_exposed_generic(&roc_rules, &void{});
+        self.roc_main(&roc_rules, &void{});
         var should_bootstrap = false;
         var rules = std.ArrayList(Site.Rule).init(gpa);
         errdefer rules.deinit();
@@ -165,21 +271,24 @@ const Platform = struct {
         return should_bootstrap;
     }
 
-    pub fn getMetadataLength(bytes: []const u8) u64 {
+    fn getMetadataLength(platform: *Platform, bytes: []const u8) u64 {
+        const self: *Self = @fieldParentPtr("platform", platform);
         var meta_len: u64 = undefined;
         const roc_bytes = RocList.fromSlice(u8, bytes, false);
-        roc__get_metadata_length_for_host_1_exposed_generic(&meta_len, &roc_bytes);
+        self.roc_get_metadata_length(&meta_len, &roc_bytes);
         return meta_len;
     }
 
-    pub fn runPipeline(
+    fn runPipeline(
+        platform: *Platform,
         arena: std.mem.Allocator,
         site: *Site,
         page: *Site.Page,
         tags: []const xml.Tag,
         source: []const u8,
-        writer: anytype,
+        writer: std.io.AnyWriter,
     ) !void {
+        const self: *Self = @fieldParentPtr("platform", platform);
         const scanned = page.scanned orelse return error.CantRunPipelineForUnscannedPage;
         var roc_tags = std.ArrayList(Tag).init(arena);
         for (tags) |tag| {
@@ -207,7 +316,7 @@ const Platform = struct {
             .active_source_path = page.source_path,
         };
         errdefer pipeline_state = null;
-        roc__run_pipeline_for_host_1_exposed_generic(&contents, &roc_page);
+        self.roc_run_pipeline(&contents, &roc_page);
         pipeline_state = null;
 
         var roc_xml_iterator = RocListIterator(Slice).init(contents);
@@ -229,28 +338,57 @@ const Platform = struct {
     }
 };
 
-const TestPlatform = struct {
-    pub fn getRules(gpa: std.mem.Allocator, site: *Site) anyerror!bool {
+pub const TestPlatform = struct {
+    const Self = @This();
+
+    platform: Platform,
+
+    pub fn init() !*Platform {
+        const self = try std.testing.allocator.create(Self);
+        self.* = .{
+            .platform = Platform{
+                .deinit_ = deinit,
+                .get_rules = getRules,
+                .get_metadata_length = getMetadataLength,
+                .run_pipeline = runPipeline,
+            },
+        };
+        return &self.platform;
+    }
+
+    pub fn deinit(platform: *Platform) void {
+        const self: *Self = @fieldParentPtr("platform", platform);
+        std.testing.allocator.destroy(self);
+    }
+
+    fn getRules(platform: *Platform, gpa: std.mem.Allocator, site: *Site) anyerror!bool {
+        const self: *Self = @fieldParentPtr("platform", platform);
+        _ = self;
         _ = gpa;
         _ = site;
         return false;
     }
 
-    pub fn getMetadataLength(bytes: []const u8) u64 {
+    fn getMetadataLength(platform: *Platform, bytes: []const u8) u64 {
+        const self: *Self = @fieldParentPtr("platform", platform);
+        _ = self;
         return if (std.mem.indexOfScalar(u8, bytes, '}')) |index|
             index + 1
         else
             0;
     }
 
-    pub fn runPipeline(
+    fn runPipeline(
+        platform: *Platform,
         arena: std.mem.Allocator,
         site: *Site,
         page: *Site.Page,
         tags: []const xml.Tag,
         source: []const u8,
-        writer: anytype,
+        writer: std.io.AnyWriter,
     ) anyerror!void {
+        const self: *Self = @fieldParentPtr("platform", platform);
+        _ = self;
         // Any tags with a 'pattern' attribute, the contents will be replaced
         // with joined metadata of the files matching the pattern.
         _ = arena;

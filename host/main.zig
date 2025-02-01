@@ -8,7 +8,6 @@ const fail = @import("fail.zig");
 const Site = @import("site.zig").Site;
 const Watcher = @import("watch.zig").Watcher;
 const spawnServer = @import("serve.zig").spawnServer;
-const platform = @import("platform.zig").platform;
 const bootstrap = @import("bootstrap.zig").bootstrap;
 const scanRecursively = @import("scan.zig").scanRecursively;
 
@@ -113,7 +112,7 @@ fn run_prod(gpa: std.mem.Allocator, argv0: []const u8, output_path: []const u8) 
     defer site.source_root.close();
     defer site.output_root.close();
     defer site.deinit();
-    const should_bootstrap = try platform.getRules(gpa, &site);
+    const should_bootstrap = try site.platform.getRules(gpa, &site);
     if (should_bootstrap) try bootstrap(gpa, &site);
     var watcher = NoOpWatcher{};
     try scanRecursively(gpa, &site, &watcher, "");
@@ -152,7 +151,7 @@ fn run_dev(gpa: std.mem.Allocator, argv0: []const u8) !void {
     defer site.output_root.close();
     defer site.deinit();
 
-    const should_bootstrap = try platform.getRules(gpa, &site);
+    const should_bootstrap = try site.platform.getRules(gpa, &site);
 
     const watcher = try Watcher.init(gpa, source_root_path);
     defer watcher.deinit();

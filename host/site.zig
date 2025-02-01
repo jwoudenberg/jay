@@ -10,10 +10,14 @@ const Str = @import("str.zig").Str;
 const BitSet = @import("bitset.zig").BitSet;
 const generate = @import("generate.zig").generate;
 const Error = @import("error.zig").Error;
+const Platform = @import("platform.zig").Platform;
+const RocPlatform = @import("platform.zig").RocPlatform;
+const TestPlatform = @import("platform.zig").TestPlatform;
 
 pub const Site = struct {
     arena_state: std.heap.ArenaAllocator,
     tmp_arena_state: std.heap.ArenaAllocator,
+    platform: *Platform,
     source_root: std.fs.Dir,
     roc_main: Str,
     output_root: std.fs.Dir,
@@ -48,10 +52,16 @@ pub const Site = struct {
             try strs.intern(std.fs.path.stem(roc_main)),
         });
 
+        const platform = if (builtin.is_test)
+            try TestPlatform.init()
+        else
+            try RocPlatform.init(gpa);
+
         return Site{
             .arena_state = arena_state,
             .tmp_arena_state = std.heap.ArenaAllocator.init(gpa),
             .source_root = source_root,
+            .platform = platform,
             .roc_main = roc_main_str,
             .output_root = output_root,
             .ignore_patterns = ignore_patterns,
@@ -74,6 +84,7 @@ pub const Site = struct {
 
     pub fn deinit(self: *Site) void {
         self.frontmatters.deinit();
+        self.platform.deinit();
         self.errors.deinit();
         self.arena_state.deinit();
         self.tmp_arena_state.deinit();
@@ -397,6 +408,7 @@ pub const Site = struct {
         const frontmatter = if (page.processing == .markdown)
             switch (try self.frontmatters.read(
                 arena,
+                self.platform,
                 self.source_root,
                 page.source_path,
             )) {

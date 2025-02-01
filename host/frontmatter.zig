@@ -3,8 +3,9 @@
 
 const std = @import("std");
 const Str = @import("str.zig").Str;
-const platform = @import("platform.zig").platform;
 const fail = @import("fail.zig");
+const Platform = @import("platform.zig").Platform;
+const TestPlatform = @import("platform.zig").TestPlatform;
 
 pub const Frontmatters = struct {
     gpa: std.mem.Allocator,
@@ -41,6 +42,7 @@ pub const Frontmatters = struct {
     pub fn read(
         self: *Frontmatters,
         arena: std.mem.Allocator,
+        platform: *Platform,
         source_root: std.fs.Dir,
         source_path: Str,
     ) !ReadResult {
@@ -95,23 +97,26 @@ pub const Frontmatters = struct {
         defer arena_state.deinit();
         const arena = arena_state.allocator();
 
+        var platform = try TestPlatform.init();
+        defer platform.deinit();
+
         // This test makes use of the test platform defined in platform.zig!
 
         try tmpdir.dir.writeFile(.{ .sub_path = "file1.txt", .data = "no frontmatter" });
         try std.testing.expectEqual(
             ReadResult{ .no_frontmatter = void{} },
-            (try frontmatters.read(arena, tmpdir.dir, try strs.intern("file1.txt"))),
+            (try frontmatters.read(arena, platform, tmpdir.dir, try strs.intern("file1.txt"))),
         );
 
         try tmpdir.dir.writeFile(.{ .sub_path = "file2.txt", .data = "{ hi: 3 }\n# header" });
         try std.testing.expectEqualStrings(
             "{ hi: 3 }",
-            (try frontmatters.read(arena, tmpdir.dir, try strs.intern("file2.txt"))).frontmatter,
+            (try frontmatters.read(arena, platform, tmpdir.dir, try strs.intern("file2.txt"))).frontmatter,
         );
 
         try std.testing.expectEqual(
             ReadResult{ .file_not_found = void{} },
-            (try frontmatters.read(arena, tmpdir.dir, try strs.intern("file3.txt"))),
+            (try frontmatters.read(arena, platform, tmpdir.dir, try strs.intern("file3.txt"))),
         );
     }
 };

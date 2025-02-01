@@ -4,7 +4,6 @@ const std = @import("std");
 const Site = @import("site.zig").Site;
 const RocList = @import("roc/list.zig").RocList;
 const RocStr = @import("roc/str.zig").RocStr;
-const platform = @import("platform.zig").platform;
 const markdown = @import("markdown.zig");
 const xml = @import("xml.zig");
 
@@ -47,14 +46,15 @@ pub fn generate(
 
             var output_writer = try OutputWriter.init(site, page);
             defer output_writer.deinit();
+            var writer = output_writer.writer();
 
-            try platform.runPipeline(
+            try site.platform.runPipeline(
                 arena,
                 site,
                 page,
                 tags,
                 source,
-                output_writer.writer(),
+                writer.any(),
             );
         },
         .markdown => {
@@ -78,14 +78,15 @@ pub fn generate(
 
             var output_writer = try OutputWriter.init(site, page);
             defer output_writer.deinit();
+            var writer = output_writer.writer();
 
-            try platform.runPipeline(
+            try site.platform.runPipeline(
                 arena,
                 site,
                 page,
                 tags,
                 source,
-                output_writer.writer(),
+                writer.any(),
             );
         },
     }
