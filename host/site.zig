@@ -11,9 +11,8 @@ const BitSet = @import("bitset.zig").BitSet;
 const generate = @import("generate.zig").generate;
 const Error = @import("error.zig").Error;
 const Platform = @import("platform.zig").Platform;
-const RocPlatform = @import("platform.zig").RocPlatform;
-const TestPlatform = @import("platform.zig").TestPlatform;
 const BootstrapPlatform = @import("platform.zig").BootstrapPlatform;
+const TestPlatform = @import("platform.zig").TestPlatform;
 const bootstrap = @import("bootstrap.zig").bootstrap;
 
 pub const Site = struct {
@@ -40,31 +39,25 @@ pub const Site = struct {
 
     pub fn init(
         gpa: std.mem.Allocator,
+        platform: *Platform,
         source_root: std.fs.Dir,
-        roc_main: []const u8,
+        roc_main: Str,
         output_root: std.fs.Dir,
         strs: Str.Registry,
     ) !Site {
         var arena_state = std.heap.ArenaAllocator.init(gpa);
         const arena = arena_state.allocator();
-        const roc_main_str = try strs.intern(roc_main);
-
         const ignore_patterns = try arena.dupe(Str, &[implicit_ignore_pattern_count]Str{
-            roc_main_str,
-            try strs.intern(std.fs.path.stem(roc_main)),
+            roc_main,
+            try strs.intern(std.fs.path.stem(roc_main.bytes())),
         });
-
-        const platform = if (builtin.is_test)
-            try TestPlatform.init()
-        else
-            try RocPlatform.init(gpa);
 
         var site = Site{
             .arena_state = arena_state,
             .tmp_arena_state = std.heap.ArenaAllocator.init(gpa),
             .source_root = source_root,
             .platform = platform,
-            .roc_main = roc_main_str,
+            .roc_main = roc_main,
             .output_root = output_root,
             .ignore_patterns = ignore_patterns,
             .rules = &.{},
@@ -81,11 +74,7 @@ pub const Site = struct {
 
         if (should_bootstrap) {
             try bootstrap(gpa, &site);
-            site.platform.deinit();
-            site.platform = if (builtin.is_test)
-                try TestPlatform.init()
-            else
-                try BootstrapPlatform.init(gpa);
+            site.platform = try BootstrapPlatform.init(gpa, site.platform);
         }
 
         return site;
@@ -760,10 +749,12 @@ pub const TestSite = struct {
         const output_tmpdir = std.testing.tmpDir(.{});
         const strs = try Str.Registry.init(allocator);
         const site = try allocator.create(Site);
+        const platform = try TestPlatform.init();
         site.* = try Site.init(
             allocator,
+            platform,
             source_tmpdir.dir,
-            "build.roc",
+            try strs.intern("build.roc"),
             output_tmpdir.dir,
             strs,
         );

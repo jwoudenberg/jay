@@ -8,6 +8,8 @@ const fail = @import("fail.zig");
 const Site = @import("site.zig").Site;
 const Watcher = @import("watch.zig").Watcher;
 const spawnServer = @import("serve.zig").spawnServer;
+const RocPlatform = @import("platform.zig").RocPlatform;
+const TestPlatform = @import("platform.zig").TestPlatform;
 const scanRecursively = @import("scan.zig").scanRecursively;
 
 pub fn main() void {
@@ -141,7 +143,8 @@ fn run_dev(gpa: std.mem.Allocator, argv0: []const u8) !void {
     defer gpa.free(roc_main_abs);
     const source_root_path = std.fs.path.dirname(roc_main_abs) orelse "/";
 
-    var cache_dir = try cacheDir(std.fs.cwd(), roc_main_abs, envMap);
+    const cache_dir_path = try cacheDir(roc_main_abs, envMap, &buf);
+    var cache_dir = try std.fs.cwd().makeOpenPath(cache_dir_path, .{});
     defer cache_dir.close();
     var site = try createSite(gpa, argv0, cache_dir, strs);
     defer site.source_root.close();
@@ -150,7 +153,7 @@ fn run_dev(gpa: std.mem.Allocator, argv0: []const u8) !void {
 
     const watcher = try Watcher.init(gpa, source_root_path);
     defer watcher.deinit();
-    var runLoop = try RunLoop.init(gpa, &site, watcher);
+    var runLoop = try RunLoop.init(gpa, &site, watcher, cache_dir_path);
 
     try spawnServer(&site);
 
@@ -164,11 +167,13 @@ pub const RunLoop = struct {
     gpa: std.mem.Allocator,
     site: *Site,
     watcher: *Watcher,
+    cache_dir: []const u8,
 
     pub fn init(
         gpa: std.mem.Allocator,
         site: *Site,
         watcher: *Watcher,
+        cache_dir: []const u8,
     ) !RunLoop {
         try scanRecursively(gpa, site, watcher, "");
         try site.generatePages();
@@ -177,12 +182,13 @@ pub const RunLoop = struct {
             .gpa = gpa,
             .site = site,
             .watcher = watcher,
+            .cache_dir = cache_dir,
         };
     }
 
     pub fn loopOnce(self: *RunLoop, writer: anytype) !void {
         while (try self.watcher.nextWait(50)) |change| {
-            try handleChange(self.gpa, self.site, self.watcher, change);
+            try handleChange(self.gpa, self.site, self.watcher, change, self.cache_dir);
         }
         // No new events in the last watch period, so filesystem changes
         // have settled.
@@ -198,7 +204,7 @@ fn createSite(
     strs: Str.Registry,
 ) !Site {
     const source_root_path = std.fs.path.dirname(argv0) orelse "./";
-    const roc_main = std.fs.path.basename(argv0);
+    const roc_main = try strs.intern(std.fs.path.basename(argv0));
     const source_root = std.fs.cwd().openDir(source_root_path, .{}) catch |err| {
         try fail.prettily(
             "Cannot access directory containing {s}: '{}'\n",
@@ -212,99 +218,81 @@ fn createSite(
     output_dir.deleteTree(output_root_dirname) catch |err| if (err != error.NotDir) return err;
     const output_root = try output_dir.makeOpenPath(output_root_dirname, .{});
 
-    return Site.init(gpa, source_root, roc_main, output_root, strs);
+    const platform = try RocPlatform.init(gpa);
+    return Site.init(gpa, platform, source_root, roc_main, output_root, strs);
 }
 
 // Get a unique cache dir for each Jay-project.
 fn cacheDir(
-    cwd: std.fs.Dir,
     roc_main_abs: []const u8,
     envMap: EnvMap,
-) !std.fs.Dir {
-    var jay_cache_dir = blk: {
-        if (envMap.xdg_cache_home) |xdg_cache_home| {
-            var cache_dir = try cwd.makeOpenPath(xdg_cache_home, .{});
-            defer cache_dir.close();
-            break :blk try cache_dir.makeOpenPath("jay", .{});
-        }
-        if (envMap.home) |home_path| {
-            var home_dir = try cwd.makeOpenPath(home_path, .{});
-            defer home_dir.close();
-            break :blk try home_dir.makeOpenPath(".cache/jay", .{});
-        }
-        try fail.prettily(
-            \\I don't know where to generate temporary files.
-            \\
-            \\Normally I use $XDG_CACHE_HOME or $HOME to find a place where I can
-            \\create a cache directory, but both are unset.
-            \\
-        , .{});
-    };
-    defer jay_cache_dir.close();
-
+    buffer: []u8,
+) ![]const u8 {
     // In the hypothetical situation someone runs multiple instances of jay
     // in parallel, they should not to clobber each other's output directories.
     // We create a subdirectory for each.
-    var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
     const project_dir_hash = std.hash.Wyhash.hash(0, roc_main_abs);
-    const project_dir_name = try std.fmt.bufPrint(&buf, "{}", .{project_dir_hash});
-    return jay_cache_dir.makeOpenPath(project_dir_name, .{});
+    if (envMap.xdg_cache_home) |xdg_cache_home| {
+        return std.fmt.bufPrint(
+            buffer,
+            "{s}/jay/{}",
+            .{ xdg_cache_home, project_dir_hash },
+        );
+    }
+    if (envMap.home) |home_path| {
+        return std.fmt.bufPrint(
+            buffer,
+            "{s}/.cache/jay/{}",
+            .{ home_path, project_dir_hash },
+        );
+    }
+    try fail.prettily(
+        \\I don't know where to generate temporary files.
+        \\
+        \\Normally I use $XDG_CACHE_HOME or $HOME to find a place where I can
+        \\create a cache directory, but both are unset.
+        \\
+    , .{});
 }
 
 test cacheDir {
-    var tmpdir = std.testing.tmpDir(.{});
-    defer tmpdir.cleanup();
+    var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
 
     // Create directory in $XDG_CACHE_HOME if it is set.
     {
-        var cache_dir = try cacheDir(
-            tmpdir.dir,
+        const cache_dir = try cacheDir(
             "/project/build.roc",
             .{ .xdg_cache_home = "cache", .home = "home" },
+            &buf,
         );
-        defer cache_dir.close();
-        try cache_dir.writeFile(.{ .sub_path = "test", .data = "" });
-        try tmpdir.dir.access("cache/jay/11302437488756564278/test", .{});
+        try std.testing.expectEqualStrings(
+            "cache/jay/11302437488756564278",
+            cache_dir,
+        );
     }
 
     // Create directory in $HOME when it is set but $XDG_CACHE_HOME is not.
     {
-        var cache_dir = try cacheDir(
-            tmpdir.dir,
+        const cache_dir = try cacheDir(
             "/project/build.roc",
             .{ .xdg_cache_home = null, .home = "home" },
+            &buf,
         );
-        defer cache_dir.close();
-        try cache_dir.writeFile(.{ .sub_path = "test", .data = "" });
-        try tmpdir.dir.access("home/.cache/jay/11302437488756564278/test", .{});
+        try std.testing.expectEqualStrings(
+            "home/.cache/jay/11302437488756564278",
+            cache_dir,
+        );
     }
 
     // Return error if $HOME and $XDG_CACHE_HOME are both unset.
     try std.testing.expectError(
         error.PrettyError,
         cacheDir(
-            tmpdir.dir,
             "/project/build.roc",
             .{ .xdg_cache_home = null, .home = null },
+            &buf,
         ),
     );
-
-    // Open existing directory if cache path already exists
-    {
-        const cache_path = "cache/jay/11302437488756564278";
-        var cache_dir_orig = try tmpdir.dir.makeOpenPath(cache_path, .{});
-        defer cache_dir_orig.close();
-
-        var cache_dir = try cacheDir(
-            tmpdir.dir,
-            "/project/build.roc",
-            .{ .xdg_cache_home = "cache", .home = null },
-        );
-        defer cache_dir.close();
-        try cache_dir.writeFile(.{ .sub_path = "test", .data = "" });
-
-        try cache_dir_orig.access("test", .{});
-    }
 }
 
 // Env variables relevant for this app.
@@ -343,6 +331,7 @@ pub fn handleChange(
     site: *Site,
     watcher: *Watcher,
     change: Watcher.Change,
+    cache_dir: []const u8,
 ) !void {
     switch (change) {
         .changes_missed => {
@@ -367,7 +356,7 @@ pub fn handleChange(
 
             const path = site.strs.get(path_bytes) orelse return;
             if (path == site.roc_main) {
-                rebuildRocMain(gpa) catch |err| {
+                rebuildRocMain(gpa, site, cache_dir) catch |err| {
                     // In case of a file busy error the write to roc main might
                     // still be ongoing. There will be another event when it
                     // finishes, we can try to execv again then.
@@ -381,8 +370,16 @@ pub fn handleChange(
 // Restart the process based on a new site specification. It'd be
 // nice to do this in a nicer way, so we can for instance carry
 // over our web server thread.
-fn rebuildRocMain(gpa: std.mem.Allocator) !void {
-    var args = std.process.args();
-    const argv0 = args.next() orelse return error.EmptyArgv;
-    return std.process.execv(gpa, &.{ argv0, "--linker=legacy" });
+fn rebuildRocMain(gpa: std.mem.Allocator, site: *Site, cache_dir: []const u8) !void {
+    const old_site = site;
+    const platform = try RocPlatform.build(gpa, cache_dir);
+    site.* = try Site.init(
+        gpa,
+        platform,
+        site.source_root,
+        site.roc_main,
+        site.output_root,
+        site.strs,
+    );
+    old_site.deinit();
 }

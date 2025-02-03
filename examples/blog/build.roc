@@ -16,7 +16,7 @@ markdown =
     |> Pages.wrap_html layout
     |> Pages.replace_html "page-list" page_list!
 
-layout = \{ content, meta } ->
+layout = |{ content, meta }|
     Html.html {} [
         Html.head {} [
             Html.link { rel: "stylesheet", href: "/static/style.css" } [],
@@ -27,12 +27,12 @@ layout = \{ content, meta } ->
         ],
     ]
 
-page_list! = \{ attrs } ->
+page_list! = |{ attrs }|
     posts = Pages.list! attrs.pattern
     Html.ul
         {}
         (
-            List.map posts \post ->
+            List.map posts |post|
                 Html.li {} [
                     Html.a { href: post.path } [Html.text post.meta.title],
                 ]

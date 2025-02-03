@@ -169,6 +169,7 @@ pub const RocPlatform = struct {
 
     gpa: std.mem.Allocator,
     platform: Platform,
+    roclib_handle: ?*anyopaque,
     roc_main: *const fn (*RocList, *const void) callconv(.C) void,
     roc_get_metadata_length: *const fn (*u64, *const RocList) callconv(.C) void,
     roc_run_pipeline: *const fn (*RocList, *const Page) callconv(.C) void,
@@ -176,14 +177,63 @@ pub const RocPlatform = struct {
     pub fn init(gpa: std.mem.Allocator) !*Platform {
         return initHelper(
             gpa,
+            null,
             &roc__main_for_host_1_exposed_generic,
             &roc__get_metadata_length_for_host_1_exposed_generic,
             &roc__run_pipeline_for_host_1_exposed_generic,
         );
     }
 
+    pub fn build(
+        gpa: std.mem.Allocator,
+        cache_dir: []const u8,
+    ) !*Platform {
+        var args = std.process.args();
+        const argv0 = args.next() orelse return error.EmptyArgv;
+        const output_path = try std.fmt.allocPrintZ(gpa, "{s}/libapp.so", .{cache_dir});
+        defer gpa.free(output_path);
+        var child = std.process.Child.init(&.{
+            "roc",
+            "build",
+            "--lib",
+            "--output",
+            output_path,
+            argv0,
+        }, gpa);
+        // TODO: collect error output and print it.
+        child.stdin_behavior = .Close;
+        child.stdout_behavior = .Close;
+        child.stderr_behavior = .Close;
+        _ = try child.spawnAndWait();
+        const roclib_handle = try with_dlerror(
+            std.c.dlopen(output_path, std.c.RTLD.LAZY),
+            error.RocRebuildFailedDlopen,
+        );
+        errdefer std.debug.assert(0 == std.c.dlclose(roclib_handle));
+        const roc_main: *const fn (*RocList, *const void) callconv(.C) void = @alignCast(@ptrCast(try with_dlerror(
+            std.c.dlsym(roclib_handle, "roc__main_for_host_1_exposed_generic"),
+            error.RocRebuildFailedLoadRocMain,
+        )));
+        const roc_get_metadata_length: *const fn (*u64, *const RocList) callconv(.C) void = @alignCast(@ptrCast(try with_dlerror(
+            std.c.dlsym(roclib_handle, "roc__get_metadata_length_for_host_1_exposed_generic"),
+            error.RocRebuildFailedLoadGetMetadataLength,
+        )));
+        const roc_run_pipeline: *const fn (*RocList, *const Page) callconv(.C) void = @alignCast(@ptrCast(try with_dlerror(
+            std.c.dlsym(roclib_handle, "roc__run_pipeline_for_host_1_exposed_generic"),
+            error.RocRebuildFailedLoadRunPipeline,
+        )));
+        return initHelper(
+            gpa,
+            roclib_handle,
+            roc_main,
+            roc_get_metadata_length,
+            roc_run_pipeline,
+        );
+    }
+
     fn initHelper(
         gpa: std.mem.Allocator,
+        roclib_handle: ?*anyopaque,
         roc_main: *const fn (*RocList, *const void) callconv(.C) void,
         roc_get_metadata_length: *const fn (*u64, *const RocList) callconv(.C) void,
         roc_run_pipeline: *const fn (*RocList, *const Page) callconv(.C) void,
@@ -191,6 +241,7 @@ pub const RocPlatform = struct {
         const self = try gpa.create(Self);
         self.* = .{
             .gpa = gpa,
+            .roclib_handle = roclib_handle,
             .platform = Platform{
                 .get_rules = getRules,
                 .get_metadata_length = getMetadataLength,
@@ -206,6 +257,9 @@ pub const RocPlatform = struct {
 
     pub fn deinit(platform: *Platform) void {
         const self: *Self = @fieldParentPtr("platform", platform);
+        if (self.roclib_handle) |handle| {
+            std.debug.assert(0 == std.c.dlclose(handle));
+        }
         self.gpa.destroy(self);
     }
 
@@ -343,8 +397,9 @@ pub const BootstrapPlatform = struct {
 
     gpa: std.mem.Allocator,
     platform: Platform,
+    wrapped_platform: *Platform,
 
-    pub fn init(gpa: std.mem.Allocator) !*Platform {
+    pub fn init(gpa: std.mem.Allocator, wrapped_platform: *Platform) !*Platform {
         const self = try gpa.create(Self);
         self.* = .{
             .gpa = gpa,
@@ -354,12 +409,14 @@ pub const BootstrapPlatform = struct {
                 .run_pipeline = runPipeline,
                 .deinit_ = deinit,
             },
+            .wrapped_platform = wrapped_platform,
         };
         return &self.platform;
     }
 
     pub fn deinit(platform: *Platform) void {
         const self: *Self = @fieldParentPtr("platform", platform);
+        self.wrapped_platform.deinit();
         self.gpa.destroy(self);
     }
 
@@ -372,11 +429,7 @@ pub const BootstrapPlatform = struct {
 
     fn getMetadataLength(platform: *Platform, bytes: []const u8) u64 {
         const self: *Self = @fieldParentPtr("platform", platform);
-        _ = self;
-        var meta_len: u64 = undefined;
-        const roc_bytes = RocList.fromSlice(u8, bytes, false);
-        roc__get_metadata_length_for_host_1_exposed_generic(&meta_len, &roc_bytes);
-        return meta_len;
+        return self.wrapped_platform.getMetadataLength(bytes);
     }
 
     fn runPipeline(
@@ -644,4 +697,20 @@ fn getPagesMatchingPatternTest(roc_pattern: *RocStr) anyerror!RocList {
 fn formatWebPath(arena: std.mem.Allocator, path: Str) !RocStr {
     const abs_path = try std.fmt.allocPrint(arena, "/{s}", .{path.bytes()});
     return RocStr.fromSlice(abs_path);
+}
+
+fn with_dlerror(res: ?*anyopaque, err: anyerror) !*anyopaque {
+    if (res) |success| {
+        return success;
+    } else if (dlerror()) |dlerr| {
+        std.debug.print("Failed {s}: {s}\n", .{ @errorName(err), dlerr });
+        return err;
+    } else {
+        std.debug.print("Failed {s} with no dlerror response", .{@errorName(err)});
+        return err;
+    }
+}
+
+fn dlerror() ?[]const u8 {
+    return if (std.c.dlerror()) |err| std.mem.span(err) else null;
 }

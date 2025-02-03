@@ -79,7 +79,7 @@ test "delete a source file before a page is generated => jay does not create an 
     try site.source_root.writeFile(.{ .sub_path = "static.css", .data = "" });
     try site.source_root.writeFile(.{ .sub_path = "static.html", .data = "" });
     while (try run_loop.watcher.nextWait(50)) |change| {
-        try handleChange(std.testing.allocator, site, run_loop.watcher, change);
+        try handleChange(std.testing.allocator, site, run_loop.watcher, change, "");
     }
     try expectNoFile(site.output_root, "file");
     try expectNoFile(site.output_root, "static.css");
@@ -726,7 +726,7 @@ const TestRunLoop = struct {
         defer std.testing.allocator.free(source_root_path);
         const watcher = try Watcher.init(allocator, source_root_path);
         const run_loop = try allocator.create(RunLoop);
-        run_loop.* = try RunLoop.init(allocator, test_site.site, watcher);
+        run_loop.* = try RunLoop.init(allocator, test_site.site, watcher, "");
         return .{
             .allocator = allocator,
             .source_root = source_root,

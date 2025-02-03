@@ -156,6 +156,7 @@ fn buildDynhost(
     });
     dynhost.bundle_compiler_rt = true;
     dynhost.pie = true;
+    dynhost.rdynamic = true;
     dynhost.root_module.stack_check = false;
     dynhost.linkLibC();
     dynhost.addObjectFile(libapp_so);
@@ -196,6 +197,7 @@ fn buildLegacy(
     });
     libhost.bundle_compiler_rt = true;
     libhost.pie = true;
+    libhost.rdynamic = true;
     libhost.linkLibC(); // provides malloc/free/.. used in main.zig
     deps.install(libhost);
     const install_path = std.fmt.allocPrint(
