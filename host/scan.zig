@@ -133,7 +133,7 @@ pub fn Scanner(Filter: type) type {
                         const path = if (current.sub_path.bytes().len == 0)
                             iter_entry.name
                         else blk: {
-                            var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+                            var buf: [std.fs.max_path_bytes]u8 = undefined;
                             break :blk try std.fmt.bufPrint(
                                 &buf,
                                 "{s}/{s}",

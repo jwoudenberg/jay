@@ -343,8 +343,8 @@ const RunIntegrationTest = struct {
         return build_example;
     }
 
-    pub fn make(step: *std.Build.Step, prog_node: std.Progress.Node) anyerror!void {
-        _ = prog_node;
+    pub fn make(step: *std.Build.Step, options: std.Build.Step.MakeOptions) anyerror!void {
+        _ = options;
         const self: *Self = @fieldParentPtr("step", step);
         const b = self.step.owner;
 
@@ -465,19 +465,15 @@ const AddObjectArchive = struct {
         //
         // If we call `linkLibrary` instead of this code, then the build will
         // fail with a linker failure complaining we have duplicate symbols.
-        for (destination.root_module.depending_steps.keys()) |compile| {
-            compile.step.dependOn(&source.step);
-        }
+
+        _ = source.getEmittedBin(); // Indicate there is a dependency on the outputted binary.
         destination.root_module.include_dirs.append(b.allocator, .{ .other_step = source }) catch @panic("OOM");
-        for (destination.root_module.depending_steps.keys()) |compile| {
-            source.getEmittedIncludeTree().addStepDependencies(&compile.step);
-        }
 
         return self;
     }
 
-    pub fn make(step: *std.Build.Step, prog_node: std.Progress.Node) anyerror!void {
-        _ = prog_node;
+    pub fn make(step: *std.Build.Step, options: std.Build.Step.MakeOptions) anyerror!void {
+        _ = options;
         const self: *Self = @fieldParentPtr("step", step);
         self.addObjects() catch |err| {
             return step.fail("Unable to add objects from {s}: {s}", .{
@@ -558,7 +554,7 @@ const GenerateGrammars = struct {
 
         generate_grammars.module.addImport(
             "tree_sitter",
-            generate_grammars.tree_sitter.module("tree_sitter"),
+            generate_grammars.tree_sitter.module("tree-sitter"),
         );
 
         for (grammars, 0..) |grammar, index| {
@@ -591,12 +587,12 @@ const GenerateGrammars = struct {
             root_module.addObject(object);
         }
 
-        root_module.addImport("tree_sitter", self.tree_sitter.module("tree_sitter"));
+        root_module.addImport("tree_sitter", self.tree_sitter.module("tree-sitter"));
         root_module.addImport("generated_grammars", self.module);
     }
 
-    pub fn make(step: *std.Build.Step, prog_node: std.Progress.Node) anyerror!void {
-        _ = prog_node;
+    pub fn make(step: *std.Build.Step, options: std.Build.Step.MakeOptions) anyerror!void {
+        _ = options;
         const self: *GenerateGrammars = @fieldParentPtr("step", step);
         self.writeModule() catch |err| {
             return step.fail("Unable to write {s}: {s}", .{
@@ -729,7 +725,7 @@ const Deps = struct {
         _ = AddObjectArchive.create(step, self.target, self.libcmark_gfm.artifact("cmark-gfm-extensions"));
         _ = AddObjectArchive.create(step, self.target, self.tree_sitter_core.artifact("tree-sitter"));
         step.root_module.addImport("mime", self.mime.module("mime"));
-        self.tree_sitter_grammars.link(&step.root_module);
+        self.tree_sitter_grammars.link(step.root_module);
     }
 };
 
@@ -752,11 +748,11 @@ fn formatTargetForRoc(b: *std.Build, target: std.Build.ResolvedTarget) []const u
 
 // Run `zig ar --help` to see the archive formats ar supports.
 fn formatTargetForAr(b: *std.Build, target: std.Build.ResolvedTarget) []const u8 {
-    return if (target.result.isGnu())
+    return if (target.result.isGnuLibC())
         "--format=gnu"
-    else if (target.result.isMusl())
+    else if (target.result.isMuslLibC())
         "--format=gnu" // This seems wrong, but nobody complained so :shrug:.
-    else if (target.result.isDarwin())
+    else if (target.result.isDarwinLibC())
         "--format=darwin"
     else {
         const triple = target.result.linuxTriple(b.allocator) catch @panic("OOM");

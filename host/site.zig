@@ -167,7 +167,7 @@ pub const Site = struct {
                 error.Unexpected,
                 => return err,
             };
-            const stat = std.fs.File.Stat.fromSystem(posix_stat);
+            const stat = std.fs.File.Stat.fromPosix(posix_stat);
             if (is_dir) break :file_exists;
             return if (is_new)
                 self.initPage(source_path, stat)
@@ -397,7 +397,7 @@ pub const Site = struct {
         const output_path = switch (page.processing) {
             .xml, .none => source_path,
             .markdown => blk: {
-                var buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+                var buffer: [std.fs.max_path_bytes]u8 = undefined;
                 const output_path_bytes = try self.outputPathForMarkdownFile(&buffer, source_path);
                 break :blk try self.strs.intern(output_path_bytes);
             },
@@ -526,7 +526,7 @@ pub const Site = struct {
         if (pattern.index() == Str.init_index) {
             const pattern_index = self.list_patterns.count();
             _ = pattern.replaceIndex(pattern_index);
-            var list_pattern = .{
+            var list_pattern = ListPattern{
                 .pattern = pattern,
                 .page_uses = BitSet{},
             };

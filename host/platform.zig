@@ -226,7 +226,7 @@ pub const RocPlatform = struct {
         while (roc_rule_iterator.next()) |platform_rule| {
             switch (platform_rule.processing) {
                 .none, .xml, .markdown => {
-                    const rule = .{
+                    const rule = Site.Rule{
                         .patterns = try rocListMapToOwnedSlice(
                             RocStr,
                             Str,
@@ -569,19 +569,19 @@ fn roc_shm_open(name: [*:0]const u8, oflag: c_int, mode: c_uint) callconv(.C) c_
     return std.c.shm_open(name, oflag, mode);
 }
 
-fn roc_mmap(addr: ?*align(std.mem.page_size) anyopaque, length: usize, prot: c_uint, flags: std.c.MAP, fd: c_int, offset: c_int) callconv(.C) *anyopaque {
+fn roc_mmap(addr: ?*align(std.heap.page_size_min) anyopaque, length: usize, prot: c_uint, flags: std.c.MAP, fd: c_int, offset: c_int) callconv(.C) *anyopaque {
     return std.c.mmap(addr, length, prot, flags, fd, offset);
 }
 
 comptime {
     if (builtin.os.tag == .macos or builtin.os.tag == .linux) {
-        @export(roc_getppid, .{ .name = "roc_getppid", .linkage = .strong });
-        @export(roc_mmap, .{ .name = "roc_mmap", .linkage = .strong });
-        @export(roc_shm_open, .{ .name = "roc_shm_open", .linkage = .strong });
+        @export(&roc_getppid, .{ .name = "roc_getppid", .linkage = .strong });
+        @export(&roc_mmap, .{ .name = "roc_mmap", .linkage = .strong });
+        @export(&roc_shm_open, .{ .name = "roc_shm_open", .linkage = .strong });
     }
 
     if (builtin.os.tag == .windows) {
-        @export(roc_getppid_windows_stub, .{ .name = "roc_getppid", .linkage = .strong });
+        @export(&roc_getppid_windows_stub, .{ .name = "roc_getppid", .linkage = .strong });
     }
 }
 

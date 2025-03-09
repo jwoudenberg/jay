@@ -23,7 +23,7 @@ pub const Watcher = struct {
     changed_paths: std.fifo.LinearFifo(PathChange, .Dynamic),
     changed_paths_mutex: std.Thread.Mutex,
     changed_paths_semaphore: std.Thread.Semaphore,
-    buf: [std.fs.MAX_PATH_BYTES]u8,
+    buf: [std.fs.max_path_bytes]u8,
     handle: *anyopaque,
     stream: *anyopaque,
     FSEventStreamStop: *FSEventStreamStopType,
@@ -115,7 +115,7 @@ pub const Watcher = struct {
         // https://developer.apple.com/documentation/corefoundation/cfstringbuiltinencodings/utf8
         const utf8 = 134217984;
 
-        var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
         _ = try std.fmt.bufPrint(&buf, "{s}\x00", .{root_path});
         const root_path_cfstring = CFStringCreateWithCString(
             null,

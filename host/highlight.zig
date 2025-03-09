@@ -38,7 +38,7 @@ pub fn highlight(
     try parser.setLanguage(ts_lang);
 
     // TODO: switch to parser.parseInput to take input in a streaming fashion.
-    const tree = try parser.parseBuffer(input, null, null);
+    const tree = parser.parseString(input, null) orelse return error.TreeSitterParseFailure;
     defer tree.destroy();
 
     const node = tree.rootNode();
@@ -78,7 +78,7 @@ pub fn highlight(
         if (range.start_byte < offset) continue;
         try writer.writeAll(input[offset..range.start_byte]);
         try writer.writeAll("<span class=\"");
-        var name_iter = std.mem.split(u8, name, ".");
+        var name_iter = std.mem.splitScalar(u8, name, '.');
         if (name_iter.next()) |name_part| {
             try writer.print("hl-{s}", .{name_part});
         }
