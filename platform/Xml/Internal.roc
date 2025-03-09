@@ -1,15 +1,29 @@
-module [Xml, node, text, wrap, unwrap]
+module [Xml, node, text, wrap, unwrap, empty, each, set_prefix, xml_to_str_for_tests]
 
 import Pages.Internal
 import Xml.Attributes
 
 Xml := Pages.Internal.Xml
 
+set_prefix : Xml, List U8 -> Xml
+set_prefix = |xml, prefix|
+    wrap (List.concat [RocGenerated prefix] (unwrap xml))
+
 wrap : Pages.Internal.Xml -> Xml
 wrap = |xml| @Xml xml
 
 unwrap : Xml -> Pages.Internal.Xml
 unwrap = |@Xml xml| xml
+
+empty : Xml
+empty = @Xml []
+
+each : List a, (a -> Xml) -> Xml
+each = |list, toHtml|
+    List.walk list [] |acc, elem|
+        unwrap (toHtml elem)
+        |> List.concat acc
+    |> wrap
 
 # Escaping performed by this function:
 # https://www.w3.org/TR/REC-xml/#NT-Name

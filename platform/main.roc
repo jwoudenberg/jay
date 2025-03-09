@@ -1,6 +1,6 @@
 platform "jay"
     requires {} { main : Pages.Pages a }
-    exposes [Pages, Html]
+    exposes [Pages, Html, AtomFeed]
     packages {}
     imports []
     provides [main_for_host, run_pipeline_for_host!, get_metadata_length_for_host]
