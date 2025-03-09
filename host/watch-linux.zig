@@ -110,7 +110,7 @@ pub const Watcher = struct {
         );
     }
 
-    const M = fanotify.fanotify.event_metadata;
+    const M = std.os.linux.fanotify.event_metadata;
 
     fn next(self: *Self) !?Change {
         var meta: [*]align(1) M = @ptrCast(@as([*]u8, @ptrCast(&self.events_buf)) + self.offset);
@@ -131,7 +131,7 @@ pub const Watcher = struct {
         const mask = meta[0].mask;
         if (mask.Q_OVERFLOW) return .{ .changes_missed = void{} };
 
-        const fid: *align(1) fanotify.fanotify.event_info_fid = @ptrCast(meta + 1);
+        const fid: *align(1) std.os.linux.fanotify.event_info_fid = @ptrCast(meta + 1);
         switch (fid.hdr.info_type) {
             .DFID_NAME => {},
             else => |t| {
@@ -144,7 +144,7 @@ pub const Watcher = struct {
         // watched directory in which the change happened. It's directly
         // followed by a null-terminated byte representing the filename
         // in that directory modified.
-        const file_handle: *align(1) fanotify.file_handle = @ptrCast(&fid.handle);
+        const file_handle: *align(1) std.os.linux.file_handle = @ptrCast(&fid.handle);
         const dir = self.dirs.get(.{ .handle = file_handle }) orelse {
             return error.ReceivedEventForUnwatchedDir;
         };
@@ -161,7 +161,7 @@ pub const Watcher = struct {
         return null;
     }
 
-    const fan_mask: fanotify.fanotify.MarkMask = .{
+    const fan_mask: std.os.linux.fanotify.MarkMask = .{
         .ATTRIB = true,
         .CLOSE_WRITE = true,
         .CREATE = true,
@@ -307,7 +307,7 @@ test "file watching produces expected events" {
     } });
 
     // Deleting a file from a directory after unwatching it triggers no change.
-    var path_buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const abs_path = try mid.realpath("low", &path_buf);
     try watcher.unwatchDir(try strs.intern(abs_path));
     try low.deleteFile("test.txt");
@@ -350,9 +350,9 @@ fn expectChange(
     );
     const entries =
         switch (expected) {
-        .changes_missed => return,
-        .path_changed => .{ expected.path_changed, actual.path_changed },
-    };
+            .changes_missed => return,
+            .path_changed => .{ expected.path_changed, actual.path_changed },
+        };
     try std.testing.expectEqualStrings(entries[0].dir.bytes(), entries[1].dir.bytes());
     try std.testing.expectEqualStrings(entries[0].file_name, entries[1].file_name);
 }
@@ -386,21 +386,21 @@ fn id(path: []const u8) []const u8 {
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 const FileHandle = struct {
-    handle: *align(1) fanotify.file_handle,
+    handle: *align(1) std.os.linux.file_handle,
 
     const Hash = std.hash.Wyhash;
 
     fn forDir(gpa: std.mem.Allocator, root_dir: std.fs.Dir, path: []const u8) !FileHandle {
-        var file_handle_buffer: [@sizeOf(fanotify.file_handle) + 128]u8 align(@alignOf(fanotify.file_handle)) = undefined;
+        var file_handle_buffer: [@sizeOf(std.os.linux.file_handle) + 128]u8 align(@alignOf(std.os.linux.file_handle)) = undefined;
         var mount_id: i32 = undefined;
-        var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
         const adjusted_path = if (path.len == 0)
             "./"
         else
             std.fmt.bufPrint(&buf, "{s}/", .{path}) catch return error.NameTooLong;
-        const stack_ptr: *fanotify.file_handle = @ptrCast(&file_handle_buffer);
-        stack_ptr.handle_bytes = file_handle_buffer.len - @sizeOf(fanotify.file_handle);
-        try fanotify.name_to_handle_at(root_dir.fd, adjusted_path, stack_ptr, &mount_id, fanotify.HANDLE_FID);
+        const stack_ptr: *std.os.linux.file_handle = @ptrCast(&file_handle_buffer);
+        stack_ptr.handle_bytes = file_handle_buffer.len - @sizeOf(std.os.linux.file_handle);
+        try fanotify.name_to_handle_at(root_dir.fd, adjusted_path, stack_ptr, &mount_id, std.os.linux.AT.HANDLE_FID);
         const stack_lfh: FileHandle = .{ .handle = stack_ptr };
         return stack_lfh.clone(gpa);
     }
@@ -409,10 +409,10 @@ const FileHandle = struct {
         const bytes = lfh.slice();
         const new_ptr = try gpa.alignedAlloc(
             u8,
-            @alignOf(fanotify.file_handle),
-            @sizeOf(fanotify.file_handle) + bytes.len,
+            @alignOf(std.os.linux.file_handle),
+            @sizeOf(std.os.linux.file_handle) + bytes.len,
         );
-        const new_header: *fanotify.file_handle = @ptrCast(new_ptr);
+        const new_header: *std.os.linux.file_handle = @ptrCast(new_ptr);
         new_header.* = lfh.handle.*;
         const new: FileHandle = .{ .handle = new_header };
         @memcpy(new.slice(), lfh.slice());
@@ -421,9 +421,9 @@ const FileHandle = struct {
 
     fn destroy(lfh: FileHandle, gpa: std.mem.Allocator) void {
         const ptr: [*]u8 = @ptrCast(lfh.handle);
-        const allocated_slice = ptr[0 .. @sizeOf(fanotify.file_handle) + lfh.handle.handle_bytes];
+        const allocated_slice = ptr[0 .. @sizeOf(std.os.linux.file_handle) + lfh.handle.handle_bytes];
         return gpa.free(@as(
-            []align(@alignOf(fanotify.file_handle)) u8,
+            []align(@alignOf(std.os.linux.file_handle)) u8,
             @alignCast(allocated_slice),
         ));
     }

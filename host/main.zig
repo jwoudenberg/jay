@@ -36,7 +36,7 @@ fn run() !void {
             parsed.run_prod_mode.output,
         ),
         .show_help => {
-            var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+            var buf: [std.fs.max_path_bytes]u8 = undefined;
             const cwd = try std.posix.getcwd(&buf);
             const argv0 = try std.fs.path.relative(gpa, cwd, parsed.show_help.argv0);
             defer gpa.free(argv0);
@@ -58,7 +58,7 @@ fn run() !void {
             , .{ argv0, argv0, argv0 });
         },
         .mistake_no_output_path_passed => {
-            var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+            var buf: [std.fs.max_path_bytes]u8 = undefined;
             const cwd = try std.posix.getcwd(&buf);
             const argv0 = try std.fs.path.relative(
                 gpa,
@@ -79,7 +79,7 @@ fn run() !void {
             std.process.exit(1);
         },
         .mistake_unknown_argument => {
-            var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+            var buf: [std.fs.max_path_bytes]u8 = undefined;
             const cwd = try std.posix.getcwd(&buf);
             const arg = parsed.mistake_unknown_argument.arg;
             const argv0 = try std.fs.path.relative(
@@ -135,7 +135,7 @@ fn run_dev(gpa: std.mem.Allocator, argv0: []const u8) !void {
     var envMap = try EnvMap.init(gpa);
     defer envMap.deinit();
 
-    var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
     const cwd_path = try std.posix.getcwd(&buf);
     const roc_main_abs = try std.fs.path.resolve(gpa, &.{ cwd_path, argv0 });
     defer gpa.free(roc_main_abs);
@@ -245,7 +245,7 @@ fn cacheDir(
     // In the hypothetical situation someone runs multiple instances of jay
     // in parallel, they should not to clobber each other's output directories.
     // We create a subdirectory for each.
-    var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
     const project_dir_hash = std.hash.Wyhash.hash(0, roc_main_abs);
     const project_dir_name = try std.fmt.bufPrint(&buf, "{}", .{project_dir_hash});
     return jay_cache_dir.makeOpenPath(project_dir_name, .{});
@@ -354,7 +354,7 @@ pub fn handleChange(
             );
         },
         .path_changed => |entry| {
-            var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+            var buf: [std.fs.max_path_bytes]u8 = undefined;
             const path_bytes = if (entry.dir.bytes().len == 0)
                 entry.file_name
             else

@@ -549,7 +549,7 @@ test "add a symlink to a directory => jay treats it as a regular directory" {
     var site = test_run_loop.test_site.site;
     const watcher = test_run_loop.watcher;
 
-    var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
     const link_target = try std.fmt.bufPrint(&buf, "../{s}", .{tmpdir.sub_path});
     try site.source_root.symLink(link_target, "linked", .{ .is_directory = true });
 
@@ -582,7 +582,7 @@ test "add a symlink to a file => jay shows an error" {
     var site = test_run_loop.test_site.site;
     const watcher = test_run_loop.watcher;
 
-    var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
     const link_target = try std.fmt.bufPrint(&buf, "../{s}/file.md", .{tmpdir.sub_path});
     try site.source_root.symLink(link_target, "file.md", .{ .is_directory = false });
 

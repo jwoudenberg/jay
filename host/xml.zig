@@ -47,7 +47,7 @@ pub fn parse(
                 const name_end = std.mem.indexOfAnyPos(u8, document, index + 1, " \t\n\r>") orelse return error.CantFindCloseTagNameEnd;
                 const name = document[2 + index .. name_end];
                 const tag_end = std.mem.indexOfScalarPos(u8, document, name_end, '>') orelse return error.CantFindCloseTagEnd;
-                var tag = stack.popOrNull() orelse return error.FoundCloseTagsWhenNoTagsWereOpen;
+                var tag = stack.pop() orelse return error.FoundCloseTagsWhenNoTagsWereOpen;
                 if (!std.mem.eql(u8, tag.name, name)) return error.MismatchedCloseAndOpenTags;
 
                 if (index_of(tag_names, name)) |tag_index| {

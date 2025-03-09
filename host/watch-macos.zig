@@ -23,7 +23,7 @@ pub const Watcher = struct {
     changed_paths: std.fifo.LinearFifo(PathChange, .Dynamic),
     changed_paths_mutex: std.Thread.Mutex,
     changed_paths_semaphore: std.Thread.Semaphore,
-    buf: [std.fs.MAX_PATH_BYTES]u8,
+    buf: [std.fs.max_path_bytes]u8,
     handle: *anyopaque,
     stream: *anyopaque,
     FSEventStreamStop: *FSEventStreamStopType,
@@ -55,7 +55,7 @@ pub const Watcher = struct {
         self.handle = try with_dlerror(
             std.c.dlopen(
                 "/System/Library/Frameworks/CoreServices.framework/CoreServices",
-                std.c.RTLD.LAZY,
+                std.c.RTLD{ .LAZY = true },
             ),
             error.WatchFailedDlopenCoreServices,
         );
@@ -115,7 +115,7 @@ pub const Watcher = struct {
         // https://developer.apple.com/documentation/corefoundation/cfstringbuiltinencodings/utf8
         const utf8 = 134217984;
 
-        var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
         _ = try std.fmt.bufPrint(&buf, "{s}\x00", .{root_path});
         const root_path_cfstring = CFStringCreateWithCString(
             null,
@@ -185,7 +185,7 @@ pub const Watcher = struct {
         const dir_path = std.fs.path.dirname(path) orelse "";
         const dir = self.watched_dir_paths.get(dir_path) orelse return;
         const file_name = std.fs.path.basename(path);
-        const change = .{
+        const change = Watcher.PathChange{
             .dir = dir,
             .file_name = try self.gpa.dupe(u8, file_name),
         };
